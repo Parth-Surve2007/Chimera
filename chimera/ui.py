@@ -2,7 +2,7 @@
 import sys, asyncio
 from pathlib import Path
 from .review import ReviewService
-from .local_model import config_from_env, check_status
+from .local_model import config_from_env, check_status, save_persisted_config, LocalModelProvider, load_persisted_config, config_data_dir
 try: import flet as ft
 except ImportError: ft = None
 
@@ -17,6 +17,9 @@ def launch(registry):
 class MainWindow:
     def __init__(self, page, registry):
         self.page, self.registry, self.review = page, registry, ReviewService(registry.data_dir); self.drawer_open = False; self.selected = None
+        self.model_picker = ft.FilePicker(on_result=self._model_picked); self.runtime_picker = ft.FilePicker(on_result=self._runtime_picked); page.services.extend([self.model_picker, self.runtime_picker])
+        self.model_path_field = ft.TextField(label="GGUF MODEL PATH", color=TEXT, border_color=BORDER, value=str(config_from_env().model_path or ""), expand=True)
+        self.runtime_path_field = ft.TextField(label="LLAMA.CPP EXECUTABLE", color=TEXT, border_color=BORDER, value=str(config_from_env().cli_path or ""), expand=True)
         page.title = "Chimera"; page.bgcolor = BG; page.padding = 0; page.window.width = 1200; page.window.height = 760; page.window.min_width = 860; page.window.min_height = 560
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
@@ -65,5 +68,18 @@ class MainWindow:
         except Exception as exc: self._toast(f"Action failed: {exc}")
     def _show_runs(self, e=None): self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
     def _show_settings(self, e=None):
-        c = config_from_env(); s = check_status(c); self._set([ft.Text("SETTINGS", size=18, color=TEXT), ft.Text(f"LOCAL RUNTIME: {s.state.upper()}\nMODEL: {c.model_path or 'NOT CONFIGURED'}\nEXECUTABLE: {c.cli_path or 'NOT CONFIGURED'}\nCONTEXT: {c.context}  TOKENS: {c.max_tokens}  THREADS: {c.threads}  GPU LAYERS: {c.gpu_layers}\n\nDATA: {self.registry.data_dir}", color=SECONDARY)])
+        c = config_from_env(); s = check_status(c); self._set([ft.Text("SETTINGS", size=18, color=TEXT), ft.Text(f"LOCAL RUNTIME: {s.state.upper()}\nMODEL: {c.model_path or 'NOT CONFIGURED'}\nEXECUTABLE: {c.cli_path or 'NOT CONFIGURED'}\nCONTEXT: {c.context}  TOKENS: {c.max_tokens}  THREADS: {c.threads}  GPU LAYERS: {c.gpu_layers}\n\nDATA: {self.registry.data_dir}\nEnvironment variables override persisted model_config.json.", color=SECONDARY), ft.Row([self.model_path_field, ft.TextButton("SELECT GGUF", on_click=lambda e: self.model_picker.pick_files(allowed_extensions=["gguf"]))]), ft.Row([self.runtime_path_field, ft.TextButton("SELECT RUNTIME", on_click=lambda e: self.runtime_picker.pick_files())]), ft.Row([self._button("SAVE + VALIDATE", self._save_model_config), ft.TextButton("TEST LOCAL INFERENCE", on_click=self._test_local_inference, style=ft.ButtonStyle(color=TEXT))]), ft.Text("Select existing local files only. Models are never downloaded or bundled.", color=MUTED, size=11)])
+    def _model_picked(self, e):
+        if e.files: self.model_path_field.value = e.files[0].path; self.page.update()
+    def _runtime_picked(self, e):
+        if e.files: self.runtime_path_field.value = e.files[0].path; self.page.update()
+    def _save_model_config(self, e=None):
+        model = Path(self.model_path_field.value) if self.model_path_field.value else None; runtime = self.runtime_path_field.value or None
+        if model and model.suffix.lower() != ".gguf": return self._toast("Model must be an existing .gguf file.")
+        if model and not model.is_file(): return self._toast("Selected model file does not exist.")
+        if runtime and not Path(runtime).is_file(): return self._toast("Selected llama.cpp executable does not exist.")
+        save_persisted_config(model, runtime); self._toast(f"Saved. Provider state: {check_status(config_from_env()).state.upper()}"); self._show_settings()
+    async def _test_local_inference(self, e=None):
+        self._toast("Running genuine local inference..."); result = await asyncio.to_thread(LocalModelProvider(config_from_env()).plan, "Return a concise JSON TaskSpec for creating a deterministic local text utility.")
+        self._toast(f"Inference {result.status}: {result.duration_ms} ms, {result.generated_tokens} generated tokens" if result.status == "ready" else f"Inference failed: {result.error or result.status}")
     def _toast(self, message): self.page.snack_bar = ft.SnackBar(ft.Text(message, color=TEXT), bgcolor=ELEVATED); self.page.snack_bar.open = True; self.page.update()
