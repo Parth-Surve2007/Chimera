@@ -130,7 +130,7 @@ def parse_proposal(data: Any) -> CapabilityProposal:
     for item in data["files"]:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("content"), str): raise ValueError("proposal file is malformed")
         path = Path(item["path"])
-        if path.is_absolute() or ".." in path.parts or path.as_posix() in seen: raise ValueError("proposal contains unsafe or duplicate paths")
+        if path.is_absolute() or not path.parts or path in (Path("."), Path("")) or ".." in path.parts or path.name == ".chimera-candidate.json" or path.as_posix() in seen: raise ValueError("proposal contains unsafe, reserved, or duplicate paths")
         if len(item["content"]) > 100_000: raise ValueError("proposal file is too large")
         seen.add(path.as_posix()); files.append(ProposedFile(path.as_posix(), item["content"]))
     if len(files) > 100: raise ValueError("proposal contains too many files")

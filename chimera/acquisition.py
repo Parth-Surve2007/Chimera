@@ -43,7 +43,7 @@ def stage_proposal(proposal: CapabilityProposal, root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=False); total = 0
     for item in proposal.files:
         path = Path(item.path)
-        if path.is_absolute() or ".." in path.parts: raise ValueError("proposal path escapes candidate workspace")
+        if path.is_absolute() or not path.parts or path in (Path("."), Path("")) or ".." in path.parts or path.name == ".chimera-candidate.json": raise ValueError("proposal path is unsafe or reserved")
         total += len(item.content.encode());
         if total > 500_000: raise ValueError("candidate package exceeds size limit")
         target = root / path; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(item.content, encoding="utf-8", newline="")

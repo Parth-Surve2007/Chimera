@@ -2,12 +2,15 @@
 import sys, asyncio
 from pathlib import Path
 from .review import ReviewService
+from .workflow import CapabilityWorkflow
+from .behavior import VirtualBoxBackend
+from .audit import AuditStore
 from .local_model import config_from_env, check_status, save_persisted_config, LocalModelProvider, load_persisted_config, config_data_dir
 try: import flet as ft
 except ImportError: ft = None
 
-BG, SURFACE, ELEVATED, BORDER = "#050505", "#0B0B0B", "#151515", "#242424"
-TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F2F2F2", "#A0A0A0", "#686868", "#444444", "#777777"
+BG, SURFACE, ELEVATED, BORDER = "#070808", "#101313", "#171B1A", "#29302E"
+TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F3F5F3", "#A7B0AC", "#68736E", "#3F4945", "#8AAE9C"
 ACCENT = FOCUS
 
 def launch(registry):
@@ -23,7 +26,8 @@ class MainWindow:
         page.title = "Chimera"; page.bgcolor = BG; page.padding = 0; page.window.width = 1200; page.window.height = 760; page.window.min_width = 860; page.window.min_height = 560
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
-        self.body = ft.Container(expand=True, padding=ft.Padding.symmetric(horizontal=48, vertical=28)); self.drawer = self._drawer(); self._show_overview()
+        self.task_busy = False; self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Describe the capability you want to preserve...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
+        self.body = ft.Container(expand=True, padding=ft.Padding.symmetric(horizontal=56, vertical=36)); self.drawer = self._drawer(); self._show_overview()
         self.shell = ft.Column([self._topbar(), ft.Stack([self.body, self.drawer], expand=True), self._statusbar()], expand=True, spacing=0)
         if not self._show_intro(): page.add(self.shell)
     def _show_intro(self):
@@ -83,3 +87,38 @@ class MainWindow:
         self._toast("Running genuine local inference..."); result = await asyncio.to_thread(LocalModelProvider(config_from_env()).plan, "Return a concise JSON TaskSpec for creating a deterministic local text utility.")
         self._toast(f"Inference {result.status}: {result.duration_ms} ms, {result.generated_tokens} generated tokens" if result.status == "ready" else f"Inference failed: {result.error or result.status}")
     def _toast(self, message): self.page.snack_bar = ft.SnackBar(ft.Text(message, color=TEXT), bgcolor=ELEVATED); self.page.snack_bar.open = True; self.page.update()
+    def _show_runs(self, e=None):
+        try: runs = AuditStore(self.registry.data_dir / "chimera.db").workflow_runs()
+        except Exception as exc: return self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text(f"History unavailable: {exc}", color=SECONDARY)])
+        if not runs: return self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text("No workflow runs recorded yet.", color=MUTED)])
+        cards = []
+        for run_id, summary, started, finished, status, candidate, digest, error in runs:
+            detail = f"{summary}\n\nSTARTED  {started}\nSTATUS  {status.upper()}\nCANDIDATE  {candidate or '—'}\nDIGEST  {digest or '—'}" + (f"\nERROR  {error}" if error else "")
+            cards.append(ft.Container(ft.Column([ft.Row([ft.Text(run_id[:12], color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(status.upper(), color=FOCUS if status == "pending_review" else SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(detail, color=SECONDARY, size=11)]), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=7, padding=ft.Padding.all(16), width=780))
+        self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text("Persisted workflow events. This view never fabricates activity.", color=MUTED, size=11), *cards])
+    # Refined operational overview; this definition intentionally replaces the legacy landing layout.
+    def _show_overview(self, e=None):
+        ready = "READY" in self._runtime_state()
+        request = getattr(self, "task_field", None)
+        if request is None:
+            self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Describe the capability you want to preserve...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
+        composer = ft.Container(ft.Column([ft.Text("CAPABILITY REQUEST", color=MUTED, size=10), self.task_field, ft.Row([ft.Text("Local reasoning → proposal → review", color=MUTED, size=10), self._button("ANALYZE REQUEST", self._submit_task) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
+        self._set([ft.Container(ft.Text("CHIMERA", font_family="ChimeraDots", size=72, color="#18201D", opacity=0.5), height=90), ft.Text("Build capabilities with evidence.", size=30, weight=ft.FontWeight.BOLD, color=TEXT), ft.Text("Local reasoning, explicit verification, human-controlled acceptance.", size=13, color=SECONDARY), composer, ft.Row([self._metric("MODEL", self._runtime_state().replace("RUNTIME: ", "")), self._metric("REVIEW QUEUE", str(len(self.review.list()))), self._metric("BEHAVIOR", "BLOCKED" if not VirtualBoxBackend().inspect().get("available") else "AVAILABLE")], spacing=12), ft.Text("No capability is accepted or executed automatically.", color=MUTED, size=11)])
+    def _metric(self, label, value): return ft.Container(ft.Column([ft.Text(label, color=MUTED, size=9), ft.Text(value, color=TEXT, size=13, weight=ft.FontWeight.BOLD)], spacing=5), width=180, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=6, padding=ft.Padding.all(14))
+    async def _submit_task(self, e=None):
+        if self.task_busy: return self._toast("A request is already being analyzed.")
+        request = (self.task_field.value or "").strip()
+        if not request: return self._toast("Describe a capability request first.")
+        self.task_busy = True
+        try:
+            self._toast("Analyzing with the configured local model...")
+            result = await asyncio.to_thread(CapabilityWorkflow(LocalModelProvider(config_from_env()), self.registry.data_dir / "candidates", registry=self.registry).run, request)
+            self._toast(result.message); self._show_capabilities()
+        except Exception as exc:
+            self._toast(f"Workflow failed: {exc}")
+        finally:
+            self.task_busy = False
+    def _inspect(self, c):
+        self.selected = c
+        details = f"{c.name}\n\nSTATE  {c.status.upper()}\nTASK  {c.task}\nMANIFEST  {c.digest or 'UNVERIFIED'}\nACCEPTANCE APPROVAL  {'GRANTED' if c.acceptance_approved else 'REQUIRED'}\nEXECUTION APPROVAL  {'GRANTED' if c.execution_approved else 'REQUIRED'}\n\nSTATIC VERIFICATION is separate from behavioral verification. Generated code is never executed automatically."
+        self._set([ft.Text(f"CANDIDATE / {c.candidate_id}", size=22, color=TEXT, weight=ft.FontWeight.BOLD), ft.Container(ft.Text(details, color=SECONDARY, size=12), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(20), width=760), ft.Row([ft.TextButton("VERIFY STATIC", on_click=lambda e: self._action(lambda: self.review.verify(c.candidate_id)), style=ft.ButtonStyle(color=TEXT)), ft.TextButton("BEHAVIOR CHECK", on_click=lambda e: self._action(lambda: self.review.behavior_verify(c.candidate_id)), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("APPROVE ACCEPTANCE", on_click=lambda e: self._action(lambda: self.review.approve_acceptance(c.candidate_id)), style=ft.ButtonStyle(color=TEXT)), ft.TextButton("ACCEPT", on_click=lambda e: self._action(lambda: self.review.accept(c.candidate_id), True), style=ft.ButtonStyle(color=TEXT))])])
