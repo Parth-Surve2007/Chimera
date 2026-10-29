@@ -20,6 +20,15 @@ def test_malformed_and_unsupported_runner_output(tmp_path):
     p = LocalModelProvider(LocalModelConfig(model, str(cli)), lambda *_: '{"outcome":""}')
     assert p.plan("x").status == "malformed"
 
+def test_readiness_requests_only_missing_proposal_prerequisites():
+    from chimera.local_model import assess_readiness
+    from chimera.contracts import TaskSpec
+    assessment = assess_readiness(TaskSpec("make a tool"))
+    assert assessment.status == "needs_clarification"
+    assert {question.question_id for question in assessment.questions} == {"acceptance", "deliverable"}
+    ready = assess_readiness(TaskSpec("make a tool", deliverables=["tool"], acceptance_criteria=["tool works"]))
+    assert ready.status == "ready" and not ready.questions
+
 def test_configuration_limits_and_no_cloud_fallback():
     with pytest.raises(ValueError): config_from_env({"CHIMERA_MODEL_CONTEXT":"0"})
     assert LocalModelProvider(LocalModelConfig(None, None)).status().state == "missing"

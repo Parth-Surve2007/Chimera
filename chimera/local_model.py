@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import json, os, subprocess, time
 from pathlib import Path
 from typing import Callable, Any
-from .contracts import TaskSpec, CapabilityProposal, ProposedFile
+from .contracts import TaskSpec, CapabilityProposal, ProposedFile, ClarificationQuestion, ReadinessAssessment
 
 @dataclass(frozen=True)
 class LocalModelConfig:
@@ -92,6 +92,17 @@ def _task(data: Any) -> TaskSpec:
     if any(not isinstance(values[f], list) for f in fields if f not in ("inputs", "resources")): raise ValueError("task list fields must be arrays")
     return TaskSpec(outcome=data["outcome"].strip(), **values)
 
+def assess_readiness(task: TaskSpec) -> ReadinessAssessment:
+    """Conservative pre-proposal check; it does not infer or execute anything."""
+    questions = []
+    if not task.acceptance_criteria:
+        questions.append(ClarificationQuestion("acceptance", "What observable result should count as success?", "The proposal needs a reviewable acceptance criterion.", "acceptance_criteria"))
+    if not task.deliverables:
+        questions.append(ClarificationQuestion("deliverable", "What concrete artifact or output should be produced?", "The proposal cannot define its deliverable from the task alone.", "deliverables"))
+    if questions:
+        return ReadinessAssessment("needs_clarification", tuple(questions), "proposal prerequisites are underspecified")
+    return ReadinessAssessment("ready", reason="task contains proposal-relevant acceptance and deliverable information")
+
 def _json_output(raw: str) -> Any:
     text = raw.strip()
     try: return json.loads(text)
@@ -135,7 +146,9 @@ def parse_proposal(data: Any) -> CapabilityProposal:
         seen.add(path.as_posix()); files.append(ProposedFile(path.as_posix(), item["content"]))
     if len(files) > 100: raise ValueError("proposal contains too many files")
     if set(data["permissions"]) - {"filesystem.read", "filesystem.write", "process.execute"}: raise ValueError("proposal requests unsupported permissions")
-    return CapabilityProposal(data["candidate_id"], data["name"], data["purpose"], data["problem"], data["inputs"], data["outputs"], tuple(data["assumptions"]), tuple(data["dependencies"]), tuple(data["permissions"]), tuple(files), tuple(data["validation_plan"]), tuple(data.get("limitations", [])))
+    coverage = data.get("requirement_coverage", [])
+    if not isinstance(coverage, list) or any(not isinstance(item, dict) for item in coverage): raise ValueError("requirement coverage is malformed")
+    return CapabilityProposal(data["candidate_id"], data["name"], data["purpose"], data["problem"], data["inputs"], data["outputs"], tuple(data["assumptions"]), tuple(data["dependencies"]), tuple(data["permissions"]), tuple(files), tuple(data["validation_plan"]), tuple(data.get("limitations", [])), tuple(coverage))
 
 def _provider_structured(self, prompt: str):
     status = self.status()
@@ -149,7 +162,7 @@ def _provider_structured(self, prompt: str):
     return _json_output(str(output))
 
 def propose(self, task: TaskSpec):
-    prompt = "Return ONLY one complete JSON object, no markdown or explanation. Required CapabilityProposal keys: candidate_id, name, purpose, problem (strings); inputs and outputs (objects); assumptions, dependencies, permissions, files, validation_plan (arrays). Each files item must contain path and content strings. Use permissions only as an empty array unless strictly required. Do not execute anything. Task: " + task.outcome
+    prompt = "Return ONLY one complete JSON object, no markdown or explanation. Required CapabilityProposal keys: candidate_id, name, purpose, problem (strings); inputs and outputs (objects); assumptions, dependencies, permissions, files, validation_plan (arrays); optional requirement_coverage (array of objects with requirement_id, criterion_id, coverage, and unresolved). Each files item must contain path and content strings. Use permissions only as an empty array unless strictly required. Do not execute anything. Task: " + task.outcome
     return parse_proposal(_provider_structured(self, prompt))
 
 LocalModelProvider.propose = propose

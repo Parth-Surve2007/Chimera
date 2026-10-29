@@ -17,7 +17,8 @@ class Registry:
             db.execute("CREATE TABLE IF NOT EXISTS registry_events (event_id TEXT PRIMARY KEY, capability_id TEXT, version TEXT, event TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL)"); db.commit()
     def _connect(self):
         db = sqlite3.connect(self.db_path); db.row_factory = sqlite3.Row; return db
-    def _manifest(self, source: Path):
+    @staticmethod
+    def canonical_manifest(source: Path):
         source = Path(source).resolve()
         if not source.is_dir(): raise IntegrityError("artifact source must be a directory")
         entries = []
@@ -33,6 +34,8 @@ class Registry:
         entries.sort(key=lambda x: x["path"])
         encoded = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()
         return entries, hashlib.sha256(encoded).hexdigest()
+    def _manifest(self, source: Path):
+        return self.canonical_manifest(source)
     def _event(self, db, cid, version, event, detail=""):
         db.execute("INSERT INTO registry_events VALUES (?, ?, ?, ?, ?, ?)", (str(uuid.uuid4()), cid, version, event, detail, now_iso()))
     def verify(self, capability_id: str, version: str | None = None):

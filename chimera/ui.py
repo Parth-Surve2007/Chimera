@@ -1,5 +1,5 @@
 """Monochrome Flet command console for Chimera."""
-import sys, asyncio
+import sys, asyncio, json
 from pathlib import Path
 from .review import ReviewService
 from .workflow import CapabilityWorkflow
@@ -12,6 +12,56 @@ except ImportError: ft = None
 BG, SURFACE, ELEVATED, BORDER = "#070808", "#101313", "#171B1A", "#29302E"
 TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F3F5F3", "#A7B0AC", "#68736E", "#3F4945", "#8AAE9C"
 ACCENT = FOCUS
+
+STATE_COLORS = {"pass": "#8AAE9C", "fail": "#D9897A", "unknown": "#C7A66A", "blocked": "#B77D9A"}
+
+def persisted_evaluation(candidate, audit):
+    """Read-only projection of persisted workflow evidence; never evaluates or recomputes it."""
+    run_id = getattr(candidate, "workflow_run_id", None)
+    if not run_id:
+        return None, []
+    try:
+        events = audit.workflow_events_for(run_id)
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}, []
+    report = None
+    for stage, outcome, detail, event_candidate, digest, created in events:
+        if stage == "evidence_evaluation":
+            try: report = json.loads(detail)
+            except (TypeError, json.JSONDecodeError): report = {"status": "unavailable", "reason": "persisted evaluation report is malformed"}
+        if stage in ("manifest_anchor", "static_verification", "candidate_staging", "evidence_evaluation"):
+            yield_event = {"stage": stage, "outcome": outcome, "detail": detail, "candidate_id": event_candidate, "manifest_digest": digest, "created_at": created}
+            yield_event["report"] = report if stage == "evidence_evaluation" else None
+            # use a list without changing the persisted data
+            if "history" not in locals(): history = []
+            history.append(yield_event)
+    return report, history if "history" in locals() else []
+
+def evaluation_rows(report):
+    """Return display data from an already persisted report, without inventing status."""
+    if not isinstance(report, dict) or report.get("status") == "unavailable":
+        return [("EVALUATION UNAVAILABLE", "unknown", report.get("reason", "No persisted evaluation report is available.") if isinstance(report, dict) else "No persisted evaluation report is available.", "")]
+    rows = []
+    for criterion in report.get("criteria", []):
+        if not isinstance(criterion, dict):
+            rows.append(("MALFORMED CRITERION", "unknown", "Persisted criterion data is malformed.", "")); continue
+        state = criterion.get("result") if criterion.get("result") in STATE_COLORS else "unknown"
+        refs = ", ".join(str(ref) for ref in criterion.get("evidence_refs", []) if ref)
+        reason = criterion.get("reason") or "No explanation persisted."
+        remaining = "; ".join(str(item) for item in criterion.get("remaining_evidence", []) if item)
+        rows.append((criterion.get("criterion_id") or criterion.get("requirement") or "criterion", state, reason, f"Evidence: {refs or 'none'}" + (f"\nUnresolved: {remaining}" if remaining else "")))
+    return rows or [("NO CRITERIA", "unknown", "The persisted report contains no criteria.", "")]
+
+def traceability_rows(trace):
+    if not isinstance(trace, list) or not trace:
+        return [("TRACEABILITY UNAVAILABLE", "unavailable", "Older candidate metadata contains no requirement relationships.")]
+    rows = []
+    for item in trace:
+        if not isinstance(item, dict) or not isinstance(item.get("requirement_id"), str) or not isinstance(item.get("requirement"), str):
+            rows.append(("MALFORMED REQUIREMENT", "unavailable", "Persisted traceability data is malformed.")); continue
+        coverage = item.get("coverage") if item.get("coverage") in ("full", "partial", "missing", "ambiguous") else "unavailable"
+        rows.append((f"{item['requirement_id']} / {item.get('criterion_id') or 'NO CRITERION'}", coverage, item["requirement"] + "\n" + (item.get("proposal_intent") or "No proposal coverage recorded.") + "\n" + (item.get("unresolved") or "")))
+    return rows
 
 def launch(registry):
     if ft is None: raise RuntimeError("Flet is not installed; run python -m pip install flet")
@@ -26,7 +76,12 @@ class MainWindow:
         page.title = "Chimera"; page.bgcolor = BG; page.padding = 0; page.window.width = 1200; page.window.height = 760; page.window.min_width = 860; page.window.min_height = 560
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
-        self.task_busy = False; self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Describe the capability you want to preserve...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
+        self.task_busy = False; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""; self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Describe the capability you want to preserve...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
+        try:
+            pending = AuditStore(registry.data_dir / "chimera.db").clarification_pending()
+            if pending:
+                self.pending_session_id = pending[0]["session_id"]; self.pending_request = pending[0]["original_request"]; self.pending_questions = tuple(type("Question", (), question) for question in pending[0]["questions"]); self.pending_state = pending[0]["state"]; self.pending_reason = f"State: {self.pending_state}. Continuation: {pending[0]['current_run_id']}. Reconciliation is read-only; no retry is performed automatically." if self.pending_state != "pending" else ""
+        except Exception: pass
         self.body = ft.Container(expand=True, padding=ft.Padding.symmetric(horizontal=56, vertical=36)); self.drawer = self._drawer(); self._show_overview()
         self.shell = ft.Column([self._topbar(), ft.Stack([self.body, self.drawer], expand=True), self._statusbar()], expand=True, spacing=0)
         if not self._show_intro(): page.add(self.shell)
@@ -103,22 +158,40 @@ class MainWindow:
         if request is None:
             self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Describe the capability you want to preserve...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
         composer = ft.Container(ft.Column([ft.Text("CAPABILITY REQUEST", color=MUTED, size=10), self.task_field, ft.Row([ft.Text("Local reasoning → proposal → review", color=MUTED, size=10), self._button("ANALYZE REQUEST", self._submit_task) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
-        self._set([ft.Container(ft.Text("CHIMERA", font_family="ChimeraDots", size=72, color="#18201D", opacity=0.5), height=90), ft.Text("Build capabilities with evidence.", size=30, weight=ft.FontWeight.BOLD, color=TEXT), ft.Text("Local reasoning, explicit verification, human-controlled acceptance.", size=13, color=SECONDARY), composer, ft.Row([self._metric("MODEL", self._runtime_state().replace("RUNTIME: ", "")), self._metric("REVIEW QUEUE", str(len(self.review.list()))), self._metric("BEHAVIOR", "BLOCKED" if not VirtualBoxBackend().inspect().get("available") else "AVAILABLE")], spacing=12), ft.Text("No capability is accepted or executed automatically.", color=MUTED, size=11)])
+        clarification = []
+        if self.pending_questions:
+            if self.pending_state == "pending":
+                content = [ft.Text("CLARIFICATION REQUIRED", color=FOCUS, size=10), *[ft.Text(f"{q.question_id}: {q.question}\nWhy: {q.reason}", color=SECONDARY, size=11) for q in self.pending_questions], self.clarification_field, self._button("SUBMIT CLARIFICATIONS", self._submit_task)]
+            else:
+                content = [ft.Text(f"CONTINUATION {self.pending_state.upper()}", color=FOCUS, size=10), ft.Text(self.pending_reason, color=SECONDARY, size=11), ft.Text("No answer will be submitted and no retry is performed automatically.", color=MUTED, size=11)]
+            clarification = [ft.Container(ft.Column(content, spacing=10), width=760, bgcolor=SURFACE, border=ft.Border.all(1, FOCUS), border_radius=8, padding=ft.Padding.all(18))]
+        self._set([ft.Container(ft.Text("CHIMERA", font_family="ChimeraDots", size=72, color="#18201D", opacity=0.5), height=90), ft.Text("Build capabilities with evidence.", size=30, weight=ft.FontWeight.BOLD, color=TEXT), ft.Text("Local reasoning, explicit verification, human-controlled acceptance.", size=13, color=SECONDARY), composer, *clarification, ft.Row([self._metric("MODEL", self._runtime_state().replace("RUNTIME: ", "")), self._metric("REVIEW QUEUE", str(len(self.review.list()))), self._metric("BEHAVIOR", "BLOCKED" if not VirtualBoxBackend().inspect().get("available") else "AVAILABLE")], spacing=12), ft.Text("No capability is accepted or executed automatically.", color=MUTED, size=11)])
     def _metric(self, label, value): return ft.Container(ft.Column([ft.Text(label, color=MUTED, size=9), ft.Text(value, color=TEXT, size=13, weight=ft.FontWeight.BOLD)], spacing=5), width=180, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=6, padding=ft.Padding.all(14))
     async def _submit_task(self, e=None):
+        if self.pending_session_id and self.pending_state != "pending": return self._toast("This continuation requires recovery reconciliation before answers can be submitted.")
         if self.task_busy: return self._toast("A request is already being analyzed.")
-        request = (self.task_field.value or "").strip()
+        request = self.pending_request or (self.task_field.value or "").strip()
         if not request: return self._toast("Describe a capability request first.")
+        clarifications = {"answers": self.clarification_field.value.strip()} if self.pending_request else None
         self.task_busy = True
         try:
             self._toast("Analyzing with the configured local model...")
-            result = await asyncio.to_thread(CapabilityWorkflow(LocalModelProvider(config_from_env()), self.registry.data_dir / "candidates", registry=self.registry).run, request)
-            self._toast(result.message); self._show_capabilities()
+            workflow = CapabilityWorkflow(LocalModelProvider(config_from_env()), self.registry.data_dir / "candidates", registry=self.registry)
+            result = await asyncio.to_thread(workflow.resume_clarification, self.pending_session_id, {q.question_id: self.clarification_field.value.strip()} if self.pending_session_id else {}) if self.pending_session_id else await asyncio.to_thread(workflow.run, request, clarifications)
+            if result.state == "needs_clarification": self.pending_request, self.pending_questions, self.pending_session_id = request, result.readiness.questions, result.clarification_session_id
+            else: self.pending_request, self.pending_questions, self.pending_session_id = None, (), None
+            self._toast(result.message); self._show_overview() if result.state == "needs_clarification" else self._show_capabilities()
         except Exception as exc:
             self._toast(f"Workflow failed: {exc}")
         finally:
             self.task_busy = False
     def _inspect(self, c):
         self.selected = c
-        details = f"{c.name}\n\nSTATE  {c.status.upper()}\nTASK  {c.task}\nMANIFEST  {c.digest or 'UNVERIFIED'}\nACCEPTANCE APPROVAL  {'GRANTED' if c.acceptance_approved else 'REQUIRED'}\nEXECUTION APPROVAL  {'GRANTED' if c.execution_approved else 'REQUIRED'}\n\nSTATIC VERIFICATION is separate from behavioral verification. Generated code is never executed automatically."
-        self._set([ft.Text(f"CANDIDATE / {c.candidate_id}", size=22, color=TEXT, weight=ft.FontWeight.BOLD), ft.Container(ft.Text(details, color=SECONDARY, size=12), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(20), width=760), ft.Row([ft.TextButton("VERIFY STATIC", on_click=lambda e: self._action(lambda: self.review.verify(c.candidate_id)), style=ft.ButtonStyle(color=TEXT)), ft.TextButton("BEHAVIOR CHECK", on_click=lambda e: self._action(lambda: self.review.behavior_verify(c.candidate_id)), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("APPROVE ACCEPTANCE", on_click=lambda e: self._action(lambda: self.review.approve_acceptance(c.candidate_id)), style=ft.ButtonStyle(color=TEXT)), ft.TextButton("ACCEPT", on_click=lambda e: self._action(lambda: self.review.accept(c.candidate_id), True), style=ft.ButtonStyle(color=TEXT))])])
+        try: report, history = persisted_evaluation(c, AuditStore(self.registry.data_dir / "chimera.db"))
+        except Exception as exc: report, history = {"status": "unavailable", "reason": str(exc)}, []
+        digest = c.manifest_digest or c.digest or "UNVERIFIED"
+        details = f"{c.name}\n\nSTATE  {c.status.upper()}\nVERSION  {c.version}\nTASK  {c.task}\nMANIFEST  {digest}\nACCEPTANCE APPROVAL  {'GRANTED' if c.acceptance_approved else 'REQUIRED'}\nEXECUTION APPROVAL  {'GRANTED' if c.execution_approved else 'REQUIRED'}\n\nCONTRACT / STATIC evidence is separate from BEHAVIORAL evidence. No behavioral success is shown without a persisted authoritative record."
+        criteria = [ft.Container(ft.Column([ft.Row([ft.Text(label, color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(state.upper(), color=STATE_COLORS.get(state, MUTED), size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(reason, color=SECONDARY, size=11), ft.Text(refs, color=MUTED, size=10)]), bgcolor=SURFACE, border=ft.Border.all(1, STATE_COLORS.get(state, BORDER)), border_radius=6, padding=ft.Padding.all(12), width=760) for label, state, reason, refs in evaluation_rows(report)]
+        coverage = [ft.Container(ft.Column([ft.Row([ft.Text(label, color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(state.upper(), color=FOCUS if state == "full" else MUTED, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(reason, color=SECONDARY, size=11)]), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=6, padding=ft.Padding.all(12), width=760) for label, state, reason in traceability_rows(getattr(c, "requirement_trace", None))]
+        history_controls = [ft.Text(f"{event['stage']}  /  {event['outcome']}  /  {event['created_at'] or 'timestamp unavailable'}", color=MUTED, size=10) for event in history]
+        self._set([ft.Text(f"CANDIDATE / {c.candidate_id}", size=22, color=TEXT, weight=ft.FontWeight.BOLD), ft.Container(ft.Text(details, color=SECONDARY, size=12), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(20), width=760), ft.Text("REQUIREMENT TRACEABILITY", color=MUTED, size=10), *coverage, ft.Text("EVALUATION CRITERIA", color=MUTED, size=10), *criteria, ft.Text("PERSISTED WORKFLOW EVIDENCE", color=MUTED, size=10), *(history_controls or [ft.Text("No relevant workflow history is available.", color=MUTED, size=11)]), ft.Row([ft.TextButton("VERIFY STATIC", on_click=lambda e: self._action(lambda: self.review.verify(c.candidate_id)), style=ft.ButtonStyle(color=TEXT)), ft.TextButton("BEHAVIOR CHECK", on_click=lambda e: self._action(lambda: self.review.behavior_verify(c.candidate_id)), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("APPROVE ACCEPTANCE", on_click=lambda e: self._action(lambda: self.review.approve_acceptance(c.candidate_id)), style=ft.ButtonStyle(color=TEXT)), ft.TextButton("ACCEPT", on_click=lambda e: self._action(lambda: self.review.accept(c.candidate_id), True), style=ft.ButtonStyle(color=TEXT))])])

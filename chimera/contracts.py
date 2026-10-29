@@ -18,6 +18,20 @@ class TaskSpec:
     evidence: list[str] = field(default_factory=list)
 
 @dataclass(frozen=True)
+class ClarificationQuestion:
+    question_id: str
+    question: str
+    reason: str
+    source: str
+    mandatory: bool = True
+
+@dataclass(frozen=True)
+class ReadinessAssessment:
+    status: str
+    questions: tuple[ClarificationQuestion, ...] = ()
+    reason: str = ""
+
+@dataclass(frozen=True)
 class ProposedFile:
     path: str
     content: str
@@ -36,6 +50,7 @@ class CapabilityProposal:
     files: tuple[ProposedFile, ...]
     validation_plan: tuple[str, ...]
     limitations: tuple[str, ...] = ()
+    requirement_coverage: tuple[dict[str, Any], ...] = ()
 
 @dataclass(frozen=True)
 class VerificationResult:
