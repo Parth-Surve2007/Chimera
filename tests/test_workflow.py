@@ -104,6 +104,188 @@ def test_promotion_record_transitions_idempotently(tmp_path):
     audit.promotion_transition("p1", "promotion_observed", "promotion_observed", **args)
     assert audit.promotion_get("p1")["state"] == "promotion_observed"
 
+def test_promotion_idempotency_rechecks_current_authority(tmp_path):
+    from chimera.audit import AuditStore
+    import pytest
+    audit = AuditStore(tmp_path / "chimera.db")
+    audit.clarification_create("s1", "origin", "request", [])
+    owner = audit.clarification_claim("s1", "run", {}, owner_token="owner")
+    args = dict(attempt_id="a1", session_id="s1", run_id="run", owner_token="owner", fencing_token=owner["fencing_token"], revision=owner["revision"], candidate_id="c1", version="0.1.0", digest="d")
+    audit.promotion_intent("p1", "a1", "c1", "0.1.0", "s1", "run", "owner", owner["fencing_token"], owner["revision"], tmp_path / "stage", tmp_path / "candidate", [], "d")
+    audit.promotion_transition("p1", "intent_recorded", "promotion_observed", **args)
+    for field, value in (("attempt_id", "wrong"), ("candidate_id", "wrong"), ("version", "9"), ("digest", "wrong"), ("owner_token", "wrong"), ("fencing_token", 99), ("revision", 99), ("run_id", "wrong")):
+        rejected = dict(args); rejected[field] = value
+        with pytest.raises(ValueError): audit.promotion_transition("p1", "promotion_observed", "promotion_observed", **rejected)
+    assert audit.promotion_get("p1")["state"] == "promotion_observed"
+
+def test_renewal_wrapper_requires_complete_session_generation(tmp_path):
+    from chimera.audit import AuditStore
+    import pytest
+    audit = AuditStore(tmp_path / "chimera.db")
+    audit.clarification_create("s1", "origin", "request", [])
+    owner = audit.clarification_claim("s1", "run", {}, owner_token="owner", lease_seconds=10)
+    with pytest.raises(ValueError): audit.clarification_renew("s1", "owner", 7)
+    audit.clarification_renew_fenced("s1", "run", "owner", owner["fencing_token"], owner["revision"], lease_seconds=7)
+    import time
+    assert audit.clarification_get("s1")["lease_expires_at"] > time.time() + 6
+
+def test_completion_is_generation_fenced(tmp_path):
+    from chimera.audit import AuditStore
+    import pytest
+    audit = AuditStore(tmp_path / "chimera.db")
+    audit.clarification_create("s1", "origin", "request", [])
+    owner = audit.clarification_claim("s1", "run", {}, owner_token="owner")
+    with pytest.raises(ValueError): audit.clarification_finish("s1", "failed")
+    audit.clarification_finish("s1", "failed", "run", "owner", owner["fencing_token"], owner["revision"])
+    assert audit.clarification_get("s1")["state"] == "failed"
+
+def test_recovery_required_reason_is_durable_and_activation_clears_it(tmp_path):
+    from chimera.audit import AuditStore
+    audit = AuditStore(tmp_path / "chimera.db")
+    audit.clarification_create("s1", "origin", "request", [])
+    owner = audit.clarification_claim("s1", "run", {}, owner_token="owner")
+    marked = audit.clarification_recovery_required("s1", "promotion evidence requires reconciliation", "run", "owner", owner["fencing_token"], owner["revision"])
+    assert marked["state"] == "recovery_required"
+    assert marked["recovery_reason"] == "promotion evidence requires reconciliation"
+    audit.clarification_recovery_activate("s1", "run", "owner", owner["fencing_token"], owner["revision"])
+    assert audit.clarification_get("s1")["recovery_reason"] is None
+    events = audit.workflow_events_for("run")
+    assert [event[0] for event in events] == ["recovery_required_recorded", "recovery_activated"]
+    assert "promotion evidence requires reconciliation" in events[1][2]
+
+def test_recovery_reason_validation_is_atomic(tmp_path):
+    from chimera.audit import AuditStore
+    import pytest
+    audit = AuditStore(tmp_path / "chimera.db")
+    audit.clarification_create("s1", "origin", "request", [])
+    owner = audit.clarification_claim("s1", "run", {}, owner_token="owner")
+    for reason in ("", "   ", 42, "x" * 1001):
+        with pytest.raises(ValueError): audit.clarification_recovery_required("s1", reason, "run", "owner", owner["fencing_token"], owner["revision"])
+    assert audit.clarification_get("s1")["state"] == "resuming"
+    assert audit.workflow_events_for("run") == []
+
+def test_recovery_history_survives_reopen(tmp_path):
+    from chimera.audit import AuditStore
+    audit = AuditStore(tmp_path / "chimera.db")
+    audit.clarification_create("s1", "origin", "request", [])
+    owner = audit.clarification_claim("s1", "run", {}, owner_token="owner")
+    audit.clarification_recovery_required("s1", "needs reconciliation", "run", "owner", owner["fencing_token"], owner["revision"])
+    reopened = AuditStore(tmp_path / "chimera.db")
+    assert len(reopened.recovery_history("s1")) == 1
+    assert "needs reconciliation" in reopened.recovery_history("s1")[0][3]
+
+def test_heartbeat_stop_serializes_against_renewal(tmp_path):
+    from chimera.workflow import _HeartbeatController
+    import threading
+    entered = threading.Event(); release = threading.Event(); committed = []
+    class FakeAudit:
+        def clarification_renew_fenced(self, *args):
+            entered.set(); release.wait(1); committed.append(True)
+    controller = _HeartbeatController(FakeAudit(), "s", "r", "o", 1, 1, interval=0.01)
+    controller.start(); assert entered.wait(1)
+    done = threading.Event()
+    def shutdown(): controller.stop(); done.set()
+    thread = threading.Thread(target=shutdown); thread.start()
+    assert not done.wait(0.05)
+    release.set(); thread.join(1)
+    assert done.is_set() and controller.stopped and committed == [True]
+    assert controller.state == "stopped"
+
+def test_heartbeat_renewal_error_is_observable(tmp_path):
+    from chimera.workflow import _HeartbeatController
+    import threading
+    failed = threading.Event()
+    class FakeAudit:
+        def clarification_renew_fenced(self, *args): raise ValueError("stale generation")
+    controller = _HeartbeatController(FakeAudit(), "s", "r", "o", 1, 1, interval=0.01)
+    controller.start()
+    while not controller.ownership_lost.wait(1): pass
+    controller.stop()
+    assert isinstance(controller.renewal_error, ValueError)
+    assert controller.state == "stopped"
+
+def test_heartbeat_stop_has_bounded_gate_wait(tmp_path):
+    from chimera.workflow import _HeartbeatController
+    import threading, time
+    entered = threading.Event(); release = threading.Event()
+    class FakeAudit:
+        def clarification_renew_fenced(self, *args): entered.set(); release.wait(1)
+    controller = _HeartbeatController(FakeAudit(), "s", "r", "o", 1, 1, interval=0.01, shutdown_timeout=0.05)
+    controller.start(); assert entered.wait(1)
+    started = time.monotonic(); assert controller.stop() is False; elapsed = time.monotonic() - started
+    assert elapsed < 0.5 and controller.state == "alive_after_timeout" and not controller.stopped
+    release.set(); assert controller.stop() is True
+
+def test_heartbeat_no_renewal_starts_after_shutdown_request(tmp_path):
+    from chimera.workflow import _HeartbeatController
+    import threading
+    entered = threading.Event(); release = threading.Event(); calls = []
+    class FakeAudit:
+        def clarification_renew_fenced(self, *args):
+            calls.append(True); entered.set(); release.wait(1)
+    controller = _HeartbeatController(FakeAudit(), "s", "r", "o", 1, 1, interval=0.01)
+    controller.start(); assert entered.wait(1)
+    stopper = threading.Thread(target=controller.stop); stopper.start(); release.set(); stopper.join(1)
+    assert len(calls) == 1 and controller.stopped
+
+def test_paint_adapter_creates_and_verifies_real_artifact(tmp_path):
+    from chimera.adapters import PaintAdapter
+    from chimera.image_spec import interpret_request
+    result = PaintAdapter(executable="missing-paint").execute("make an image", tmp_path, open_in_app=False)
+    assert result.status == "blocked"
+    adapter = PaintAdapter(executable="python")
+    spec, _ = interpret_request("create a red circle on black background")
+    result = adapter.execute("make an image", tmp_path, open_in_app=False, image_spec=spec)
+    assert result.status == "completed" and result.observation["valid"]
+    assert result.artifact and result.artifact.is_file()
+
+def test_execution_slice_persists_plan_observation_and_artifact(tmp_path):
+    from chimera.execution import run
+    from chimera.local_model import LocalModelConfig, LocalModelProvider
+    result = run("create a red circle on black background", tmp_path, open_in_app=False, provider=LocalModelProvider(LocalModelConfig(None, None)))
+    assert result["status"] == "completed"
+    assert result["plan"]["application"] == "Microsoft Paint"
+    assert result["observation"]["valid"]
+    assert __import__("pathlib").Path(result["artifact"]).is_file()
+    assert (tmp_path / "executions" / result["task_id"] / "execution.json").is_file()
+
+def test_image_requests_produce_different_specs_and_deterministic_artifacts(tmp_path):
+    from chimera.image_spec import interpret_request
+    from chimera.adapters import PaintAdapter
+    first, _ = interpret_request("create a red circle on black background 320x200")
+    second, _ = interpret_request("create a blue square on white background 320x200")
+    assert first != second
+    adapter = PaintAdapter(executable="python")
+    a = adapter.execute("x", tmp_path / "a", False, first); b = adapter.execute("x", tmp_path / "b", False, first)
+    assert a.status == b.status == "completed" and a.artifact.read_bytes() == b.artifact.read_bytes()
+    from chimera.adapters import verify_bmp
+    assert verify_bmp(a.artifact, first)["valid"]
+
+def test_image_bmp_pixels_match_spec_colors(tmp_path):
+    from chimera.image_spec import interpret_request
+    from chimera.adapters import PaintAdapter, verify_bmp
+    adapter = PaintAdapter(executable="python")
+    for request in ("red circle on black", "blue square on white 320x200", "green circle on black"):
+        spec, _ = interpret_request(request); result = adapter.execute(request, tmp_path / request.split()[0], False, spec)
+        check = verify_bmp(result.artifact, spec)
+        assert result.status == "completed" and check["valid"]
+        assert all(item["actual"] == item["expected"] for item in check["pixel_checks"])
+
+def test_image_spec_invalid_and_model_unavailable_fail_safely(tmp_path):
+    from chimera.image_spec import validate_image_spec, interpret_request
+    from chimera.local_model import LocalModelConfig, LocalModelProvider
+    import pytest
+    with pytest.raises(ValueError): validate_image_spec({"width": 1, "height": 1, "shapes": []})
+    with pytest.raises(ValueError): interpret_request("make a photorealistic dragon")
+    result = __import__("chimera.execution", fromlist=["run"]).run("make a photorealistic dragon", tmp_path, False, LocalModelProvider(LocalModelConfig(None, None)))
+    assert result["status"] == "blocked" and result["reasoning"] == "unavailable"
+
+def test_extensible_scene_validates_and_renders_layers(tmp_path):
+    from chimera.scene import validate_scene, render_scene
+    scene = validate_scene({"width": 64, "height": 48, "background": "black", "layers": [{"name": "forms", "objects": [{"kind": "polygon", "x": 4, "y": 4, "width": 40, "height": 30, "points": [[4, 4], [40, 8], [20, 30]], "fill": "green"}, {"kind": "line", "x": 0, "y": 0, "width": 0, "height": 0, "points": [[0, 0], [63, 47]], "stroke": "white", "fill": "white"}]}]})
+    output = tmp_path / "scene.bmp"; render_scene(output, scene)
+    assert output.is_file() and output.read_bytes()[:2] == b"BM"
+
 def test_reconcile_promotion_blocks_missing_destination(tmp_path):
     from chimera.audit import AuditStore
     audit = AuditStore(tmp_path / "chimera.db")

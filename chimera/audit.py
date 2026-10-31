@@ -15,6 +15,7 @@ class AuditRecord:
     duration_ms: int | None = None; verification: str = "not_run"; final_status: str = "pending"
 
 class AuditStore:
+    MAX_RECOVERY_REASON = 1000
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         with sqlite3.connect(self.db_path) as db:
@@ -23,11 +24,12 @@ class AuditStore:
             db.execute("CREATE TABLE IF NOT EXISTS workflow_runs (run_id TEXT PRIMARY KEY, request_summary TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, candidate_id TEXT, manifest_digest TEXT, error TEXT)"); db.commit()
             db.execute("CREATE TABLE IF NOT EXISTS workflow_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, stage TEXT NOT NULL, outcome TEXT NOT NULL, detail TEXT NOT NULL, candidate_id TEXT, manifest_digest TEXT, created_at TEXT NOT NULL)"); db.commit()
             db.execute("CREATE TABLE IF NOT EXISTS promotion_records (promotion_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL UNIQUE, candidate_id TEXT NOT NULL, version TEXT NOT NULL, session_id TEXT, run_id TEXT NOT NULL, owner_token TEXT, fencing_token INTEGER, revision INTEGER, workspace TEXT NOT NULL, destination TEXT NOT NULL, manifest TEXT NOT NULL, manifest_digest TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"); db.commit()
-            db.execute("CREATE TABLE IF NOT EXISTS clarification_sessions (session_id TEXT PRIMARY KEY, origin_run_id TEXT NOT NULL, current_run_id TEXT NOT NULL, original_request TEXT NOT NULL, questions TEXT NOT NULL, answers TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"); db.commit()
+            db.execute("CREATE TABLE IF NOT EXISTS clarification_sessions (session_id TEXT PRIMARY KEY, origin_run_id TEXT NOT NULL, current_run_id TEXT NOT NULL, original_request TEXT NOT NULL, questions TEXT NOT NULL, answers TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, recovery_reason TEXT)"); db.commit()
             columns = {row[1] for row in db.execute("PRAGMA table_info(clarification_sessions)")}
             if "owner_token" not in columns: db.execute("ALTER TABLE clarification_sessions ADD COLUMN owner_token TEXT")
             if "lease_expires_at" not in columns: db.execute("ALTER TABLE clarification_sessions ADD COLUMN lease_expires_at REAL")
             if "fencing_token" not in columns: db.execute("ALTER TABLE clarification_sessions ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0")
+            if "recovery_reason" not in columns: db.execute("ALTER TABLE clarification_sessions ADD COLUMN recovery_reason TEXT")
             db.commit()
     @contextmanager
     def promotion_lock(self):
@@ -87,11 +89,11 @@ class AuditStore:
             db.execute("INSERT INTO clarification_sessions(session_id,origin_run_id,current_run_id,original_request,questions,answers,state,revision,created_at,updated_at,owner_token,lease_expires_at,fencing_token) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (session_id, run_id, run_id, original_request, json.dumps(questions, separators=(",", ":")), "{}", "pending", 0, now_iso(), now_iso(), None, None, 0)); db.commit()
     def clarification_get(self, session_id):
         import json
-        with sqlite3.connect(self.db_path) as db: row = db.execute("SELECT session_id,origin_run_id,current_run_id,original_request,questions,answers,state,revision,created_at,updated_at,owner_token,lease_expires_at,fencing_token FROM clarification_sessions WHERE session_id=?", (session_id,)).fetchone()
+        with sqlite3.connect(self.db_path) as db: row = db.execute("SELECT session_id,origin_run_id,current_run_id,original_request,questions,answers,state,revision,created_at,updated_at,owner_token,lease_expires_at,fencing_token,recovery_reason FROM clarification_sessions WHERE session_id=?", (session_id,)).fetchone()
         if not row: return None
         try: questions, answers = json.loads(row[4]), json.loads(row[5])
         except (TypeError, json.JSONDecodeError) as exc: raise ValueError("clarification session data is malformed") from exc
-        return {"session_id":row[0],"origin_run_id":row[1],"current_run_id":row[2],"original_request":row[3],"questions":questions,"answers":answers,"state":row[6],"revision":row[7],"created_at":row[8],"updated_at":row[9],"owner_token":row[10],"lease_expires_at":row[11],"fencing_token":row[12]}
+        return {"session_id":row[0],"origin_run_id":row[1],"current_run_id":row[2],"original_request":row[3],"questions":questions,"answers":answers,"state":row[6],"revision":row[7],"created_at":row[8],"updated_at":row[9],"owner_token":row[10],"lease_expires_at":row[11],"fencing_token":row[12],"recovery_reason":row[13]}
     def clarification_claim(self, session_id, continuation_run_id, answers, owner_token=None, lease_seconds=120):
         import json
         if len(json.dumps(answers, separators=(",", ":"))) > 10000: raise ValueError("clarification answers exceed persistence limit")
@@ -103,9 +105,14 @@ class AuditStore:
             db.execute("UPDATE clarification_sessions SET current_run_id=?,answers=?,state='resuming',revision=revision+1,owner_token=?,lease_expires_at=?,fencing_token=fencing_token+1,updated_at=? WHERE session_id=? AND state='pending'", (continuation_run_id, json.dumps(answers, separators=(",", ":")), owner_token, time.time() + lease_seconds, now_iso(), session_id)); db.commit()
         current = self.clarification_get(session_id); return {"owner_token": owner_token, "fencing_token": current["fencing_token"], "revision": current["revision"]}
     def clarification_renew(self, session_id, owner_token, lease_seconds=120):
-        return self.clarification_renew_fenced(session_id, None, owner_token, None, lease_seconds)
+        # Legacy calls are only safe for explicitly non-session records.  A
+        # session-bound continuation must provide its complete generation.
+        session = self.clarification_get(session_id)
+        if session and session.get("current_run_id"):
+            raise ValueError("session-bound renewal requires continuation, fencing token, and revision")
+        return self.clarification_renew_fenced(session_id, None, owner_token, None, lease_seconds=lease_seconds)
     def clarification_renew_fenced(self, session_id, continuation_run_id, owner_token, fencing_token, revision=None, lease_seconds=120):
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=0.2) as db:
             query = "UPDATE clarification_sessions SET lease_expires_at=?,updated_at=? WHERE session_id=? AND state='resuming' AND owner_token=? AND lease_expires_at>?"
             args = [time.time()+lease_seconds, now_iso(), session_id, owner_token, time.time()]
             if continuation_run_id is not None: query += " AND current_run_id=?"; args.append(continuation_run_id)
@@ -135,21 +142,50 @@ class AuditStore:
                 if cur.rowcount != 1: db.rollback(); raise ValueError("continuation is still owned, terminal, or revision has changed")
                 db.commit()
         current = self.clarification_get(session_id); return {"owner_token": token, "fencing_token": current["fencing_token"], "revision": current["revision"]}
-    def clarification_finish(self, session_id, state):
-        with sqlite3.connect(self.db_path) as db: db.execute("UPDATE clarification_sessions SET state=?,updated_at=? WHERE session_id=?", (state, now_iso(), session_id)); db.commit()
-    def clarification_recovery_required(self, session_id, reason):
+    def clarification_finish(self, session_id, state, continuation_run_id=None, owner_token=None, fencing_token=None, revision=None):
+        with sqlite3.connect(self.db_path) as db:
+            if any(value is None for value in (continuation_run_id, owner_token, fencing_token, revision)):
+                raise ValueError("session-bound completion requires the current ownership generation")
+            cur = db.execute("UPDATE clarification_sessions SET state=?,owner_token=NULL,lease_expires_at=NULL,updated_at=? WHERE session_id=? AND current_run_id=? AND owner_token=? AND fencing_token=? AND revision=? AND state='resuming' AND lease_expires_at>?", (state, now_iso(), session_id, continuation_run_id, owner_token, fencing_token, revision, time.time()))
+            db.commit()
+        if cur.rowcount != 1: raise ValueError("continuation ownership is stale or expired")
+    def clarification_recovery_required(self, session_id, reason, continuation_run_id=None, owner_token=None, fencing_token=None, revision=None):
         """Conditionally mark a claimed continuation as requiring reconciliation."""
+        import json
+        if not isinstance(reason, str) or not reason.strip(): raise ValueError("recovery reason must be a non-empty string")
+        if len(reason) > self.MAX_RECOVERY_REASON: raise ValueError("recovery reason exceeds persistence limit")
         with sqlite3.connect(self.db_path) as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT state FROM clarification_sessions WHERE session_id=?", (session_id,)).fetchone()
             if not row: raise KeyError("clarification session not found")
+            if any(value is None for value in (continuation_run_id, owner_token, fencing_token, revision)):
+                raise ValueError("recovery transition requires the current ownership generation")
             if row[0] == "resuming":
-                db.execute("UPDATE clarification_sessions SET state='recovery_required',updated_at=? WHERE session_id=? AND state='resuming'", (now_iso(), session_id))
+                cur = db.execute("UPDATE clarification_sessions SET state='recovery_required',recovery_reason=?,updated_at=? WHERE session_id=? AND current_run_id=? AND owner_token=? AND fencing_token=? AND revision=? AND state='resuming' AND lease_expires_at>?", (str(reason)[:1000], now_iso(), session_id, continuation_run_id, owner_token, fencing_token, revision, time.time()))
+                if cur.rowcount != 1: raise ValueError("continuation ownership is stale or expired")
+                db.execute("INSERT INTO workflow_events(run_id,stage,outcome,detail,created_at) VALUES (?,?,?,?,?)", (continuation_run_id, "recovery_required_recorded", "completed", json.dumps({"session_id": session_id, "previous_state": "resuming", "new_state": "recovery_required", "reason": reason, "revision": revision}, separators=(",", ":")), now_iso()))
             db.commit()
         return self.clarification_get(session_id)
+    def clarification_recovery_activate(self, session_id, continuation_run_id, owner_token, fencing_token, revision):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT recovery_reason FROM clarification_sessions WHERE session_id=? AND current_run_id=? AND owner_token=? AND fencing_token=? AND revision=? AND state='recovery_required' AND lease_expires_at>?", (session_id, continuation_run_id, owner_token, fencing_token, revision, time.time())).fetchone()
+            if not row: raise ValueError("recovery ownership is stale, invalid, or expired")
+            cur = db.execute("UPDATE clarification_sessions SET state='resuming',recovery_reason=NULL,updated_at=? WHERE session_id=? AND current_run_id=? AND owner_token=? AND fencing_token=? AND revision=? AND state='recovery_required' AND lease_expires_at>?", (now_iso(), session_id, continuation_run_id, owner_token, fencing_token, revision, time.time()))
+            if cur.rowcount == 1:
+                import json
+                db.execute("INSERT INTO workflow_events(run_id,stage,outcome,detail,created_at) VALUES (?,?,?,?,?)", (continuation_run_id, "recovery_activated", "completed", json.dumps({"session_id": session_id, "previous_state": "recovery_required", "new_state": "resuming", "previous_reason": row[0], "revision": revision}, separators=(",", ":")), now_iso()))
+            db.commit()
+        if cur.rowcount != 1: raise ValueError("recovery ownership is stale or expired")
     def clarification_pending(self):
         with sqlite3.connect(self.db_path) as db: ids = [row[0] for row in db.execute("SELECT session_id FROM clarification_sessions WHERE state IN ('pending','resuming','recovery_required') ORDER BY created_at")]
         return [self.clarification_get(session_id) for session_id in ids]
+    def recovery_history(self, session_id):
+        session = self.clarification_get(session_id)
+        if not session: raise KeyError("clarification session not found")
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute("SELECT run_id,stage,outcome,detail,created_at FROM workflow_events WHERE run_id=? AND stage IN ('recovery_required_recorded','recovery_activated') ORDER BY event_id", (session["current_run_id"],)).fetchall()
+        return rows
     def workflow_run_status(self, run_id):
         with sqlite3.connect(self.db_path) as db: row = db.execute("SELECT status FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()
         return row[0] if row else None
@@ -164,11 +200,9 @@ class AuditStore:
         item = dict(zip(("promotion_id","attempt_id","candidate_id","version","session_id","run_id","owner_token","fencing_token","revision","workspace","destination","manifest","manifest_digest","state","created_at","updated_at"), row)); item["manifest"] = json.loads(item["manifest"]); return item
     def promotion_transition(self, promotion_id, expected, state, *, attempt_id=None, session_id=None, run_id=None, owner_token=None, fencing_token=None, revision=None, candidate_id=None, version=None, digest=None, recovery=False):
         with sqlite3.connect(self.db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT attempt_id,session_id,run_id,owner_token,fencing_token,revision,candidate_id,version,manifest_digest,state FROM promotion_records WHERE promotion_id=?", (promotion_id,)).fetchone()
             if not row: raise KeyError("promotion record not found")
-            if row[9] != expected: 
-                if row[9] == state and all(value is not None for value in (attempt_id, run_id, candidate_id, version, digest)): return
-                raise ValueError("promotion transition conflict")
             supplied = (attempt_id, session_id, run_id, owner_token, fencing_token, revision, candidate_id, version, digest)
             required = (attempt_id, run_id, candidate_id, version, digest) if row[1] is None else supplied
             if any(value is None for value in required): raise ValueError("complete promotion authority is required")
@@ -177,6 +211,11 @@ class AuditStore:
                 session = db.execute("SELECT current_run_id,owner_token,fencing_token,revision,state,lease_expires_at FROM clarification_sessions WHERE session_id=?", (session_id,)).fetchone()
                 if not session or (session[0], session[1], session[2], session[3]) != (run_id, owner_token, fencing_token, revision) or session[4] != "resuming" or (session[5] is not None and session[5] <= time.time()):
                     raise ValueError("current continuation ownership does not authorize promotion transition")
+            if row[9] != expected:
+                raise ValueError("promotion transition conflict")
+            if row[9] == state:
+                db.commit()
+                return
             if not recovery and row[1] is not None and state in ("promotion_observed", "finalized") and row[3] is None: raise ValueError("promotion owner is no longer active")
             cur = db.execute("UPDATE promotion_records SET state=?,updated_at=? WHERE promotion_id=? AND state=? AND attempt_id=? AND run_id=? AND candidate_id=? AND version=? AND manifest_digest=? AND revision=?", (state, now_iso(), promotion_id, expected, attempt_id, run_id, candidate_id, version, digest, revision)); db.commit()
         if cur.rowcount != 1 and self.promotion_get(promotion_id) and self.promotion_get(promotion_id)["state"] != state: raise ValueError("promotion transition conflict")

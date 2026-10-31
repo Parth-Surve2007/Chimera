@@ -1,6 +1,7 @@
 .chimera/
 .chimera-check/
 .chimera-smoke/
+.chimera-real/
 __pycache__/
 *.py[cod]
 .pytest_cache/

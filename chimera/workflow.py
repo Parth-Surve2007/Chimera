@@ -10,6 +10,45 @@ from .evaluation import evaluate_requirements, report_dict
 from .registry import Registry, IntegrityError
 from .local_model import assess_readiness
 
+class _HeartbeatController:
+    def __init__(self, audit, session_id, run_id, owner_token, fencing_token, revision, interval=30, shutdown_timeout=1.0):
+        self.audit, self.session_id, self.run_id = audit, session_id, run_id
+        self.owner_token, self.fencing_token, self.revision = owner_token, fencing_token, revision
+        self.stop_requested = threading.Event(); self.ownership_lost = threading.Event()
+        self.interval = interval; self.shutdown_timeout = shutdown_timeout; self._renewal_gate = threading.Lock(); self.renewal_in_progress = False
+        self.renewal_error = None; self.thread = None; self.stopped = True; self.state = "not_started"
+    def start(self):
+        if not self.session_id: return
+        self.stopped = False
+        self.state = "running"
+        def beat():
+            while not self.stop_requested.wait(self.interval):
+                try:
+                    with self._renewal_gate:
+                        if self.stop_requested.is_set(): return
+                        self.renewal_in_progress = True; self.state = "renewing"
+                        try:
+                            self.audit.clarification_renew_fenced(self.session_id, self.run_id, self.owner_token, self.fencing_token, self.revision, 120)
+                        finally:
+                            self.renewal_in_progress = False
+                        if self.stop_requested.is_set(): return
+                        self.state = "running"
+                except Exception as exc:
+                    self.renewal_error = exc; self.ownership_lost.set(); self.state = "renewal_failed"; return
+                except BaseException as exc:
+                    self.renewal_error = exc; self.ownership_lost.set(); self.state = "renewal_failed"; return
+        self.thread = threading.Thread(target=beat, daemon=True); self.thread.start()
+    def stop(self):
+        deadline = time.monotonic() + self.shutdown_timeout
+        self.state = "stop_requested"; self.stop_requested.set()
+        acquired = self._renewal_gate.acquire(timeout=max(0, deadline - time.monotonic()))
+        if acquired: self._renewal_gate.release()
+        else: self.state = "shutdown_unconfirmed"
+        if self.thread and self.thread is not threading.current_thread(): self.thread.join(timeout=max(0, deadline - time.monotonic()))
+        self.stopped = not self.thread or not self.thread.is_alive()
+        self.state = "stopped" if self.stopped else "alive_after_timeout"
+        return self.stopped
+
 @dataclass(frozen=True)
 class WorkflowResult:
     state: str
@@ -24,28 +63,40 @@ class WorkflowResult:
 class CapabilityWorkflow:
     def __init__(self, provider, workspace: Path, max_calls: int = 2, registry=None): self.provider, self.workspace, self.max_calls, self.registry = provider, Path(workspace), max(1, max_calls), registry; self.gate = ApprovalGate()
     def run(self, request: str, clarifications: dict[str, str] | None = None, _run_id: str | None = None, _session_id: str | None = None, _owner_token: str | None = None, _fencing_token: int | None = None, _revision: int | None = None) -> WorkflowResult:
+        audit = AuditStore(self.workspace.parent / "chimera.db")
+        controller = _HeartbeatController(audit, _session_id, _run_id or "", _owner_token, _fencing_token, _revision)
+        result = None; primary = None; stopped = False
+        try:
+            result = self._run_impl(request, clarifications, _run_id, _session_id, _owner_token, _fencing_token, _revision, controller)
+        except BaseException as exc:
+            primary = exc
+        finally:
+            try:
+                stopped = controller.stop()
+            except BaseException as cleanup_error:
+                if primary is None: primary = cleanup_error
+                else: primary.add_note(f"heartbeat cleanup failed: {cleanup_error}")
+        if primary is not None: raise primary
+        if not stopped: return WorkflowResult("blocked", "heartbeat shutdown could not be confirmed; heartbeat thread is still alive", run_id=result.run_id if result else _run_id)
+        return result
+
+    def _run_impl(self, request: str, clarifications: dict[str, str] | None = None, _run_id: str | None = None, _session_id: str | None = None, _owner_token: str | None = None, _fencing_token: int | None = None, _revision: int | None = None, controller=None) -> WorkflowResult:
         run_id = _run_id or uuid.uuid4().hex; audit = AuditStore(self.workspace.parent / "chimera.db"); original_request = request; clarifications = clarifications or {}
         if clarifications:
             event_request = json.dumps({"original_request": original_request, "clarifications": clarifications}, separators=(",", ":"))
             request = original_request + "\nClarifications supplied by the user:\n" + "\n".join(f"{key}: {value}" for key, value in clarifications.items())
         else: event_request = original_request
+        controller.run_id = run_id
+        controller.start()
         audit.workflow_start(run_id, event_request)
         def event(stage, outcome, detail="", candidate_id=None, digest=None): audit.workflow_event(run_id, stage, outcome, detail, candidate_id, digest)
         def own():
             if _session_id:
                 if ownership_lost.is_set(): raise ValueError("continuation ownership was lost")
                 audit.assert_ownership(_session_id, run_id, _owner_token, _fencing_token, _revision)
-        heartbeat_stop = threading.Event(); ownership_lost = threading.Event()
-        heartbeat = None
-        if _session_id:
-            def beat():
-                while not heartbeat_stop.wait(30):
-                    try: audit.clarification_renew_fenced(_session_id, run_id, _owner_token, _fencing_token, _revision, 120)
-                    except Exception: ownership_lost.set(); return
-            heartbeat = threading.Thread(target=beat, daemon=True); heartbeat.start()
+        ownership_lost = controller.ownership_lost
         def stop_heartbeat():
-            heartbeat_stop.set()
-            if heartbeat and heartbeat is not threading.current_thread(): heartbeat.join(timeout=1)
+            controller.stop()
         def failure_result(status, message, candidate_id=None):
             """Record failure best-effort without replacing the primary workflow error."""
             try: event("workflow_failure", "failed", message, candidate_id)
@@ -124,7 +175,7 @@ class CapabilityWorkflow:
             if (anchored.get("candidate_id"), anchored.get("manifest"), anchored.get("manifest_digest")) != (proposal.candidate_id, actual_manifest, actual_digest):
                 raise IntegrityError("candidate manifest anchor does not match staged artifact")
             digest = anchored["manifest_digest"]
-            own(); evaluation = evaluate_requirements(task.acceptance_criteria, candidate_id=metadata["candidate_id"], manifest_digest=digest, capability_version=metadata["version"], static_pass=True)
+            own(); evaluation = evaluate_requirements(task.acceptance_criteria, candidate_id=metadata["candidate_id"], manifest_digest=digest, capability_version=metadata["version"], static_pass=True); own()
             event("evidence_evaluation", evaluation.status, json.dumps(report_dict(evaluation), separators=(",", ":")), proposal.candidate_id, digest)
             with audit.promotion_lock():
                 own()
@@ -168,12 +219,13 @@ class CapabilityWorkflow:
             if status is not None: raise ValueError("clarification continuation requires recovery reconciliation")
         elif session["state"] == "recovery_required" and session.get("owner_token") and session.get("lease_expires_at", 0) > time.time():
             continuation = session["current_run_id"]; owner_token = session["owner_token"]; fencing_token = session["fencing_token"]; revision = session["revision"]
+            audit.clarification_recovery_activate(session_id, continuation, owner_token, fencing_token, revision)
         elif session["state"] == "recovery_required":
             raise ValueError("clarification continuation requires an explicit safe recovery claim")
         else: raise ValueError("clarification session is not recoverable")
         try:
             result = self.run(session["original_request"], answers, _run_id=continuation, _session_id=session_id, _owner_token=owner_token, _fencing_token=fencing_token, _revision=revision)
-            if result.state not in ("pending_review",): audit.clarification_finish(session_id, "blocked" if result.state == "blocked" else "failed")
+            if result.state not in ("pending_review",): audit.clarification_finish(session_id, "blocked" if result.state == "blocked" else "failed", continuation, owner_token, fencing_token, revision)
             return result
         except Exception:
             raise

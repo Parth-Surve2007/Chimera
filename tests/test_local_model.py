@@ -32,3 +32,16 @@ def test_readiness_requests_only_missing_proposal_prerequisites():
 def test_configuration_limits_and_no_cloud_fallback():
     with pytest.raises(ValueError): config_from_env({"CHIMERA_MODEL_CONTEXT":"0"})
     assert LocalModelProvider(LocalModelConfig(None, None)).status().state == "missing"
+
+def test_streaming_process_can_be_cancelled_without_waiting_for_exit():
+    import sys, threading, time
+    from chimera.local_model import _run_streaming
+    cancelled = threading.Event()
+    command = [sys.executable, "-c", "import time; print('partial', flush=True); time.sleep(30)"]
+    timer = threading.Timer(0.2, cancelled.set); timer.start()
+    started = time.monotonic()
+    result = _run_streaming(command, 10, cancelled)
+    timer.cancel()
+    assert result.cancelled is True
+    assert time.monotonic() - started < 4
+    assert "partial" in result.stdout
