@@ -43,6 +43,15 @@ def test_provider_failure_is_truthful_and_durable(tmp_path):
     assert store.session(session_id)["state"] == "failed"
     assert store.events(session_id)[-1].event_type == "turn.failed"
 
+def test_deciding_provider_can_answer_without_workspace(tmp_path):
+    provider = DecidingProvider([{"type": "message", "content": "Hello from the configured model."}])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session()
+    result = runtime.send(session_id, "hello")
+    assert result["status"] == "completed"
+    assert store.messages(session_id)[-1].content == "Hello from the configured model."
+
 
 class DecidingProvider(Provider):
     def __init__(self, decisions): self.decisions = iter(decisions)

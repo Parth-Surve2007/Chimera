@@ -17,6 +17,7 @@ from pathlib import Path
 from .tools import WorkspaceTools, tool_catalog
 from .computer_use import WindowsComputerUse
 from .computer_runtime import ComputerSessionManager
+from .model_hub import ModelProfileStore, OpenAICompatibleAdapter
 
 
 def _now() -> str:
@@ -89,6 +90,12 @@ class AgentSessionStore:
                     arguments TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS agent_session_models (
+                    session_id TEXT PRIMARY KEY,
+                    profile_id TEXT,
+                    local_only INTEGER NOT NULL DEFAULT 1,
+                    FOREIGN KEY(session_id) REFERENCES agent_sessions(session_id)
+                );
                 """
             )
 
@@ -154,6 +161,15 @@ class AgentSessionStore:
     def clear_pending_tool(self, session_id):
         with sqlite3.connect(self.db_path) as db: db.execute("DELETE FROM agent_pending_tools WHERE session_id=?", (session_id,))
 
+    def set_session_model(self, session_id: str, profile_id: str | None, local_only: bool = True):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT OR REPLACE INTO agent_session_models VALUES (?,?,?)", (session_id, profile_id, int(local_only)))
+
+    def session_model(self, session_id: str) -> dict:
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute("SELECT profile_id,local_only FROM agent_session_models WHERE session_id=?", (session_id,)).fetchone()
+        return {"profile_id": row[0], "local_only": bool(row[1])} if row else {"profile_id": None, "local_only": True}
+
     @staticmethod
     def _event(db, session_id: str, event_type: str, payload: dict) -> None:
         next_sequence = db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM agent_events WHERE session_id=?", (session_id,)).fetchone()[0]
@@ -163,8 +179,10 @@ class AgentSessionStore:
 class AgentRuntime:
     """Conversation orchestration boundary; provider failures remain truthful."""
 
-    def __init__(self, store: AgentSessionStore, provider):
+    def __init__(self, store: AgentSessionStore, provider, profile_store: ModelProfileStore | None = None):
         self.store, self.provider = store, provider
+        self.profile_store = profile_store
+        self._active_providers = {}
         self._listeners = {}
         self._listener_lock = threading.Lock()
         self._cancelled = set()
@@ -201,8 +219,34 @@ class AgentRuntime:
         model = str(getattr(getattr(self.provider, "config", None), "model_path", "")) or None
         return self.store.create_session(workspace, model, mode)
 
-    def _protocol_catalog(self):
+    def set_session_model(self, session_id: str, profile_id: str | None, local_only: bool = True):
+        if self.profile_store and profile_id:
+            profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id and p.enabled), None)
+            if profile is None or (local_only and profile.hosted): raise ValueError("model is unavailable under the current routing policy")
+        self.store.set_session_model(session_id, profile_id, local_only)
+
+    def _provider_for(self, session_id: str):
+        selection = self.store.session_model(session_id)
+        profile_id = selection["profile_id"]
+        if not profile_id or not self.profile_store: return self.provider
+        profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id and p.enabled), None)
+        if profile is None or (selection["local_only"] and profile.hosted): raise RuntimeError("selected model profile is unavailable or violates local-only policy")
+        if profile.hosted:
+            credentials = getattr(self.provider, "credentials", None)
+            return OpenAICompatibleAdapter(profile, credentials)
+        config = getattr(self.provider, "config", None)
+        if not config: raise RuntimeError("local provider configuration is unavailable")
+        from .local_model import LocalModelConfig, LocalModelProvider
+        return LocalModelProvider(LocalModelConfig(Path(profile.model_path), config.cli_path, config.context, config.max_tokens, config.timeout, config.threads, config.gpu_layers, config.server_path))
+
+    def _protocol_catalog(self, session=None):
         aliases = {("workspace." + name if "." not in name else name): name for name in tool_catalog()["operations"]}
+        session_workspace = None
+        # The catalog is intentionally capability-based: workspace operations
+        # are not offered when there is no validated workspace context.
+        session_workspace = session.get("workspace") if session else None
+        if not session_workspace or not Path(session_workspace).is_dir():
+            aliases = {key: value for key, value in aliases.items() if not key.startswith("workspace.")}
         context = []
         try:
             for app in self.computer.backend.list_applications()[:20]: context.append({"pid": app["pid"], "executable": app.get("executable"), "windows": app.get("windows", [])[:6]})
@@ -259,11 +303,12 @@ class AgentRuntime:
             if name in arguments and (type(arguments[name]) is not kind): raise ValueError(f"argument {name} must be {kind.__name__}")
 
     def _decide(self, messages, session, cancel_event=None, turn_id=None):
-        if not hasattr(self.provider, "decide"):
+        provider = self._active_providers.get(session["session_id"], self.provider)
+        if not hasattr(provider, "decide"):
             return None
         kwargs = {"session": session, "cancel_event": cancel_event}
-        accepted = inspect.signature(self.provider.decide).parameters
-        return self._decision(self.provider.decide(messages, self._protocol_catalog(), **{key: value for key, value in kwargs.items() if key in accepted}))
+        accepted = inspect.signature(provider.decide).parameters
+        return self._decision(provider.decide(messages, self._protocol_catalog(session), **{key: value for key, value in kwargs.items() if key in accepted}))
 
     def send(self, session_id: str, content: str) -> dict:
         session = self.store.session(session_id)
@@ -274,11 +319,19 @@ class AgentRuntime:
         with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
         self._record(session_id, "turn.started", {"message_id": message.message_id})
         try:
-            if hasattr(self.provider, "decide"):
+            self._active_providers[session_id] = self._provider_for(session_id)
+            provider = self._active_providers[session_id]
+            if self.store.session_model(session_id)["profile_id"]:
+                self._record(session_id, "model.selected", {"profile_id": self.store.session_model(session_id)["profile_id"], "provider": type(provider).__name__})
+            if hasattr(provider, "decide"):
                 return self._agent_loop(session_id, session, message, cancel_event=cancel_event)
             kwargs = {"session": session, "cancel_event": cancel_event, "on_delta": lambda text: self._record(session_id, "assistant.text.delta", {"text": text})}
-            accepted = inspect.signature(self.provider.converse).parameters
-            response = self.provider.converse(self.store.messages(session_id), **{key: value for key, value in kwargs.items() if key in accepted})
+            if hasattr(provider, "converse"):
+                accepted = inspect.signature(provider.converse).parameters
+                response = provider.converse(self.store.messages(session_id), **{key: value for key, value in kwargs.items() if key in accepted})
+            else:
+                result = provider.generate([{"role": m.role, "content": m.content} for m in self.store.messages(session_id)], cancel_event=cancel_event, on_delta=kwargs.get("on_delta"))
+                response = type("ProviderResponse", (), {"text": result["text"], "metrics": result})()
             answer = response.text if hasattr(response, "text") else str(response)
             assistant = self.store.add_message(session_id, "assistant", answer)
             with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
@@ -295,13 +348,14 @@ class AgentRuntime:
             return {"status": "failed", "error": str(exc)}
         finally:
             self._cancel_events.pop(session_id, None)
+            self._active_providers.pop(session_id, None)
 
     def _agent_loop(self, session_id, session, message, approved_invocation=None, max_turns=8, max_tools=12, cancel_event=None):
         turn_id = uuid.uuid4().hex
         workspace = Path(session["workspace"]) if session.get("workspace") else None
-        if workspace is None or not workspace.is_dir(): raise ValueError("a selected workspace is required for tool use")
-        output = workspace / ".chimera-agent-artifacts" / session_id
-        tools = WorkspaceTools(workspace, output)
+        tools = None
+        if workspace is not None and workspace.is_dir():
+            tools = WorkspaceTools(workspace, workspace / ".chimera-agent-artifacts" / session_id)
         for _ in range(max_turns):
             if session_id in self._cancelled:
                 self._cancelled.discard(session_id)
@@ -320,6 +374,16 @@ class AgentRuntime:
             self._validate_arguments(operation, decision["arguments"])
             invocation = decision.get("invocation_id") or uuid.uuid4().hex
             self._record(session_id, "tool.call.requested", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"]})
+            if tool_id.startswith("workspace."):
+                current = self.store.session(session_id)
+                current_workspace = Path(current["workspace"]) if current and current.get("workspace") else None
+                if current_workspace is None or not current_workspace.is_dir():
+                    result_data = {"status": "workspace_required", "reason": "select an existing project workspace before using workspace tools"}
+                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data}, separators=(",", ":")))
+                    self._record(session_id, "tool.completed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "workspace_required", "data": result_data})
+                    continue
+                workspace = current_workspace
+                tools = WorkspaceTools(workspace, workspace / ".chimera-agent-artifacts" / session_id)
             permission = tool_catalog()["operations"][operation]["permission"]
             if permission not in {"workspace.read", "computer.observe"}:
                 self.store.set_pending_tool(session_id, turn_id, invocation, tool_id, decision["arguments"])

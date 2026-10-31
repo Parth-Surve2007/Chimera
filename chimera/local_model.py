@@ -4,6 +4,7 @@ import json, os, subprocess, time, shutil, threading, queue
 from pathlib import Path
 from typing import Callable, Any
 from .contracts import TaskSpec, CapabilityProposal, ProposedFile, ClarificationQuestion, ReadinessAssessment
+from .server_provider import LlamaServerManager, ServerUnavailable, load_policy, save_policy
 
 def _hidden_process_kwargs() -> dict:
     if os.name != "nt": return {}
@@ -66,6 +67,7 @@ class LocalModelConfig:
     timeout: float = 60
     threads: int = 4
     gpu_layers: int = 0
+    server_path: str | None = None
 
 @dataclass(frozen=True)
 class ModelStatus:
@@ -133,7 +135,11 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
     try: gpu_layers = int(env.get("CHIMERA_MODEL_GPU_LAYERS", "0"))
     except ValueError: raise ValueError("CHIMERA_MODEL_GPU_LAYERS must be an integer")
     if gpu_layers < 0: raise ValueError("CHIMERA_MODEL_GPU_LAYERS cannot be negative")
-    return LocalModelConfig(Path(model_value).expanduser().resolve() if model_value else None, str(Path(cli_value).expanduser().resolve()) if cli_value else None, positive("CHIMERA_MODEL_CONTEXT", 2048), positive("CHIMERA_MODEL_MAX_TOKENS", 256), float(env.get("CHIMERA_MODEL_TIMEOUT", "60")), positive("CHIMERA_MODEL_THREADS", 4), gpu_layers)
+    server_value = env.get("CHIMERA_LLAMA_SERVER")
+    if not server_value and os.environ.get("LOCALAPPDATA"):
+        matches = list(Path(os.environ["LOCALAPPDATA"]).glob(r"Microsoft\WinGet\Packages\*llamacpp*\**\llama-server.exe"))
+        if matches: server_value = str(matches[0])
+    return LocalModelConfig(Path(model_value).expanduser().resolve() if model_value else None, str(Path(cli_value).expanduser().resolve()) if cli_value else None, positive("CHIMERA_MODEL_CONTEXT", 2048), positive("CHIMERA_MODEL_MAX_TOKENS", 256), float(env.get("CHIMERA_MODEL_TIMEOUT", "60")), positive("CHIMERA_MODEL_THREADS", 4), gpu_layers, server_value)
 
 def check_status(config: LocalModelConfig) -> ModelStatus:
     if not config.model_path: return ModelStatus("missing", "CHIMERA_MODEL_PATH is not configured")
@@ -229,8 +235,18 @@ number ::= "-"? ([0-9] | [1-9] [0-9]+) ("." [0-9]+)?
 ws ::= [ \t\n\r]*'''
 
 class LocalModelProvider:
-    def __init__(self, config: LocalModelConfig, runner: Callable[..., Any] | None = None): self.config, self.runner, self.last_inference_metrics = config, runner, {}
-    def status(self): return check_status(self.config)
+    def __init__(self, config: LocalModelConfig, runner: Callable[..., Any] | None = None):
+        self.config, self.runner, self.last_inference_metrics = config, runner, {}
+        policy = load_policy()
+        self.server = None if runner else LlamaServerManager(config.server_path, config.model_path, config.context, config.threads, config.gpu_layers, policy["request_timeout"], idle_timeout=policy["idle_timeout"] if policy["mode"] == "idle_shutdown" else 0)
+    def stop(self):
+        if self.server: self.server.stop()
+    def status(self):
+        base = check_status(self.config)
+        if base.state != "ready" or self.runner or not self.server: return base
+        info = self.server.status()
+        return ModelStatus(info["state"] if info["state"] != "stopped" else "ready", f"local model configured; server {info['state']}", base.model_path, self.config.server_path or base.cli_path)
+
     def converse(self, messages, session=None, cancel_event=None, on_delta=None) -> ConversationResult:
         """Generate ordinary conversational text; this path does not invent tool calls."""
         status = self.status()
@@ -241,6 +257,21 @@ class LocalModelProvider:
         started = time.perf_counter()
         if self.runner:
             output = self.runner(prompt, self.config)
+        elif self.server:
+            try:
+                output, metrics = self.server.complete(prompt, self.config.max_tokens, cancel_event=cancel_event, on_delta=on_delta)
+                metrics.update({"reasoning_source": "local_llama_server", "model": str(self.config.model_path)})
+                self.last_inference_metrics = metrics
+                return ConversationResult(output, metrics)
+            except ServerUnavailable as exc:
+                self.last_inference_metrics = {"provider": "llama-cli-fallback", "server_error": str(exc)}
+                self.server.stop()
+                self.server = None
+                command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt", "-p", prompt]
+                process = _run_streaming(command, self.config.timeout, cancel_event)
+                if process.cancelled: raise InterruptedError("local inference cancelled")
+                if process.returncode: raise RuntimeError(f"local inference exited with code {process.returncode}")
+                output = process.stdout
         else:
             command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt", "-p", prompt]
             raw_stream = []; emitted = ""
@@ -327,6 +358,25 @@ def structured_with_metrics(self, prompt: str, json_schema: dict | None = None, 
     try:
         if self.runner:
             output = str(self.runner(prompt, self.config)); stderr = ""
+        elif self.server and json_schema is None:
+            try:
+                output, metrics = self.server.complete(prompt, self.config.max_tokens, grammar=grammar, cancel_event=cancel_event, on_delta=on_delta)
+                metrics.update({"prompt_tokens_estimate": len(prompt.split()), "generated_tokens_estimate": len(output.split()), "reasoning_source": "local_llama_server"})
+                self.last_inference_metrics = metrics
+                parsed, completion = _json_completion(output)
+                metrics["raw_completion"] = completion
+                return parsed, metrics
+            except ServerUnavailable as exc:
+                self.last_inference_metrics = {"provider": "llama-cli-fallback", "server_error": str(exc)}
+                self.server.stop()
+                self.server = None
+                command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt"]
+                if grammar is not None: command.extend(["--grammar", grammar])
+                command.extend(["-p", prompt])
+                process = _run_streaming(command, self.config.timeout, cancel_event)
+                if process.cancelled: raise InterruptedError("local inference cancelled")
+                if process.returncode: raise RuntimeError(f"local inference exited with code {process.returncode}")
+                output = process.stdout; stderr = process.stderr or ""
         else:
             command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt"]
             if json_schema is not None:

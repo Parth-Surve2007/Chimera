@@ -5,6 +5,8 @@ from .review import ReviewService
 from .workflow import CapabilityWorkflow
 from .behavior import VirtualBoxBackend
 from .langflow_studio import LangflowService, LangflowStatus
+from .server_provider import load_policy, save_policy
+from .model_hub import ModelProfileStore, CredentialStore, OpenAICompatibleAdapter, ModelProfile
 from .audit import AuditStore
 from .local_model import config_from_env, check_status, save_persisted_config, LocalModelProvider, load_persisted_config, config_data_dir, config_source
 from .agent_loop import execute_objective
@@ -86,10 +88,12 @@ class MainWindow:
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
         self.task_busy = False; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""; self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Ask Chimera anything. Describe what you want accomplished...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
         self.agent_store = AgentSessionStore(registry.data_dir / "chimera.db")
-        self.agent_runtime = AgentRuntime(self.agent_store, LocalModelProvider(config_from_env()))
+        self.profile_store = ModelProfileStore(registry.data_dir / "model_profiles.json")
+        self.local_provider = LocalModelProvider(config_from_env())
+        self.agent_runtime = AgentRuntime(self.agent_store, self.local_provider, self.profile_store)
         self.agent_session_id = self.agent_runtime.create_session(self.workspace_path)
         self.conversation_messages = []
-        self.pending_agent_approval = None
+        self.pending_agent_approval = None; self.live_events = []
         self.live_event_count = 0
         self.agent_unsubscribe = self.agent_runtime.subscribe(self.agent_session_id, self._on_agent_event)
         try:
@@ -120,7 +124,7 @@ class MainWindow:
         buttons.append(ft.TextButton("NEW CONVERSATION", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=FOCUS, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         for item in self.agent_store.list_sessions()[:8]:
             buttons.append(ft.TextButton(f"↳ {item['title'][:24]}", on_click=lambda e, sid=item["session_id"]: self._resume_agent_session(sid), style=ft.ButtonStyle(color=SECONDARY, padding=ft.Padding.symmetric(horizontal=18, vertical=8))))
-        for label, handler in [("OVERVIEW", self._show_overview), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
+        for label, handler in [("OVERVIEW", self._show_overview), ("MODEL HUB", self._show_model_hub), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
             buttons.append(ft.TextButton(label, on_click=lambda e, h=handler: self._navigate(h), style=ft.ButtonStyle(color=TEXT, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         return ft.Container(ft.Column([ft.Text("NAVIGATION", color=MUTED, size=10), *buttons], spacing=3), width=210, right=18, top=10, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), padding=ft.Padding.all(14), visible=False, shadow=ft.BoxShadow(blur_radius=18, color="#000000"))
     def _toggle_drawer(self, e=None): self.drawer.visible = not self.drawer.visible; self.page.update()
@@ -150,6 +154,49 @@ class MainWindow:
             action = ft.TextButton("INSTALL LANGFLOW", on_click=lambda _: self._action(lambda: service.install(), True), style=ft.ButtonStyle(color=FOCUS))
             detail = f"LANGFLOW NOT INSTALLED\n{status.reason}\nInstallation is explicit, isolated and optional."
         self._set([ft.Text("WORKFLOW STUDIO", size=18, color=TEXT), ft.Text(detail, color=SECONDARY), action, ft.Text("Imported workflows are untrusted until Chimera validates their components, permissions and execution bounds.", color=MUTED, size=11)])
+    def _show_model_hub(self, e=None):
+        profiles = ModelProfileStore(self.registry.data_dir / "model_profiles.json").list()
+        self.hub_id = ft.TextField(label="PROFILE ID", color=TEXT, border_color=BORDER)
+        self.hub_provider = ft.TextField(label="PROVIDER ID", color=TEXT, border_color=BORDER)
+        self.hub_model = ft.TextField(label="MODEL ID OR GGUF PATH", color=TEXT, border_color=BORDER)
+        self.hub_url = ft.TextField(label="API BASE URL (OPTIONAL)", color=TEXT, border_color=BORDER)
+        self.hub_secret = ft.TextField(label="API CREDENTIAL (NOT STORED IN PROFILE)", color=TEXT, border_color=BORDER, password=True, can_reveal_password=False)
+        cards = [ft.Container(ft.Column([ft.Text(f"{p.display_name or p.model_id}  ·  {p.provider_id}  ·  {'API' if p.hosted else 'LOCAL'}", color=TEXT), ft.Text(f"CAPABILITIES: {', '.join(p.modalities)}  TOOLS: {p.tool_calling}  STRUCTURED: {p.structured_output}  STATE: {'ENABLED' if p.enabled else 'DISABLED'}  EVIDENCE: {p.capability_evidence}", color=SECONDARY, size=11), ft.Row([ft.TextButton("USE", on_click=lambda e, pid=p.profile_id: self._select_session_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("DEFAULT", on_click=lambda e, pid=p.profile_id: self._set_default_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("TOGGLE", on_click=lambda e, pid=p.profile_id: self._toggle_model(pid), style=ft.ButtonStyle(color=SECONDARY)), ft.TextButton("REMOVE", on_click=lambda e, pid=p.profile_id: self._remove_model(pid), style=ft.ButtonStyle(color=SECONDARY))])]), padding=ft.Padding.all(12), border=ft.Border.all(1, BORDER)) for p in profiles]
+        form = ft.Container(ft.Column([ft.Text("ADD OR EDIT PROFILE", color=MUTED, size=10), self.hub_id, self.hub_provider, self.hub_model, self.hub_url, self.hub_secret, ft.Row([self._button("SAVE LOCAL", lambda e: self._save_model_profile(False)), self._button("SAVE API", lambda e: self._save_model_profile(True)), ft.TextButton("TEST SELECTED API", on_click=self._test_model_profile, style=ft.ButtonStyle(color=FOCUS))])], spacing=8), bgcolor=SURFACE, padding=ft.Padding.all(14), border=ft.Border.all(1, BORDER))
+        self._set([ft.Text("MODEL INTELLIGENCE HUB", size=18, color=TEXT), ft.Text("Hosted providers are never contacted during profile browsing or saving. Credentials are stored separately in Windows Credential Manager.", color=MUTED, size=11), form, *(cards or [ft.Text("No model profiles configured yet.", color=SECONDARY)])])
+    def _select_session_model(self, profile_id):
+        try: self.agent_runtime.set_session_model(self.agent_session_id, profile_id, local_only=True); self._toast("Model pinned for future turns in this session."); self._show_model_hub()
+        except Exception as exc: self._toast(f"Model selection failed: {exc}")
+    def _save_model_profile(self, hosted):
+        try:
+            from .model_hub import ModelProfile
+            profile = ModelProfile(self.hub_id.value.strip(), self.hub_provider.value.strip(), self.hub_model.value.strip(), hosted, model_path=None if hosted else self.hub_model.value.strip(), base_url=self.hub_url.value.strip() or None, tool_calling=False, structured_output=False, capability_evidence="configured")
+            if not profile.profile_id or not profile.provider_id or not profile.model_id: raise ValueError("profile ID, provider and model are required")
+            self.profile_store.save(profile)
+            if hosted and self.hub_secret.value: CredentialStore().set(profile.provider_id, self.hub_secret.value)
+            self.hub_secret.value = ""; self._toast("Model profile saved; provider testing remains explicit."); self._show_model_hub()
+        except Exception as exc: self._toast(f"Profile save failed: {exc}")
+    def _toggle_model(self, profile_id):
+        try:
+            profile = next(p for p in self.profile_store.list() if p.profile_id == profile_id); self.profile_store.set_enabled(profile_id, not profile.enabled); self._show_model_hub()
+        except Exception as exc: self._toast(f"Profile update failed: {exc}")
+    def _set_default_model(self, profile_id):
+        try: self.profile_store.set_default(profile_id); self._toast("Default model updated."); self._show_model_hub()
+        except Exception as exc: self._toast(f"Default model update failed: {exc}")
+    def _remove_model(self, profile_id):
+        def confirm(_=None):
+            try:
+                self.profile_store.remove(profile_id); dialog.open = False; self.page.update(); self._toast("Model profile removed."); self._show_model_hub()
+            except Exception as exc: self._toast(f"Profile removal failed: {exc}")
+        dialog = ft.AlertDialog(modal=True, title=ft.Text("REMOVE MODEL PROFILE?"), content=ft.Text(f"This removes profile {profile_id} from Model Hub. Stored credentials are not automatically deleted."), actions=[ft.TextButton("CANCEL", on_click=lambda e: (setattr(dialog, "open", False), self.page.update())), ft.TextButton("REMOVE", on_click=confirm)])
+        self.page.show_dialog(dialog)
+    async def _test_model_profile(self, e=None):
+        try:
+            profile = next((p for p in self.profile_store.list() if p.profile_id == (self.hub_id.value or "").strip()), None)
+            if not profile or not profile.hosted: raise ValueError("select or enter a hosted API profile first")
+            result = await asyncio.to_thread(OpenAICompatibleAdapter(profile).generate, [{"role": "user", "content": "Reply with the word test."}], 20)
+            self._toast(f"Provider ready: {result.get('provider')} / {result.get('model')} ({result.get('duration_ms')} ms)")
+        except Exception as exc: self._toast(f"Provider test failed: {exc}")
     def _candidate_list(self):
         try: candidates = self.review.list()
         except Exception as exc: return ft.Text(str(exc), color=TEXT)
@@ -162,7 +209,13 @@ class MainWindow:
         except Exception as exc: self._toast(f"Action failed: {exc}")
     def _show_runs(self, e=None): self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
     def _show_settings(self, e=None):
-        c = config_from_env(); s = check_status(c); source = config_source(); self._set([ft.Text("SETTINGS", size=18, color=TEXT), ft.Text(f"LOCAL RUNTIME: {_upper(s.state)}\nMODEL: {c.model_path or 'NOT CONFIGURED'} ({source['model']})\nEXECUTABLE: {c.cli_path or 'NOT CONFIGURED'} ({source['runtime']})\nCONTEXT: {c.context}  TOKENS: {c.max_tokens}  THREADS: {c.threads}  GPU LAYERS: {c.gpu_layers}\n\nDATA: {self.registry.data_dir}\nEnvironment variables override persisted model_config.json.", color=SECONDARY), ft.Row([self.model_path_field, ft.TextButton("SELECT GGUF", on_click=lambda e: self.model_picker.pick_files(allowed_extensions=["gguf"]))]), ft.Row([self.runtime_path_field, ft.TextButton("SELECT RUNTIME", on_click=lambda e: self.runtime_picker.pick_files())]), ft.Row([self._button("SAVE + VALIDATE", self._save_model_config), ft.TextButton("TEST LOCAL INFERENCE", on_click=self._test_local_inference, style=ft.ButtonStyle(color=TEXT))]), ft.Text("Select existing local files only. Models are never downloaded or bundled.", color=MUTED, size=11)])
+        c = config_from_env(); s = check_status(c); source = config_source(); policy = load_policy(self.registry.data_dir); server = self.local_provider.server.status() if self.local_provider.server else {"state": "unavailable"}
+        self._set([ft.Text("SETTINGS", size=18, color=TEXT), ft.Text(f"LOCAL RUNTIME: {_upper(s.state)}\nSERVER: {_upper(server['state'])}\nMODEL: {c.model_path or 'NOT CONFIGURED'} ({source['model']})\nSERVER EXECUTABLE: {c.server_path or 'NOT AVAILABLE'}\nSERVER PID: {server.get('pid') or 'none'}  PORT: {server.get('url') or 'none'}\nCONTEXT: {c.context}  TOKENS: {c.max_tokens}  THREADS: {c.threads}  GPU LAYERS: {c.gpu_layers}\nPOLICY: {policy['mode']}  IDLE TIMEOUT: {policy['idle_timeout']}s\n\nDATA: {self.registry.data_dir}\nEnvironment variables override persisted model_config.json.", color=SECONDARY), ft.Row([self.model_path_field, ft.TextButton("SELECT GGUF", on_click=lambda e: self.model_picker.pick_files(allowed_extensions=["gguf"]))]), ft.Row([self.runtime_path_field, ft.TextButton("SELECT CLI RUNTIME", on_click=lambda e: self.runtime_picker.pick_files())]), ft.Row([self._button("SAVE + VALIDATE", self._save_model_config), ft.TextButton("START SERVER", on_click=self._start_local_server, style=ft.ButtonStyle(color=TEXT)), ft.TextButton("STOP SERVER", on_click=self._stop_local_server, style=ft.ButtonStyle(color=TEXT))]), ft.Text("Managed server is loopback-only and starts lazily. Models are never downloaded or bundled.", color=MUTED, size=11)])
+    def _start_local_server(self, e=None):
+        try: self.local_provider.server.start(); self._toast("Local model server is ready."); self._show_settings()
+        except Exception as exc: self._toast(f"Server start failed: {exc}")
+    def _stop_local_server(self, e=None):
+        self.local_provider.stop(); self._toast("Local model server stopped."); self._show_settings()
     def _model_picked(self, e):
         if e.files: self.model_path_field.value = e.files[0].path; self.page.update()
     def _runtime_picked(self, e):
@@ -198,7 +251,9 @@ class MainWindow:
         self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text("Persisted workflow events. This view never fabricates activity.", color=MUTED, size=11), *cards])
     # Refined operational overview; this definition intentionally replaces the legacy landing layout.
     def _show_overview(self, e=None):
-        ready = "READY" in self._runtime_state()
+        # Conversation remains available even when the configured provider is unavailable;
+        # send() will persist and report the real provider error.
+        ready = True
         request = getattr(self, "task_field", None)
         if request is None:
             self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="What would you like Chimera to accomplish?", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
@@ -213,7 +268,7 @@ class MainWindow:
         if self.pending_agent_approval:
             approval = [ft.Container(ft.Column([ft.Text("APPROVAL REQUIRED", color=FOCUS, size=10), ft.Text(f"{self.pending_agent_approval.get('tool')}\n{json.dumps(self.pending_agent_approval.get('arguments', {}), indent=2)}", color=TEXT, size=11), ft.Row([self._button("APPROVE THIS OPERATION", lambda e: self._approve_agent_tool(True)), ft.TextButton("REJECT", on_click=lambda e: self._approve_agent_tool(False), style=ft.ButtonStyle(color=SECONDARY))])], spacing=8), bgcolor=ELEVATED, border=ft.Border.all(1, FOCUS), border_radius=6, padding=ft.Padding.all(14))]
         composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
-        clarification = [ft.Row([ft.Text(f"WORKSPACE: {self.workspace_path or 'NOT SELECTED'}", color=MUTED, size=10), ft.TextButton("SELECT DIRECTORY", on_click=lambda e: self.workspace_picker.get_directory_path(), style=ft.ButtonStyle(color=FOCUS)), self._button("EXECUTE WORKSPACE READ", self._execute_workspace), self._button("APPROVE + EXECUTE WRITE", lambda e: self._execute_workspace(e, True)) if getattr(self, "pending_execution_plan", None) else ft.Container()], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)] if ready else []
+        clarification = [ft.Row([ft.Text(f"PROJECT: {self.workspace_path or 'NOT SELECTED'}", color=MUTED, size=10), ft.TextButton("SELECT DIRECTORY", on_click=lambda e: self.workspace_picker.get_directory_path(), style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)]
         if self.pending_questions:
             if self.pending_state == "pending":
                 content = [ft.Text("CLARIFICATION REQUIRED", color=FOCUS, size=10), *[ft.Text(f"{q.question_id}: {q.question}\nWhy: {q.reason}", color=SECONDARY, size=11) for q in self.pending_questions], self.clarification_field, self._button("SUBMIT CLARIFICATIONS", self._submit_task)]
@@ -236,6 +291,7 @@ class MainWindow:
             self.task_busy = False; self._show_overview()
     def _on_agent_event(self, event):
         self.live_event_count = event.sequence
+        self.live_events.append((event.event_type, event.payload))
     async def _watch_agent(self):
         while self.task_busy:
             await asyncio.sleep(0.25)
