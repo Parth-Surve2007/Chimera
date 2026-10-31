@@ -1,7 +1,20 @@
 import json
+import pytest
 def test_flet_ui_uses_warm_design_tokens_and_persistent_service():
     from chimera import ui
     assert ui.BG == "#070808" and ui.ACCENT == "#8AAE9C" and not any("blue" in value.lower() for value in (ui.BG, ui.SURFACE, ui.ACCENT))
+
+def test_workspace_path_validation_accepts_real_directory_and_rejects_invalid(tmp_path):
+    from chimera.ui import validate_workspace_path
+    spaced = tmp_path / "Unicode workspace Ω"
+    spaced.mkdir()
+    assert validate_workspace_path(str(spaced)) == spaced.resolve()
+    with pytest.raises(ValueError, match="does not exist"):
+        validate_workspace_path(str(tmp_path / "missing"))
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a directory"):
+        validate_workspace_path(file_path)
 
 def test_evaluation_rows_preserve_all_four_states_and_provenance():
     from chimera.ui import evaluation_rows

@@ -18,6 +18,7 @@ from .tools import WorkspaceTools, tool_catalog
 from .computer_use import WindowsComputerUse
 from .computer_runtime import ComputerSessionManager
 from .model_hub import ModelProfileStore, OpenAICompatibleAdapter
+from .task_execution import TaskStore, TaskPolicy
 
 
 def _now() -> str:
@@ -165,6 +166,14 @@ class AgentSessionStore:
         with sqlite3.connect(self.db_path) as db:
             db.execute("INSERT OR REPLACE INTO agent_session_models VALUES (?,?,?)", (session_id, profile_id, int(local_only)))
 
+    def set_mode(self, session_id: str, mode: str) -> None:
+        if mode not in {"plan", "build"}:
+            raise ValueError("mode must be plan or build")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("UPDATE agent_sessions SET mode=?,updated_at=? WHERE session_id=? AND state NOT IN ('reasoning','awaiting_approval')", (mode, _now(), session_id))
+            if db.total_changes != 1:
+                raise ValueError("session is missing or busy")
+
     def session_model(self, session_id: str) -> dict:
         with sqlite3.connect(self.db_path) as db:
             row = db.execute("SELECT profile_id,local_only FROM agent_session_models WHERE session_id=?", (session_id,)).fetchone()
@@ -183,6 +192,8 @@ class AgentRuntime:
         self.store, self.provider = store, provider
         self.profile_store = profile_store
         self._active_providers = {}
+        self.task_store = TaskStore(store.db_path)
+        self._tasks = {}
         self._listeners = {}
         self._listener_lock = threading.Lock()
         self._cancelled = set()
@@ -210,6 +221,8 @@ class AgentRuntime:
         with sqlite3.connect(self.store.db_path) as db:
             AgentSessionStore._event(db, session_id, event_type, payload)
         event = self.store.events(session_id)[-1]
+        task_id = self._tasks.get(session_id)
+        if task_id: self.task_store.apply_runtime_event(task_id, event.event_id, event_type, payload)
         with self._listener_lock: listeners = tuple(self._listeners.get(session_id, ()))
         for callback in listeners:
             try: callback(event)
@@ -319,6 +332,8 @@ class AgentRuntime:
         with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
         self._record(session_id, "turn.started", {"message_id": message.message_id})
         try:
+            task_id = self.task_store.create(session_id, content, mode=session.get("mode", "plan"), provider=None, model=session.get("model")); self._tasks[session_id] = task_id
+            self.task_store.transition(task_id, "running")
             self._active_providers[session_id] = self._provider_for(session_id)
             provider = self._active_providers[session_id]
             if self.store.session_model(session_id)["profile_id"]:
@@ -349,6 +364,11 @@ class AgentRuntime:
         finally:
             self._cancel_events.pop(session_id, None)
             self._active_providers.pop(session_id, None)
+            task_id = self._tasks.pop(session_id, None)
+            if task_id:
+                state = self.store.session(session_id).get("state") if self.store.session(session_id) else "failed"
+                mapped = {"idle": "completed", "cancelled": "cancelled", "awaiting_approval": "waiting_approval", "failed": "failed", "reasoning": "running"}.get(state, "failed")
+                self.task_store.transition(task_id, mapped)
 
     def _agent_loop(self, session_id, session, message, approved_invocation=None, max_turns=8, max_tools=12, cancel_event=None):
         turn_id = uuid.uuid4().hex
@@ -385,6 +405,13 @@ class AgentRuntime:
                 workspace = current_workspace
                 tools = WorkspaceTools(workspace, workspace / ".chimera-agent-artifacts" / session_id)
             permission = tool_catalog()["operations"][operation]["permission"]
+            try:
+                TaskPolicy.validate(session.get("mode", "plan"), tool_id, permission)
+            except PermissionError as exc:
+                result_data = {"status": "blocked", "reason": str(exc), "tool": tool_id}
+                self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data, "status": "blocked", "error": str(exc)}, separators=(",", ":")))
+                self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": str(exc)})
+                continue
             if permission not in {"workspace.read", "computer.observe"}:
                 self.store.set_pending_tool(session_id, turn_id, invocation, tool_id, decision["arguments"])
                 with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='awaiting_approval',updated_at=? WHERE session_id=?", (_now(), session_id))
@@ -433,11 +460,17 @@ class AgentRuntime:
         if not pending: raise ValueError("no pending tool approval")
         session = self.store.session(session_id)
         if not session or session["state"] != "awaiting_approval": raise ValueError("session is not awaiting approval")
+        task = self.task_store.latest_for_session(session_id)
+        if task:
+            self._tasks[session_id] = task.task_id
         if not approve:
             self.store.clear_pending_tool(session_id)
             self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "status": "denied", "error": "user denied approval"}))
             with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
             self._record(session_id, "tool.permission.denied", {"invocation_id": pending["invocation_id"]})
+            if task:
+                self.task_store.transition(task.task_id, "blocked")
+                self._tasks.pop(session_id, None)
             return {"status": "denied"}
         workspace = Path(session["workspace"])
         if pending["tool"].startswith("computer.") and pending["tool"] in {"computer.invoke_element", "computer.set_value", "computer.toggle_element", "computer.select_element", "computer.expand_element", "computer.collapse_element"}:
@@ -457,4 +490,12 @@ class AgentRuntime:
         self._record(session_id, "tool.completed" if result.status == "completed" else "tool.failed", {"invocation_id": pending["invocation_id"], "status": result.status, "data": result.data, "error": result.error})
         self.store.add_message(session_id, "system", "The approved tool operation completed. Decide the next step using its actual result.")
         session = self.store.session(session_id)
-        return self._agent_loop(session_id, session, self.store.messages(session_id)[-1], max_turns=8, max_tools=11)
+        try:
+            result = self._agent_loop(session_id, session, self.store.messages(session_id)[-1], max_turns=8, max_tools=11)
+            if task:
+                current = self.store.session(session_id)
+                mapped = {"idle": "completed", "cancelled": "cancelled", "awaiting_approval": "waiting_approval", "failed": "failed"}.get(current.get("state"), "failed")
+                self.task_store.transition(task.task_id, mapped)
+            return result
+        finally:
+            self._tasks.pop(session_id, None)

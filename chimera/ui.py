@@ -1,5 +1,5 @@
 """Monochrome Flet command console for Chimera."""
-import sys, asyncio, json
+import sys, asyncio, json, os
 from pathlib import Path
 from .review import ReviewService
 from .workflow import CapabilityWorkflow
@@ -24,6 +24,18 @@ STATE_COLORS = {"pass": "#8AAE9C", "fail": "#D9897A", "unknown": "#C7A66A", "blo
 def _upper(value, default="UNKNOWN"):
     """Format optional persisted/status values without allowing the UI to crash."""
     return str(value or default).upper()
+
+def validate_workspace_path(selected):
+    if not isinstance(selected, (str, Path)) or not str(selected).strip():
+        raise ValueError("workspace path cannot be empty")
+    path = Path(str(selected)).expanduser().resolve()
+    if not path.exists():
+        raise ValueError("workspace directory does not exist")
+    if not path.is_dir():
+        raise ValueError("workspace path must be a directory")
+    if not os.access(path, os.R_OK):
+        raise ValueError("workspace directory is not readable")
+    return path
 
 def persisted_evaluation(candidate, audit):
     """Read-only projection of persisted workflow evidence; never evaluates or recomputes it."""
@@ -86,7 +98,7 @@ class MainWindow:
         page.title = "Chimera"; page.bgcolor = BG; page.padding = 0; page.window.width = 1200; page.window.height = 760; page.window.min_width = 860; page.window.min_height = 560
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
-        self.task_busy = False; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""; self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Ask Chimera anything. Describe what you want accomplished...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True)
+        self.task_busy = False; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""; self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.task_field = ft.TextField(multiline=True, min_lines=4, max_lines=7, hint_text="Ask Chimera anything. Describe what you want accomplished...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.workspace_path_field = ft.TextField(label="WORKSPACE DIRECTORY", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, value="", expand=True)
         self.agent_store = AgentSessionStore(registry.data_dir / "chimera.db")
         self.profile_store = ModelProfileStore(registry.data_dir / "model_profiles.json")
         self.local_provider = LocalModelProvider(config_from_env())
@@ -267,8 +279,18 @@ class MainWindow:
         approval = []
         if self.pending_agent_approval:
             approval = [ft.Container(ft.Column([ft.Text("APPROVAL REQUIRED", color=FOCUS, size=10), ft.Text(f"{self.pending_agent_approval.get('tool')}\n{json.dumps(self.pending_agent_approval.get('arguments', {}), indent=2)}", color=TEXT, size=11), ft.Row([self._button("APPROVE THIS OPERATION", lambda e: self._approve_agent_tool(True)), ft.TextButton("REJECT", on_click=lambda e: self._approve_agent_tool(False), style=ft.ButtonStyle(color=SECONDARY))])], spacing=8), bgcolor=ELEVATED, border=ft.Border.all(1, FOCUS), border_radius=6, padding=ft.Padding.all(14))]
-        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
-        clarification = [ft.Row([ft.Text(f"PROJECT: {self.workspace_path or 'NOT SELECTED'}", color=MUTED, size=10), ft.TextButton("SELECT DIRECTORY", on_click=lambda e: self.workspace_picker.get_directory_path(), style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)]
+        task = self.agent_runtime.task_store.latest_for_session(self.agent_session_id)
+        if task:
+            steps = self.agent_runtime.task_store.steps(task.task_id)
+            activity.insert(0, ft.Container(ft.Column([ft.Text(f"TASK / {_upper(task.status)}", color=FOCUS, size=10), ft.Text(task.objective, color=SECONDARY, size=11), *[ft.Text(f"{step['position']}. {_upper(step['status'])}  {step['description']}", color=MUTED, size=10) for step in steps]], spacing=5), bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=6, padding=ft.Padding.all(12)))
+        task = self.agent_runtime.task_store.latest_for_session(self.agent_session_id)
+        task_panel = []
+        if task:
+            steps = self.agent_runtime.task_store.steps(task.task_id)
+            task_panel = [ft.Container(ft.Column([ft.Text(f"TASK / {_upper(task.status)}", color=FOCUS, size=10), ft.Text(task.objective, color=SECONDARY, size=11), *[ft.Text(f"{step['position']}. {_upper(step['status'])}  {step['description']}", color=MUTED, size=10) for step in steps]], spacing=5), bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=6, padding=ft.Padding.all(12))]
+        session_mode = (self.agent_store.session(self.agent_session_id) or {}).get("mode", "plan")
+        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), ft.Text(f"MODE / {session_mode.upper()}", color=FOCUS, size=10), ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=FOCUS)), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
+        clarification = [ft.Row([self.workspace_path_field, self._button("USE DIRECTORY", self._use_workspace_path), ft.TextButton("BROWSE", on_click=self._pick_workspace, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(f"SELECTED: {self.workspace_path or 'NOT SELECTED'}", color=MUTED, size=10)]
         if self.pending_questions:
             if self.pending_state == "pending":
                 content = [ft.Text("CLARIFICATION REQUIRED", color=FOCUS, size=10), *[ft.Text(f"{q.question_id}: {q.question}\nWhy: {q.reason}", color=SECONDARY, size=11) for q in self.pending_questions], self.clarification_field, self._button("SUBMIT CLARIFICATIONS", self._submit_task)]
@@ -276,6 +298,13 @@ class MainWindow:
                 content = [ft.Text(f"CONTINUATION {_upper(self.pending_state)}", color=FOCUS, size=10), ft.Text(self.pending_reason, color=SECONDARY, size=11), ft.Text("No answer will be submitted and no retry is performed automatically.", color=MUTED, size=11)]
             clarification = [ft.Container(ft.Column(content, spacing=10), width=760, bgcolor=SURFACE, border=ft.Border.all(1, FOCUS), border_radius=8, padding=ft.Padding.all(18))]
         self._set([ft.Container(ft.Text("CHIMERA", font_family="ChimeraDots", size=72, color="#18201D", opacity=0.5), height=90), ft.Text("What would you like Chimera to accomplish?", size=30, weight=ft.FontWeight.BOLD, color=TEXT), ft.Text("Local reasoning, explicit verification, human-controlled acceptance.", size=13, color=SECONDARY), composer, *clarification, ft.Row([self._metric("MODEL", self._runtime_state().replace("RUNTIME: ", "")), self._metric("REVIEW QUEUE", str(len(self.review.list()))), self._metric("BEHAVIOR", "BLOCKED" if not VirtualBoxBackend().inspect().get("available") else "AVAILABLE")], spacing=12), ft.Text("No capability is accepted or executed automatically.", color=MUTED, size=11)])
+    def _toggle_agent_mode(self, e=None):
+        current = (self.agent_store.session(self.agent_session_id) or {}).get("mode", "plan")
+        try:
+            self.agent_store.set_mode(self.agent_session_id, "build" if current == "plan" else "plan")
+            self._show_overview()
+        except Exception as exc:
+            self._toast(f"Mode change unavailable: {exc}")
     async def _send_conversation(self, e=None):
         if self.task_busy: return self._toast("A request is already running.")
         content = (self.task_field.value or "").strip()
@@ -289,6 +318,26 @@ class MainWindow:
             else: self.conversation_messages.append(("assistant", f"I could not complete that locally: {result.get('error', 'unknown error')}"))
         finally:
             self.task_busy = False; self._show_overview()
+    async def _pick_workspace(self, e=None):
+        try:
+            selected = await self.workspace_picker.get_directory_path()
+            if selected:
+                self._select_workspace(selected)
+        except Exception as exc:
+            self._toast(f"Directory picker failed: {exc}")
+    def _select_workspace(self, selected):
+        try:
+            path = validate_workspace_path(selected)
+            self.workspace_path = path
+            self.workspace_path_field.value = str(path)
+            self.agent_session_id = self.agent_runtime.create_session(path)
+            self.conversation_messages = []
+            self.pending_agent_approval = None
+            self._show_overview()
+        except Exception as exc:
+            self._toast(f"Workspace selection failed: {exc}")
+    def _use_workspace_path(self, e=None):
+        self._select_workspace(self.workspace_path_field.value)
     def _on_agent_event(self, event):
         self.live_event_count = event.sequence
         self.live_events.append((event.event_type, event.payload))
@@ -332,11 +381,8 @@ class MainWindow:
         finally: self.task_busy = False
     def _workspace_picked(self, e):
         selected = getattr(e, "path", None)
-        if selected and Path(selected).is_dir():
-            self.workspace_path = Path(selected).resolve()
-            self.agent_session_id = self.agent_runtime.create_session(self.workspace_path)
-            self.conversation_messages = []
-            self._show_overview()
+        if selected:
+            self._select_workspace(selected)
     def _new_agent_session(self):
         self.agent_session_id = self.agent_runtime.create_session(self.workspace_path)
         self.conversation_messages = []; self.pending_agent_approval = None; self.drawer.visible = False; self._show_overview()

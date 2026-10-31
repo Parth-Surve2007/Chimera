@@ -84,6 +84,40 @@ def test_write_tool_waits_for_specific_approval_and_resumes(tmp_path):
     assert done["status"] == "completed"
     assert (tmp_path / ".chimera-agent-artifacts" / sid / "report.md").read_text(encoding="utf-8") == "report"
 
+def test_plan_mode_blocks_write_at_runtime_boundary(tmp_path):
+    provider = DecidingProvider([
+        {"type": "tool_call", "tool": "workspace.create_artifact", "arguments": {"name": "blocked.md", "content": "no"}, "invocation_id": "plan-write"},
+        {"type": "message", "content": "I cannot write in Plan Mode."},
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db"); runtime = AgentRuntime(store, provider); sid = runtime.create_session(tmp_path, mode="plan")
+    result = runtime.send(sid, "create a report")
+    assert result["status"] == "completed"
+    assert not (tmp_path / ".chimera-agent-artifacts" / sid / "blocked.md").exists()
+    assert any(e.event_type == "tool.failed" and e.payload["status"] == "blocked" for e in store.events(sid))
+    task = runtime.task_store.latest_for_session(sid)
+    assert task.mode == "plan" and task.status == "completed"
+    assert runtime.task_store.steps(task.task_id)[0]["status"] == "blocked"
+
+def test_approval_continuation_updates_persisted_task(tmp_path):
+    provider = DecidingProvider([
+        {"type": "tool_call", "tool": "workspace.create_artifact", "arguments": {"name": "approved.md", "content": "yes"}, "invocation_id": "build-write"},
+        {"type": "message", "content": "The report is ready."},
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db"); runtime = AgentRuntime(store, provider); sid = runtime.create_session(tmp_path, mode="build")
+    assert runtime.send(sid, "create a report")["status"] == "awaiting_approval"
+    task = runtime.task_store.latest_for_session(sid)
+    assert runtime.approve_pending(sid, True)["status"] == "completed"
+    assert runtime.task_store.get(task.task_id).status == "completed"
+    assert runtime.task_store.steps(task.task_id)[0]["status"] == "completed"
+
+def test_session_mode_round_trip_is_persisted(tmp_path):
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    sid = store.create_session(tmp_path, "local.gguf", mode="plan")
+    store.set_mode(sid, "build")
+    assert AgentSessionStore(tmp_path / "chimera.db").session(sid)["mode"] == "build"
+    store.set_mode(sid, "plan")
+    assert AgentSessionStore(tmp_path / "chimera.db").session(sid)["mode"] == "plan"
+
 
 def test_unknown_or_malformed_tool_never_executes(tmp_path):
     provider = DecidingProvider([{ "version": 1, "type": "tool_call", "tool": "workspace.shell", "arguments": {}, "invocation_id": "bad" }])
