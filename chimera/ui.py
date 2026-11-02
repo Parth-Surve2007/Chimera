@@ -177,7 +177,12 @@ class MainWindow:
         form = ft.Container(ft.Column([ft.Text("ADD OR EDIT PROFILE", color=MUTED, size=10), self.hub_id, self.hub_provider, self.hub_model, self.hub_url, self.hub_secret, ft.Row([self._button("SAVE LOCAL", lambda e: self._save_model_profile(False)), self._button("SAVE API", lambda e: self._save_model_profile(True)), ft.TextButton("TEST SELECTED API", on_click=self._test_model_profile, style=ft.ButtonStyle(color=FOCUS))])], spacing=8), bgcolor=SURFACE, padding=ft.Padding.all(14), border=ft.Border.all(1, BORDER))
         self._set([ft.Text("MODEL INTELLIGENCE HUB", size=18, color=TEXT), ft.Text("Hosted providers are never contacted during profile browsing or saving. Credentials are stored separately in Windows Credential Manager.", color=MUTED, size=11), form, *(cards or [ft.Text("No model profiles configured yet.", color=SECONDARY)])])
     def _select_session_model(self, profile_id):
-        try: self.agent_runtime.set_session_model(self.agent_session_id, profile_id, local_only=True); self._toast("Model pinned for future turns in this session."); self._show_model_hub()
+        try:
+            profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id), None)
+            local_only = not (profile and profile.hosted)
+            self.agent_runtime.set_session_model(self.agent_session_id, profile_id, local_only=local_only)
+            self._toast(f"Model {profile_id} selected ({'API / CLOUD' if profile and profile.hosted else 'LOCAL'}).")
+            self._show_model_hub()
         except Exception as exc: self._toast(f"Model selection failed: {exc}")
     def _save_model_profile(self, hosted):
         try:
@@ -289,7 +294,10 @@ class MainWindow:
             steps = self.agent_runtime.task_store.steps(task.task_id)
             task_panel = [ft.Container(ft.Column([ft.Text(f"TASK / {_upper(task.status)}", color=FOCUS, size=10), ft.Text(task.objective, color=SECONDARY, size=11), *[ft.Text(f"{step['position']}. {_upper(step['status'])}  {step['description']}", color=MUTED, size=10) for step in steps]], spacing=5), bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=6, padding=ft.Padding.all(12))]
         session_mode = (self.agent_store.session(self.agent_session_id) or {}).get("mode", "plan")
-        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), ft.Text(f"MODE / {session_mode.upper()}", color=FOCUS, size=10), ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=FOCUS)), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
+        session_model_info = self.agent_store.session_model(self.agent_session_id)
+        selected_pid = session_model_info.get("profile_id")
+        provider_badge = "LOCAL (GGUF DEFAULT)" if not selected_pid else f"PROVIDER: {selected_pid} ({'API / CLOUD' if not session_model_info.get('local_only') else 'LOCAL'})"
+        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), ft.Row([ft.Text(f"MODE / {session_mode.upper()}", color=FOCUS, size=10), ft.Text(provider_badge, color=SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=FOCUS)), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
         clarification = [ft.Row([self.workspace_path_field, self._button("USE DIRECTORY", self._use_workspace_path), ft.TextButton("BROWSE", on_click=self._pick_workspace, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(f"SELECTED: {self.workspace_path or 'NOT SELECTED'}", color=MUTED, size=10)]
         if self.pending_questions:
             if self.pending_state == "pending":

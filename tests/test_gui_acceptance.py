@@ -1,6 +1,10 @@
 import json
+import ast
+from pathlib import Path
 
-from scripts.gui_acceptance import AcceptanceRun, DEFAULT_PROMPT, atomic_write, owned_processes, report
+from scripts.gui_acceptance import (AcceptanceRun, DEFAULT_PROMPT, atomic_write,
+                                    create_manual_prompt_checkpoint, owned_processes,
+                                    report, verify_prompt_text)
 
 
 def test_acceptance_run_persists_manifest_and_append_only_events(tmp_path):
@@ -28,6 +32,38 @@ def test_report_does_not_infer_model_or_tool_success(tmp_path):
     text = report(run)
     assert "no model decision or tool invocation is inferred" in text
     assert (run.run_dir / "report.md").is_file()
+
+
+def test_acceptance_harness_has_no_global_input_apis():
+    scripts_dir = Path(__file__).parents[1].joinpath("scripts")
+    prohibited = {"type_keys", "click_input", "send_keys", "SendInput", "keybd_event", "mouse_event"}
+    violations = []
+    for path in scripts_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in prohibited:
+                violations.append(f"{path.name}:{node.attr}")
+            if isinstance(node, ast.Name) and node.id in {"pyautogui", "pynput", "keyboard", "mouse"}:
+                violations.append(f"{path.name}:{node.id}")
+    assert not violations, f"global desktop input API present: {violations}"
+
+
+def test_acceptance_manifest_records_safe_interaction_policy(tmp_path):
+    run = AcceptanceRun.create(tmp_path, "safe", "prompt")
+    safety = run.manifest["interaction_safety"]
+    assert safety["global_keyboard_injection_used"] is False
+    assert safety["global_mouse_injection_used"] is False
+    assert safety["clipboard_modified"] is False
+
+
+def test_manual_prompt_checkpoint_requires_operator_and_verifies_exact_text(tmp_path):
+    run = AcceptanceRun.create(tmp_path, "safe", DEFAULT_PROMPT)
+    create_manual_prompt_checkpoint(run)
+    assert run.manifest["stage"] == "awaiting_manual_prompt_entry"
+    assert run.manifest["state"] == "awaiting_operator"
+    assert verify_prompt_text(run, DEFAULT_PROMPT) is True
+    assert verify_prompt_text(run, DEFAULT_PROMPT + " altered") is False
+    assert run.manifest["submission_count"] == 0
 
 
 def test_owned_process_tree_includes_children_but_not_unrelated_processes():

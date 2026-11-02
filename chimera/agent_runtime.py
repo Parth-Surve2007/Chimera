@@ -246,6 +246,10 @@ class AgentRuntime:
         if profile is None or (selection["local_only"] and profile.hosted): raise RuntimeError("selected model profile is unavailable or violates local-only policy")
         if profile.hosted:
             credentials = getattr(self.provider, "credentials", None)
+            if profile.provider_id == "meta" or "meta.ai" in (profile.base_url or ""):
+                from .meta_provider import MetaModelProvider
+                accountant = getattr(self.provider, "accountant", None)
+                return MetaModelProvider(profile, credentials, accountant=accountant)
             return OpenAICompatibleAdapter(profile, credentials)
         config = getattr(self.provider, "config", None)
         if not config: raise RuntimeError("local provider configuration is unavailable")

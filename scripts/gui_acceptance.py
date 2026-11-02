@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - non-Windows environments
 DEFAULT_PROMPT = (
     "Inspect this workspace. Use your registered workspace tools to list the "
     "project files and read README.md. Tell me the project name, version, "
-    "directory structure and the main purpose of the application. Base your "
+    "README marker, directory structure and main purpose of the application. Base your "
     "answer on the actual files you inspect. Do not modify or create any files."
 )
 
@@ -64,14 +64,39 @@ def owned_processes(processes: list[dict], launcher_pid: int) -> list[dict]:
 def window_snapshot() -> list[dict]:
     if os.name != "nt" or win32gui is None: return []
     result = []
-    def collect(hwnd, _):
-        try:
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-            result.append({"hwnd": int(hwnd), "pid": int(pid), "title": win32gui.GetWindowText(hwnd), "class_name": win32gui.GetClassName(hwnd), "visible": bool(win32gui.IsWindowVisible(hwnd)), "enabled": bool(win32gui.IsWindowEnabled(hwnd)), "rect": list(win32gui.GetWindowRect(hwnd))})
-        except Exception: pass
-        return True
-    win32gui.EnumWindows(collect, None)
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        desktops = []
+        DESKTOPENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_wchar_p, ctypes.c_void_p)
+        def enum_desk(name, _):
+            desktops.append(name)
+            return True
+        user32.EnumDesktopsW(user32.GetProcessWindowStation(), DESKTOPENUMPROC(enum_desk), 0)
+        if not desktops: desktops = ["Default"]
+        
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        for d in desktops:
+            hDesk = user32.OpenDesktopW(d, 0, False, 0x01FF)
+            if not hDesk: continue
+            def collect(hwnd, _):
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    result.append({"hwnd": int(hwnd), "pid": int(pid), "title": win32gui.GetWindowText(hwnd), "class_name": win32gui.GetClassName(hwnd), "visible": bool(win32gui.IsWindowVisible(hwnd)), "enabled": bool(win32gui.IsWindowEnabled(hwnd)), "rect": list(win32gui.GetWindowRect(hwnd)), "desktop": d})
+                except Exception: pass
+                return True
+            user32.EnumDesktopWindows(hDesk, WNDENUMPROC(collect), 0)
+    except Exception:
+        def fallback_collect(hwnd, _):
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                result.append({"hwnd": int(hwnd), "pid": int(pid), "title": win32gui.GetWindowText(hwnd), "class_name": win32gui.GetClassName(hwnd), "visible": bool(win32gui.IsWindowVisible(hwnd)), "enabled": bool(win32gui.IsWindowEnabled(hwnd)), "rect": list(win32gui.GetWindowRect(hwnd))})
+            except Exception: pass
+            return True
+        win32gui.EnumWindows(fallback_collect, None)
     return result
+
+
 
 
 def discover_window(run: "AcceptanceRun", deadline_seconds: int = 45) -> dict | None:
@@ -127,6 +152,14 @@ class AcceptanceRun:
             "turn_id": None, "invocation_id": None,
             "prompt": prompt, "prompt_source": "acceptance_harness",
             "submission_count": 0, "cleanup": {"status": "pending", "closed_pids": [], "remaining_pids": []},
+            "interaction_safety": {
+                "global_keyboard_injection_used": False,
+                "global_mouse_injection_used": False,
+                "clipboard_modified": False,
+                "uia_patterns_used": [],
+                "unexpected_foreground_change": False,
+                "unrelated_application_received_input": False,
+            },
         }
         run = cls(run_dir, manifest); run.save(); run.event("run.created", {"prompt_source": "acceptance_harness"}); return run
 
@@ -179,15 +212,47 @@ def stop_process(run: AcceptanceRun):
     run.event("cleanup.complete", {"closed_pids": closed, "remaining_pids": []})
 
 
+def create_manual_prompt_checkpoint(run: AcceptanceRun) -> None:
+    """Pause for the operator to enter the prompt; never injects input."""
+    run.update(stage="awaiting_manual_prompt_entry", state="awaiting_operator")
+    run.event("manual_prompt_entry.required", {"prompt": run.manifest["prompt"], "prompt_source": "acceptance_harness"})
+
+
+def verify_prompt_text(run: AcceptanceRun, observed: str) -> bool:
+    """Verify text read from the target control before any submission."""
+    matches = observed == run.manifest["prompt"]
+    run.event("manual_prompt_entry.verified" if matches else "manual_prompt_entry.mismatch", {"matches": matches})
+    return matches
+
+
+def invoke_submit_uia(run: AcceptanceRun, submit_control, observed_prompt: str) -> bool:
+    """Invoke exactly one verified submit control through UIA InvokePattern."""
+    if run.manifest.get("submission_count", 0) != 0 or not verify_prompt_text(run, observed_prompt):
+        return False
+    element = getattr(submit_control, "element_info", None)
+    if element is None or not getattr(element, "enabled", False):
+        run.event("submission.blocked", {"reason": "submit_control_unavailable"})
+        return False
+    invoke = getattr(submit_control, "iface_invoke", None)
+    if invoke is None:
+        run.event("submission.blocked", {"reason": "invoke_pattern_unavailable"})
+        return False
+    invoke.Invoke()
+    run.update(submission_count=1, stage="submitted", state="running")
+    run.event("prompt.submitted", {"method": "UIA.InvokePattern"})
+    return True
+
+
 def report(run: AcceptanceRun) -> str:
-    lines = [f"# Chimera acceptance run {run.manifest['run_id']}", "", f"State: {run.manifest['state']}", f"Stage: {run.manifest['stage']}", f"Prompt source: {run.manifest['prompt_source']}", f"Submission count: {run.manifest['submission_count']}", "", "Evidence is observational; no model decision or tool invocation is inferred from process health."]
+    safety = run.manifest.get("interaction_safety", {})
+    lines = [f"# Chimera acceptance run {run.manifest['run_id']}", "", f"State: {run.manifest['state']}", f"Stage: {run.manifest['stage']}", f"Prompt source: {run.manifest['prompt_source']}", f"Submission count: {run.manifest['submission_count']}", "", "## Interaction safety", "", f"Global keyboard injection used: {safety.get('global_keyboard_injection_used', False)}", f"Global mouse injection used: {safety.get('global_mouse_injection_used', False)}", f"Clipboard modified: {safety.get('clipboard_modified', False)}", f"UI Automation patterns used: {', '.join(safety.get('uia_patterns_used', [])) or 'read-only inspection only'}", f"Unexpected foreground-window change: {safety.get('unexpected_foreground_change', False)}", f"Unrelated application received input: {safety.get('unrelated_application_received_input', False)}", "", "Evidence is observational; no model decision or tool invocation is inferred from process health."]
     (run.run_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return "\n".join(lines)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m scripts.gui_acceptance")
-    parser.add_argument("command", choices=("start", "status", "report", "stop"))
+    parser.add_argument("command", choices=("start", "status", "report", "stop", "manual-handoff"))
     parser.add_argument("--run-id")
     parser.add_argument("--scenario", default="local-readonly-inspection")
     parser.add_argument("--workspace", type=Path)
@@ -200,6 +265,10 @@ def main(argv=None):
     run = AcceptanceRun.open(args.root, args.run_id)
     if args.command == "status": print(json.dumps(run.manifest, indent=2)); return 0
     if args.command == "stop": stop_process(run); print(json.dumps(run.manifest, indent=2)); return 0
+    if args.command == "manual-handoff":
+        create_manual_prompt_checkpoint(run)
+        print(run.manifest["prompt"])
+        return 0
     print(report(run)); return 0
 
 
