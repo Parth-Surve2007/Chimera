@@ -72,5 +72,8 @@ class TaskStore:
 class TaskPolicy:
     @staticmethod
     def validate(mode, tool, permission):
-        if mode == "plan" and permission not in {"workspace.read","computer.observe"}: raise PermissionError("Plan Mode is read-only")
+        from .applications.dispatch import APPLICATION_READ_PERMISSIONS
+        allowed_in_plan = {"workspace.read", "computer.observe"}.union(APPLICATION_READ_PERMISSIONS)
+        if mode == "plan" and permission not in allowed_in_plan:
+            raise PermissionError("Plan Mode is read-only")
         return True

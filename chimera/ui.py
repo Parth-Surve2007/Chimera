@@ -177,7 +177,32 @@ class MainWindow:
         self.hub_dialect = ft.TextField(label="API DIALECT (OPTIONAL: openai_compatible, openai_responses, anthropic_messages, gemini_interactions, custom)", color=TEXT, border_color=BORDER)
         cards = [ft.Container(ft.Column([ft.Text(f"{p.display_name or p.model_id}  ·  {p.provider_id}  ·  {'API' if p.hosted else 'LOCAL'}", color=TEXT), ft.Text(f"DIALECT: {getattr(p, 'dialect', None) or 'auto'}  CAPABILITIES: {', '.join(p.modalities)}  TOOLS: {p.tool_calling}  STRUCTURED: {p.structured_output}  STATE: {'ENABLED' if p.enabled else 'DISABLED'}  EVIDENCE: {p.capability_evidence}", color=SECONDARY, size=11), ft.Row([ft.TextButton("USE", on_click=lambda e, pid=p.profile_id: self._select_session_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("COMPAT LAB", on_click=lambda e, pid=p.profile_id: self._run_compat_lab(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("DEFAULT", on_click=lambda e, pid=p.profile_id: self._set_default_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("TOGGLE", on_click=lambda e, pid=p.profile_id: self._toggle_model(pid), style=ft.ButtonStyle(color=SECONDARY)), ft.TextButton("REMOVE", on_click=lambda e, pid=p.profile_id: self._remove_model(pid), style=ft.ButtonStyle(color=SECONDARY))])]), padding=ft.Padding.all(12), border=ft.Border.all(1, BORDER)) for p in profiles]
         form = ft.Container(ft.Column([ft.Text("ADD OR EDIT PROFILE", color=MUTED, size=10), self.hub_id, self.hub_provider, self.hub_model, self.hub_url, self.hub_secret, self.hub_dialect, self.hub_tools, ft.Row([self._button("SAVE LOCAL", lambda e: self._save_model_profile(False)), self._button("SAVE API", lambda e: self._save_model_profile(True)), ft.TextButton("TEST SELECTED API", on_click=self._test_model_profile, style=ft.ButtonStyle(color=FOCUS))])], spacing=8), bgcolor=SURFACE, padding=ft.Padding.all(14), border=ft.Border.all(1, BORDER))
-        self._set([ft.Text("MODEL INTELLIGENCE HUB", size=18, color=TEXT), ft.Text("Universal model architecture: local or hosted (Meta, Anthropic, Gemini, OpenAI, custom). Credentials stored securely.", color=MUTED, size=11), form, *(cards or [ft.Text("No model profiles configured yet.", color=SECONDARY)])])
+        app_cards = []
+        try:
+            from .applications.registry import get_application_registry
+            manifests = get_application_registry().discover_all()
+            for m in manifests:
+                actions_summary = ", ".join(f"{a.action_id} (L{a.risk_level.value})" for a in m.actions)
+                app_cards.append(ft.Container(
+                    ft.Column([
+                        ft.Text(f"APPLICATION: {m.display_name} ({m.application_id})  ·  {'INSTALLED' if m.is_installed else 'AVAILABLE'}", color=TEXT),
+                        ft.Text(f"VENDOR: {m.vendor}  ·  VERSION: {m.connector_version}  ·  PATH: {m.installation_path or 'not installed'}", color=SECONDARY, size=11),
+                        ft.Text(f"ACTIONS: {actions_summary}", color=MUTED, size=10),
+                    ]),
+                    padding=ft.Padding.all(12),
+                    border=ft.Border.all(1, BORDER),
+                    bgcolor=ELEVATED,
+                ))
+        except Exception:
+            pass
+        self._set([
+            ft.Text("MODEL & APPLICATION INTELLIGENCE HUB", size=18, color=TEXT),
+            ft.Text("Universal model architecture & registered application ecosystem. Actions governed by Risk Levels.", color=MUTED, size=11),
+            form,
+            *(cards or [ft.Text("No model profiles configured yet.", color=SECONDARY)]),
+            ft.Text("REGISTERED APPLICATION ECOSYSTEM", size=14, color=TEXT),
+            *(app_cards or [ft.Text("No application connectors registered.", color=SECONDARY)])
+        ])
     def _run_compat_lab(self, profile_id):
         try:
             profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id), None)

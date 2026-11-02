@@ -88,9 +88,31 @@ class ExperienceLearningEngine:
                     data = json.loads(content) if isinstance(content, str) else content
                     tool_name = data.get("tool", "")
                     if tool_name:
-                        # Extract permission prefix
-                        read_indicators = ("list", "read", "extract", "inspect", "enumerate", "scan", "get", "query", "search", "find")
-                        perm = f"{tool_name.split('.')[0]}.read" if any(k in tool_name for k in read_indicators) else f"{tool_name.split('.')[0]}.write"
+                        # Extract permission from registry if application action, or fall back to heuristic
+                        perm = None
+                        if tool_name.startswith("application."):
+                            from .applications.registry import get_application_registry
+                            from .applications.dispatch import decode_tool_id
+                            decoded = decode_tool_id(tool_name)
+                            if decoded:
+                                conn = get_application_registry().get(decoded[0])
+                                if conn:
+                                    act = next((a for a in conn.manifest.actions if a.action_id == decoded[1]), None)
+                                    if act:
+                                        perm = act.permission
+                        if not perm and ("." in tool_name):
+                            app_part = tool_name.replace("application.", "")
+                            if "." in app_part:
+                                a_id, act_name = app_part.split(".", 1)
+                                from .applications.registry import get_application_registry
+                                conn = get_application_registry().get(a_id)
+                                if conn:
+                                    act = next((a for a in conn.manifest.actions if a.action_id == act_name), None)
+                                    if act:
+                                        perm = act.permission
+                        if not perm:
+                            read_indicators = ("list", "read", "extract", "inspect", "enumerate", "scan", "get", "query", "search", "find")
+                            perm = f"{tool_name.split('.')[0]}.read" if any(k in tool_name for k in read_indicators) else f"{tool_name.split('.')[0]}.write"
                         permissions_needed.add(perm)
                         reusable_steps.append({
                             "action": tool_name,

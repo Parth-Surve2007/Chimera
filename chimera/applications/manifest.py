@@ -40,6 +40,7 @@ class ApplicationAction:
     expected_side_effects: list[str] = field(default_factory=list)
     reversibility: str = "reversible"  # "reversible", "destructive_with_backup", "irreversible"
     requires_approval: bool = False
+    unavailable: bool = False
 
 
 @dataclass

@@ -52,6 +52,7 @@ class GhidraConnector(BaseApplicationConnector):
                 risk_level=ActionRiskLevel.LEVEL_2_REVERSIBLE,
                 permission="ghidra.analyze",
                 arguments_schema={"project_location": "string", "project_name": "string", "binary_path": "string"},
+                unavailable=True,
             ),
             ApplicationAction(
                 action_id="execute_script",
@@ -61,6 +62,7 @@ class GhidraConnector(BaseApplicationConnector):
                 permission="ghidra.script",
                 arguments_schema={"project_location": "string", "project_name": "string", "script_name": "string"},
                 requires_approval=True,
+                unavailable=True,
             ),
         ]
 
@@ -173,29 +175,128 @@ class GhidraConnector(BaseApplicationConnector):
             binary_path = Path(arguments.get("binary_path", ""))
             if not binary_path.is_file():
                 return {"status": "failed", "error": f"Binary file not found: {binary_path}"}
-            # Pure Python static header parse for portable inspection without native Ghidra install requirement
             size = binary_path.stat().st_size
-            header_sample = binary_path.read_bytes()[:1024]
-            is_pe = header_sample.startswith(b"MZ")
-            is_elf = header_sample.startswith(b"\x7fELF")
-            fmt = "PE" if is_pe else "ELF" if is_elf else "Raw Binary"
+            data = binary_path.read_bytes()
+            if len(data) < 64:
+                return {"status": "completed", "format": "Raw Binary", "size_bytes": size, "symbols": [], "metadata": {"note": "Binary too small"}}
+
+            import struct
+            is_pe = data.startswith(b"MZ")
+            is_elf = data.startswith(b"\x7fELF")
+
+            symbols: list[dict[str, Any]] = []
+            fmt = "Raw Binary"
+
+            if is_pe:
+                fmt = "PE"
+                try:
+                    # e_lfanew at offset 0x3C
+                    pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+                    if pe_offset + 24 <= len(data) and data[pe_offset:pe_offset+4] == b"PE\x00\x00":
+                        num_sections = struct.unpack_from("<H", data, pe_offset + 6)[0]
+                        opt_hdr_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+                        opt_hdr_magic = struct.unpack_from("<H", data, pe_offset + 24)[0] if pe_offset + 26 <= len(data) else 0
+
+                        # Determine 32-bit (0x10b) vs 64-bit (0x20b)
+                        export_rva, export_size = 0, 0
+                        if opt_hdr_magic == 0x10B and opt_hdr_size >= 104:  # PE32
+                            export_rva, export_size = struct.unpack_from("<II", data, pe_offset + 24 + 96)
+                        elif opt_hdr_magic == 0x20B and opt_hdr_size >= 120:  # PE32+
+                            export_rva, export_size = struct.unpack_from("<II", data, pe_offset + 24 + 112)
+
+                        # Parse section headers to map RVA to file offset
+                        sections_offset = pe_offset + 24 + opt_hdr_size
+                        sections = []
+                        for s_idx in range(num_sections):
+                            sec_base = sections_offset + s_idx * 40
+                            if sec_base + 40 <= len(data):
+                                s_vsize, s_va, s_raw_size, s_raw_ptr = struct.unpack_from("<IIII", data, sec_base + 8)
+                                sections.append((s_va, s_vsize, s_raw_ptr, s_raw_size))
+
+                        def rva_to_offset(rva):
+                            for s_va, s_vsize, s_raw_ptr, s_raw_size in sections:
+                                if s_va <= rva < s_va + max(s_vsize, s_raw_size):
+                                    return s_raw_ptr + (rva - s_va)
+                            return None
+
+                        if export_rva and export_size:
+                            exp_off = rva_to_offset(export_rva)
+                            if exp_off and exp_off + 40 <= len(data):
+                                num_names = struct.unpack_from("<I", data, exp_off + 24)[0]
+                                names_rva = struct.unpack_from("<I", data, exp_off + 32)[0]
+                                names_off = rva_to_offset(names_rva)
+                                if names_off and names_off + num_names * 4 <= len(data):
+                                    for n_idx in range(min(num_names, 200)):
+                                        name_rva = struct.unpack_from("<I", data, names_off + n_idx * 4)[0]
+                                        n_file_off = rva_to_offset(name_rva)
+                                        if n_file_off and n_file_off < len(data):
+                                            end = data.find(b"\x00", n_file_off)
+                                            if end != -1:
+                                                name_str = data[n_file_off:end].decode("ascii", errors="replace")
+                                                symbols.append({"name": name_str, "type": "pe_export", "source": "export_directory"})
+                except Exception:
+                    pass
+
+            elif is_elf:
+                fmt = "ELF"
+                try:
+                    ei_class = data[4]  # 1 = 32-bit, 2 = 64-bit
+                    ei_data = data[5]   # 1 = LE, 2 = BE
+                    endian = "<" if ei_data == 1 else ">"
+
+                    if ei_class == 2 and len(data) >= 64:  # ELF64
+                        e_shoff = struct.unpack_from(f"{endian}Q", data, 40)[0]
+                        e_shentsize = struct.unpack_from(f"{endian}H", data, 58)[0]
+                        e_shnum = struct.unpack_from(f"{endian}H", data, 60)[0]
+                        e_shstrndx = struct.unpack_from(f"{endian}H", data, 62)[0]
+
+                        # Read section headers
+                        sh_list = []
+                        for s_idx in range(e_shnum):
+                            off = e_shoff + s_idx * e_shentsize
+                            if off + 64 <= len(data):
+                                sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size, sh_link, sh_info = struct.unpack_from(f"{endian}IIQQQQII", data, off)
+                                sh_list.append({"type": sh_type, "offset": sh_offset, "size": sh_size, "link": sh_link, "name_idx": sh_name})
+
+                        # Find symtab (type 2) or dynsym (type 11)
+                        for sh in sh_list:
+                            if sh["type"] in (2, 11):  # SHT_SYMTAB or SHT_DYNSYM
+                                strtab_sh = sh_list[sh["link"]] if sh["link"] < len(sh_list) else None
+                                if strtab_sh and strtab_sh["offset"] + strtab_sh["size"] <= len(data):
+                                    strtab = data[strtab_sh["offset"]:strtab_sh["offset"] + strtab_sh["size"]]
+                                    sym_count = sh["size"] // 24
+                                    for sym_i in range(min(sym_count, 200)):
+                                        sym_off = sh["offset"] + sym_i * 24
+                                        if sym_off + 24 <= len(data):
+                                            st_name = struct.unpack_from(f"{endian}I", data, sym_off)[0]
+                                            st_info = data[sym_off + 4]
+                                            st_type = st_info & 0xF
+                                            if st_type in (1, 2) and st_name < len(strtab):  # STT_OBJECT or STT_FUNC
+                                                end = strtab.find(b"\x00", st_name)
+                                                if end != -1:
+                                                    name_str = strtab[st_name:end].decode("ascii", errors="replace")
+                                                    if name_str:
+                                                        symbols.append({"name": name_str, "type": "elf_func" if st_type == 2 else "elf_object", "source": "dynsym" if sh["type"] == 11 else "symtab"})
+                except Exception:
+                    pass
+
             return {
                 "status": "completed",
                 "format": fmt,
                 "size_bytes": size,
-                "simulated_symbols": ["_entry", "_start", "main"] if (is_pe or is_elf) else [],
+                "symbols_count": len(symbols),
+                "symbols": symbols,
+                "metadata": {
+                    "source": "native_static_parser",
+                    "real_inspection": True,
+                    "simulated": False,
+                },
             }
 
         if action_id in ("analyze_headless", "execute_script"):
-            if not self.manifest.is_installed:
-                return {
-                    "status": "blocked",
-                    "error": "Ghidra headless script (analyzeHeadless) is not installed on this system. Set GHIDRA_HOME or install Ghidra with JDK 17+.",
-                    "setup_guide": "https://github.com/NationalSecurityAgency/ghidra/releases",
-                }
-            if action_id == "execute_script" and not approved:
-                return {"status": "awaiting_approval", "error": "Protected script execution requires operator approval."}
-
-            return {"status": "completed", "message": "Headless analysis dispatched."}
+            return {
+                "status": "unavailable",
+                "error": f"Ghidra action '{action_id}' is unavailable in this environment. Headless script execution requires a verified native installation of Ghidra and JDK 17+ with active supervised execution.",
+            }
 
         return {"status": "failed", "error": f"Unsupported Ghidra action: {action_id}"}

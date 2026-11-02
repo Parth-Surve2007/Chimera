@@ -266,7 +266,14 @@ class AgentRuntime:
         try:
             for app in self.computer.backend.list_applications()[:20]: context.append({"pid": app["pid"], "executable": app.get("executable"), "windows": app.get("windows", [])[:6]})
         except Exception: pass
-        return {"version": 1, "tools": [{"id": key, **tool_catalog()["operations"][value]} for key, value in aliases.items()], "computer_observation": context, "interaction_inventory": self.computer.interaction_inventory()}
+        catalog_tools = [{"id": key, **tool_catalog()["operations"][value]} for key, value in aliases.items()]
+        try:
+            from .applications.registry import get_application_registry
+            from .applications.dispatch import application_tool_catalog
+            catalog_tools.extend(application_tool_catalog(get_application_registry()))
+        except Exception:
+            pass
+        return {"version": 1, "tools": catalog_tools, "computer_observation": context, "interaction_inventory": self.computer.interaction_inventory()}
 
     @staticmethod
     def _decision(value):
@@ -275,7 +282,8 @@ class AgentRuntime:
         if value["type"] == "message":
             if not isinstance(value.get("content"), str) or not value["content"].strip(): raise ValueError("message content must be non-empty")
             return value
-        if not isinstance(value.get("tool"), str) or not (value["tool"].startswith("workspace.") or value["tool"].startswith("computer.")): raise ValueError("tool identifier is invalid")
+        tool = value.get("tool")
+        if not isinstance(tool, str) or not (tool.startswith("workspace.") or tool.startswith("computer.") or tool.startswith("application.")): raise ValueError("tool identifier is invalid")
         if not isinstance(value.get("arguments"), dict): raise ValueError("tool arguments must be an object")
         invocation = value.get("invocation_id")
         if invocation is not None and (not isinstance(invocation, str) or not invocation.strip()): raise ValueError("tool invocation_id is invalid")
@@ -283,6 +291,21 @@ class AgentRuntime:
 
     @staticmethod
     def _validate_arguments(operation, arguments):
+        if operation.startswith("application."):
+            from .applications.registry import get_application_registry
+            from .applications.dispatch import decode_tool_id, validate_application_arguments
+            decoded = decode_tool_id(operation)
+            if not decoded:
+                raise ValueError(f"malformed application tool id: {operation}")
+            app_id, action_id = decoded
+            connector = get_application_registry().get(app_id)
+            if not connector:
+                raise ValueError(f"unknown application connector: {app_id}")
+            action = next((a for a in connector.manifest.actions if a.action_id == action_id), None)
+            if not action:
+                raise ValueError(f"unknown action '{action_id}' on application '{app_id}'")
+            validate_application_arguments(action, arguments)
+            return
         contracts = {
             "list_files": {"relative": str, "recursive": bool},
             "inspect_file": {"path": str},
@@ -391,8 +414,29 @@ class AgentRuntime:
                 self._record(session_id, "turn.completed", {"turn_id": turn_id})
                 return {"status": "completed", "message": assistant, "tools": []}
             if max_tools <= 0: raise RuntimeError("maximum tool-call limit reached")
-            tool_id = decision["tool"]; operation = tool_id.removeprefix("workspace.") if tool_id.startswith("workspace.") else tool_id
-            if operation not in tool_catalog()["operations"]: raise ValueError(f"unregistered tool: {tool_id}")
+            tool_id = decision["tool"]
+            is_app_tool = tool_id.startswith("application.")
+            app_connector, app_action = None, None
+            if is_app_tool:
+                from .applications.registry import get_application_registry
+                from .applications.dispatch import decode_tool_id
+                decoded = decode_tool_id(tool_id)
+                if not decoded:
+                    raise ValueError(f"malformed application tool id: {tool_id}")
+                app_id, action_id = decoded
+                app_connector = get_application_registry().get(app_id)
+                if not app_connector:
+                    raise ValueError(f"unregistered application: {app_id}")
+                app_action = next((a for a in app_connector.manifest.actions if a.action_id == action_id), None)
+                if not app_action:
+                    raise ValueError(f"unregistered action '{action_id}' on application '{app_id}'")
+                operation = tool_id
+                permission = app_action.permission
+            else:
+                operation = tool_id.removeprefix("workspace.") if tool_id.startswith("workspace.") else tool_id
+                if operation not in tool_catalog()["operations"]: raise ValueError(f"unregistered tool: {tool_id}")
+                permission = tool_catalog()["operations"][operation]["permission"]
+
             self._validate_arguments(operation, decision["arguments"])
             invocation = decision.get("invocation_id") or uuid.uuid4().hex
             self._record(session_id, "tool.call.requested", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"]})
@@ -406,7 +450,15 @@ class AgentRuntime:
                     continue
                 workspace = current_workspace
                 tools = WorkspaceTools(workspace, workspace / ".chimera-agent-artifacts" / session_id)
-            permission = tool_catalog()["operations"][operation]["permission"]
+
+            if is_app_tool:
+                valid, reason, _ = app_connector.validate_action_call(app_action.action_id, decision["arguments"], mode=session.get("mode", "plan"))
+                if not valid:
+                    result_data = {"status": "blocked", "reason": reason, "tool": tool_id}
+                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data, "status": "blocked", "error": reason}, separators=(",", ":")))
+                    self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": reason})
+                    continue
+
             try:
                 TaskPolicy.validate(session.get("mode", "plan"), tool_id, permission)
             except PermissionError as exc:
@@ -414,7 +466,15 @@ class AgentRuntime:
                 self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data, "status": "blocked", "error": str(exc)}, separators=(",", ":")))
                 self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": str(exc)})
                 continue
-            if permission not in {"workspace.read", "computer.observe"}:
+
+            needs_approval = False
+            if is_app_tool:
+                from .applications.dispatch import APPLICATION_READ_PERMISSIONS
+                needs_approval = app_action.requires_approval or (permission not in APPLICATION_READ_PERMISSIONS)
+            else:
+                needs_approval = permission not in {"workspace.read", "computer.observe"}
+
+            if needs_approval:
                 self.store.set_pending_tool(session_id, turn_id, invocation, tool_id, decision["arguments"])
                 with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='awaiting_approval',updated_at=? WHERE session_id=?", (_now(), session_id))
                 self._record(session_id, "tool.permission.required", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"]})
@@ -423,7 +483,12 @@ class AgentRuntime:
             if session_id in self._cancelled:
                 self._cancelled.discard(session_id)
                 return {"status": "cancelled"}
-            if tool_id.startswith("computer."):
+            if is_app_tool:
+                act_res = app_connector.execute_action(app_action.action_id, decision["arguments"], approved=False)
+                res_status = act_res.get("status", "completed")
+                res_err = act_res.get("error")
+                result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+            elif tool_id.startswith("computer."):
                 computer = WindowsComputerUse(workspace)
                 if operation in {"computer.list_applications", "computer.list_windows"}:
                     result_data = []
@@ -474,8 +539,22 @@ class AgentRuntime:
                 self.task_store.transition(task.task_id, "blocked")
                 self._tasks.pop(session_id, None)
             return {"status": "denied"}
-        workspace = Path(session["workspace"])
-        if pending["tool"].startswith("computer.") and pending["tool"] in {"computer.invoke_element", "computer.set_value", "computer.toggle_element", "computer.select_element", "computer.expand_element", "computer.collapse_element"}:
+        workspace = Path(session["workspace"]) if session.get("workspace") else None
+        if pending["tool"].startswith("application."):
+            from .applications.registry import get_application_registry
+            from .applications.dispatch import decode_tool_id
+            decoded = decode_tool_id(pending["tool"])
+            if not decoded:
+                raise ValueError(f"malformed pending application tool: {pending['tool']}")
+            app_id, action_id = decoded
+            connector = get_application_registry().get(app_id)
+            if not connector:
+                raise ValueError(f"unregistered application: {app_id}")
+            act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
+            res_status = act_res.get("status", "completed")
+            res_err = act_res.get("error")
+            result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+        elif pending["tool"].startswith("computer.") and pending["tool"] in {"computer.invoke_element", "computer.set_value", "computer.toggle_element", "computer.select_element", "computer.expand_element", "computer.collapse_element"}:
             operation = pending["tool"].removeprefix("computer."); args = pending["arguments"]; result_data = self.computer.act_reference(args["session_id"], args["reference_id"], operation, args.get("value"), approved=True); result = type("ComputerResult", (), {"data": result_data, "status": result_data.get("status", "failed"), "error": result_data.get("reason")})()
         elif pending["tool"] == "computer.launch":
             result_data = WindowsComputerUse(workspace).launch(pending["arguments"]["executable"], approved=True); result = type("ComputerResult", (), {"data": result_data, "status": result_data.get("status", "failed"), "error": result_data.get("reason")})()

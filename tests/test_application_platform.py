@@ -58,7 +58,8 @@ def test_ghidra_static_analysis_on_binary(tmp_path):
     res_fn = connector.execute_action("enumerate_functions", {"binary_path": str(bin_file)})
     assert res_fn["status"] == "completed"
     assert res_fn["format"] == "PE"
-    assert "_entry" in res_fn["simulated_symbols"]
+    assert res_fn["metadata"]["simulated"] is False
+    assert res_fn["metadata"]["real_inspection"] is True
 
 
 def test_reaper_rpp_project_parsing_and_track_addition(tmp_path):

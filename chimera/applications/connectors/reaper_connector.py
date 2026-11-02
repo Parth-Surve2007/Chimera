@@ -192,7 +192,7 @@ class ReaperConnector(BaseApplicationConnector):
             backup.write_bytes(proj_path.read_bytes())
 
             content = proj_path.read_text(encoding="utf-8", errors="replace")
-            # Insert track block before closing >
+            # Insert track block before closing > of the top-level project
             track_block = f"""  <TRACK
     NAME "{track_name}"
     VOLPAN 1 0 -1 -1 1
@@ -204,9 +204,18 @@ class ReaperConnector(BaseApplicationConnector):
     FREEMODE 0
   >
 """
-            if content.rstrip().endswith(">"):
-                idx = content.rstrip().rfind(">")
-                new_content = content[:idx] + track_block + content[idx:]
+            lines = content.splitlines(keepends=True)
+            # Find the top-level closing > line
+            close_idx = -1
+            for idx in range(len(lines) - 1, -1, -1):
+                stripped = lines[idx].strip()
+                if stripped == ">":
+                    close_idx = idx
+                    break
+
+            if close_idx != -1:
+                lines.insert(close_idx, track_block)
+                new_content = "".join(lines)
             else:
                 new_content = content + "\n" + track_block
 
