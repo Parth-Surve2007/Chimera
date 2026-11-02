@@ -20,6 +20,7 @@ class ModelProfile:
     structured_output: bool = False
     capability_evidence: str = "declared"
     enabled: bool = True
+    dialect: str | None = None  # Explicit API dialect override (e.g. "gemini_interactions", "openai_responses")
 
 class ModelProfileStore:
     def __init__(self, path: Path): self.path = Path(path)
@@ -133,8 +134,39 @@ class OpenAICompatibleAdapter:
 
 class ModelRouter:
     def choose(self, profiles: list[ModelProfile], *, require_tools=False, local_only=True, modality="text", pinned_id=None) -> tuple[ModelProfile | None, str]:
-        enabled=[p for p in profiles if p.enabled and (not local_only or not p.hosted) and modality in p.modalities and (not require_tools or p.tool_calling)]
+        # Filter profiles matching all constraints
+        enabled = [
+            p for p in profiles
+            if p.enabled
+            and (not local_only or not p.hosted)
+            and modality in p.modalities
+            and (not require_tools or p.tool_calling)
+        ]
         if pinned_id:
-            pinned=next((p for p in enabled if p.profile_id == pinned_id), None)
-            return (pinned, "pinned model selected" if pinned else "pinned model unavailable for requirements")
-        return (enabled[0], "first enabled compatible model") if enabled else (None, "no enabled model satisfies privacy and capability requirements")
+            pinned = next((p for p in enabled if p.profile_id == pinned_id), None)
+            if pinned:
+                return (pinned, "pinned model selected")
+
+            # Check why pinned model was disqualified
+            target = next((p for p in profiles if p.profile_id == pinned_id), None)
+            if not target:
+                return (None, f"Pinned model profile '{pinned_id}' not found.")
+            if not target.enabled:
+                return (None, f"Pinned model '{pinned_id}' is disabled.")
+            if local_only and target.hosted:
+                return (None, f"Pinned model '{pinned_id}' is a hosted remote model, which violates local-only policy.")
+            if require_tools and not target.tool_calling:
+                alternatives = [p.profile_id for p in enabled if p.tool_calling]
+                alt_text = f" Suggested alternatives: {', '.join(alternatives)}" if alternatives else " No alternative tool-capable models configured."
+                return (None, f"Model '{pinned_id}' does not support required tool calling.{alt_text}")
+            if modality not in target.modalities:
+                return (None, f"Model '{pinned_id}' does not support required modality '{modality}' (supports: {', '.join(target.modalities)}).")
+            return (None, f"Pinned model '{pinned_id}' unavailable for requirements.")
+
+        if enabled:
+            return (enabled[0], "first enabled compatible model")
+
+        # Explain failure accurately
+        if local_only and any(p.hosted and p.enabled for p in profiles):
+            return (None, "no enabled local model satisfies privacy and capability requirements (remote models blocked by local-only policy)")
+        return (None, "no enabled model satisfies privacy and capability requirements")

@@ -17,7 +17,7 @@ from pathlib import Path
 from .tools import WorkspaceTools, tool_catalog
 from .computer_use import WindowsComputerUse
 from .computer_runtime import ComputerSessionManager
-from .model_hub import ModelProfileStore, OpenAICompatibleAdapter
+from .model_hub import ModelProfileStore
 from .task_execution import TaskStore, TaskPolicy
 
 
@@ -244,17 +244,15 @@ class AgentRuntime:
         if not profile_id or not self.profile_store: return self.provider
         profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id and p.enabled), None)
         if profile is None or (selection["local_only"] and profile.hosted): raise RuntimeError("selected model profile is unavailable or violates local-only policy")
-        if profile.hosted:
-            credentials = getattr(self.provider, "credentials", None)
-            if profile.provider_id == "meta" or "meta.ai" in (profile.base_url or ""):
-                from .meta_provider import MetaModelProvider
-                accountant = getattr(self.provider, "accountant", None)
-                return MetaModelProvider(profile, credentials, accountant=accountant)
-            return OpenAICompatibleAdapter(profile, credentials)
-        config = getattr(self.provider, "config", None)
-        if not config: raise RuntimeError("local provider configuration is unavailable")
-        from .local_model import LocalModelConfig, LocalModelProvider
-        return LocalModelProvider(LocalModelConfig(Path(profile.model_path), config.cli_path, config.context, config.max_tokens, config.timeout, config.threads, config.gpu_layers, config.server_path))
+        from .providers.registry import get_provider_registry
+        credentials = getattr(self.provider, "credentials", None)
+        accountant = getattr(self.provider, "accountant", None)
+        local_p = self.provider if not profile.hosted else None
+        if not profile.hosted and getattr(self.provider, "config", None):
+            from .local_model import LocalModelConfig, LocalModelProvider
+            config = self.provider.config
+            local_p = LocalModelProvider(LocalModelConfig(Path(profile.model_path), config.cli_path, config.context, config.max_tokens, config.timeout, config.threads, config.gpu_layers, config.server_path))
+        return get_provider_registry().resolve_from_profile(profile, credentials=credentials, local_provider=local_p, accountant=accountant)
 
     def _protocol_catalog(self, session=None):
         aliases = {("workspace." + name if "." not in name else name): name for name in tool_catalog()["operations"]}

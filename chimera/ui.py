@@ -173,9 +173,23 @@ class MainWindow:
         self.hub_model = ft.TextField(label="MODEL ID OR GGUF PATH", color=TEXT, border_color=BORDER)
         self.hub_url = ft.TextField(label="API BASE URL (OPTIONAL)", color=TEXT, border_color=BORDER)
         self.hub_secret = ft.TextField(label="API CREDENTIAL (NOT STORED IN PROFILE)", color=TEXT, border_color=BORDER, password=True, can_reveal_password=False)
-        cards = [ft.Container(ft.Column([ft.Text(f"{p.display_name or p.model_id}  ·  {p.provider_id}  ·  {'API' if p.hosted else 'LOCAL'}", color=TEXT), ft.Text(f"CAPABILITIES: {', '.join(p.modalities)}  TOOLS: {p.tool_calling}  STRUCTURED: {p.structured_output}  STATE: {'ENABLED' if p.enabled else 'DISABLED'}  EVIDENCE: {p.capability_evidence}", color=SECONDARY, size=11), ft.Row([ft.TextButton("USE", on_click=lambda e, pid=p.profile_id: self._select_session_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("DEFAULT", on_click=lambda e, pid=p.profile_id: self._set_default_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("TOGGLE", on_click=lambda e, pid=p.profile_id: self._toggle_model(pid), style=ft.ButtonStyle(color=SECONDARY)), ft.TextButton("REMOVE", on_click=lambda e, pid=p.profile_id: self._remove_model(pid), style=ft.ButtonStyle(color=SECONDARY))])]), padding=ft.Padding.all(12), border=ft.Border.all(1, BORDER)) for p in profiles]
-        form = ft.Container(ft.Column([ft.Text("ADD OR EDIT PROFILE", color=MUTED, size=10), self.hub_id, self.hub_provider, self.hub_model, self.hub_url, self.hub_secret, ft.Row([self._button("SAVE LOCAL", lambda e: self._save_model_profile(False)), self._button("SAVE API", lambda e: self._save_model_profile(True)), ft.TextButton("TEST SELECTED API", on_click=self._test_model_profile, style=ft.ButtonStyle(color=FOCUS))])], spacing=8), bgcolor=SURFACE, padding=ft.Padding.all(14), border=ft.Border.all(1, BORDER))
-        self._set([ft.Text("MODEL INTELLIGENCE HUB", size=18, color=TEXT), ft.Text("Hosted providers are never contacted during profile browsing or saving. Credentials are stored separately in Windows Credential Manager.", color=MUTED, size=11), form, *(cards or [ft.Text("No model profiles configured yet.", color=SECONDARY)])])
+        self.hub_tools = ft.Checkbox(label="ENABLE TOOL CALLING (E.G. WORKSPACE INSPECTION)", value=True)
+        self.hub_dialect = ft.TextField(label="API DIALECT (OPTIONAL: openai_compatible, openai_responses, anthropic_messages, gemini_interactions, custom)", color=TEXT, border_color=BORDER)
+        cards = [ft.Container(ft.Column([ft.Text(f"{p.display_name or p.model_id}  ·  {p.provider_id}  ·  {'API' if p.hosted else 'LOCAL'}", color=TEXT), ft.Text(f"DIALECT: {getattr(p, 'dialect', None) or 'auto'}  CAPABILITIES: {', '.join(p.modalities)}  TOOLS: {p.tool_calling}  STRUCTURED: {p.structured_output}  STATE: {'ENABLED' if p.enabled else 'DISABLED'}  EVIDENCE: {p.capability_evidence}", color=SECONDARY, size=11), ft.Row([ft.TextButton("USE", on_click=lambda e, pid=p.profile_id: self._select_session_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("COMPAT LAB", on_click=lambda e, pid=p.profile_id: self._run_compat_lab(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("DEFAULT", on_click=lambda e, pid=p.profile_id: self._set_default_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("TOGGLE", on_click=lambda e, pid=p.profile_id: self._toggle_model(pid), style=ft.ButtonStyle(color=SECONDARY)), ft.TextButton("REMOVE", on_click=lambda e, pid=p.profile_id: self._remove_model(pid), style=ft.ButtonStyle(color=SECONDARY))])]), padding=ft.Padding.all(12), border=ft.Border.all(1, BORDER)) for p in profiles]
+        form = ft.Container(ft.Column([ft.Text("ADD OR EDIT PROFILE", color=MUTED, size=10), self.hub_id, self.hub_provider, self.hub_model, self.hub_url, self.hub_secret, self.hub_dialect, self.hub_tools, ft.Row([self._button("SAVE LOCAL", lambda e: self._save_model_profile(False)), self._button("SAVE API", lambda e: self._save_model_profile(True)), ft.TextButton("TEST SELECTED API", on_click=self._test_model_profile, style=ft.ButtonStyle(color=FOCUS))])], spacing=8), bgcolor=SURFACE, padding=ft.Padding.all(14), border=ft.Border.all(1, BORDER))
+        self._set([ft.Text("MODEL INTELLIGENCE HUB", size=18, color=TEXT), ft.Text("Universal model architecture: local or hosted (Meta, Anthropic, Gemini, OpenAI, custom). Credentials stored securely.", color=MUTED, size=11), form, *(cards or [ft.Text("No model profiles configured yet.", color=SECONDARY)])])
+    def _run_compat_lab(self, profile_id):
+        try:
+            profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id), None)
+            if not profile: raise ValueError("Profile not found")
+            from .providers.registry import get_provider_registry
+            from .providers.compatibility_lab import ProviderCompatibilityLab, ConformanceReportStore
+            from .providers.schemas import ExecutionProvenance
+            prov = get_provider_registry().resolve_from_profile(profile, credentials=CredentialStore())
+            store = ConformanceReportStore(self.registry.data_dir / "conformance_reports.json")
+            report = ProviderCompatibilityLab(store).run_assessment(prov, profile.model_id, provenance=ExecutionProvenance.LIVE_LOCAL if not profile.hosted else ExecutionProvenance.LIVE_REMOTE)
+            self._toast(f"Lab Result: {report.certification_tier} ({report.overall_status})")
+        except Exception as exc: self._toast(f"Compat Lab error: {exc}")
     def _select_session_model(self, profile_id):
         try:
             profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id), None)
@@ -187,7 +201,20 @@ class MainWindow:
     def _save_model_profile(self, hosted):
         try:
             from .model_hub import ModelProfile
-            profile = ModelProfile(self.hub_id.value.strip(), self.hub_provider.value.strip(), self.hub_model.value.strip(), hosted, model_path=None if hosted else self.hub_model.value.strip(), base_url=self.hub_url.value.strip() or None, tool_calling=False, structured_output=False, capability_evidence="configured")
+            enable_tools = getattr(self.hub_tools, "value", True)
+            dialect_val = (self.hub_dialect.value or "").strip() or None
+            profile = ModelProfile(
+                self.hub_id.value.strip(),
+                self.hub_provider.value.strip(),
+                self.hub_model.value.strip(),
+                hosted,
+                model_path=None if hosted else self.hub_model.value.strip(),
+                base_url=self.hub_url.value.strip() or None,
+                tool_calling=bool(enable_tools),
+                structured_output=bool(enable_tools),
+                capability_evidence="configured",
+                dialect=dialect_val,
+            )
             if not profile.profile_id or not profile.provider_id or not profile.model_id: raise ValueError("profile ID, provider and model are required")
             self.profile_store.save(profile)
             if hosted and self.hub_secret.value: CredentialStore().set(profile.provider_id, self.hub_secret.value)
@@ -211,8 +238,12 @@ class MainWindow:
         try:
             profile = next((p for p in self.profile_store.list() if p.profile_id == (self.hub_id.value or "").strip()), None)
             if not profile or not profile.hosted: raise ValueError("select or enter a hosted API profile first")
-            result = await asyncio.to_thread(OpenAICompatibleAdapter(profile).generate, [{"role": "user", "content": "Reply with the word test."}], 20)
-            self._toast(f"Provider ready: {result.get('provider')} / {result.get('model')} ({result.get('duration_ms')} ms)")
+            from .providers.registry import get_provider_registry
+            provider = get_provider_registry().resolve_from_profile(profile, credentials=CredentialStore())
+            from .providers.schemas import GenerationRequest, NormalizedMessage
+            req = GenerationRequest(model=profile.model_id, messages=(NormalizedMessage(role="user", content="Reply with the word test."),))
+            resp = await asyncio.to_thread(provider.generate, req)
+            self._toast(f"Provider ready: {resp.provider_id} / {resp.model} ({resp.usage.duration_ms} ms)")
         except Exception as exc: self._toast(f"Provider test failed: {exc}")
     def _candidate_list(self):
         try: candidates = self.review.list()
