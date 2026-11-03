@@ -22,12 +22,42 @@ def main():
     # CI runs this mode against the built executable. Reaching this point
     # proves the frozen package and all startup imports were resolved.
     if os.environ.get("CHIMERA_PACKAGED_SMOKE") == "1":
+        import json
+        from importlib import resources
+
         import flet
         import flet_desktop
         from .local_model import LocalModelProvider, config_from_env
 
         if flet is None:
             raise RuntimeError("Flet is unavailable in the packaged application")
+
+        # Flet loads these package resources lazily when icon enums are first
+        # accessed. Validate both during CI so a missing JSON file cannot make
+        # it into a user-facing portable build.
+        required_icon_resources = (
+            ("flet.controls.material", "icons.json"),
+            ("flet.controls.cupertino", "cupertino_icons.json"),
+        )
+        for package_name, filename in required_icon_resources:
+            resource = resources.files(package_name).joinpath(filename)
+            try:
+                payload = json.loads(resource.read_text(encoding="utf-8"))
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"Packaged Flet icon resource is missing: "
+                    f"{package_name}/{filename}"
+                ) from exc
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"Packaged Flet icon resource is unreadable: "
+                    f"{package_name}/{filename}: {exc}"
+                ) from exc
+            if not isinstance(payload, dict) or not payload:
+                raise RuntimeError(
+                    f"Packaged Flet icon resource is empty or invalid: "
+                    f"{package_name}/{filename}"
+                )
 
         # Require the embedded archive explicitly before extraction. This keeps
         # CI honest: the packaged app cannot pass by silently downloading the
