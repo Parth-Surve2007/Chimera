@@ -61,7 +61,18 @@ class MetaApiMockHandler(BaseHTTPRequestHandler):
         else:
             # Verify tool execution result was returned to model
             messages = payload.get("messages", [])
-            assert any(m.get("role") == "tool" for m in messages)
+            assistant_call = next(
+                (m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")),
+                None,
+            )
+            tool_result = next((m for m in messages if m.get("role") == "tool"), None)
+            assert assistant_call is not None
+            assert tool_result is not None
+            call = assistant_call["tool_calls"][0]
+            assert call["id"] == "call_meta_001"
+            assert call["function"]["name"] == "workspace.list_files"
+            assert json.loads(call["function"]["arguments"]) == {"relative": ".", "recursive": True}
+            assert tool_result["tool_call_id"] == "call_meta_001"
             resp = {
                 "id": "chatcmpl-mock-turn2",
                 "object": "chat.completion",
@@ -220,3 +231,55 @@ def test_sam_visual_perception_corroboration():
     # menu-1 has no matching visual region
     assert corroborated[2].reference_id == "menu-1"
     assert corroborated[2].verified is False
+
+
+def test_meta_tool_formatter_exposes_registered_application_actions():
+    """Meta receives app capabilities from AgentRuntime, not only workspace tools."""
+    catalog = {
+        "tools": [
+            {
+                "id": "application.rea.list_backends",
+                "description": "List registered reverse-engineering analysis backends.",
+                "arguments": {},
+            },
+            {
+                "id": "workspace.list_files",
+                "description": "List files in the active workspace.",
+                "arguments": {"relative": "string", "recursive": "boolean"},
+            },
+        ]
+    }
+
+    formatted = MetaModelProvider._format_tools(catalog)
+    names = [item["function"]["name"] for item in formatted]
+    assert "application.rea.list_backends" in names
+    assert "workspace.list_files" in names
+    app_tool = next(item for item in formatted if item["function"]["name"] == "application.rea.list_backends")
+    assert app_tool["function"]["parameters"]["additionalProperties"] is False
+
+
+def test_meta_tool_history_reconstructs_assistant_call_and_result_pair():
+    """Persisted results become the assistant-call/tool-result pair expected by Meta."""
+    history = [
+        type("Message", (), {"role": "user", "content": "Inspect the app ecosystem."})(),
+        type("Message", (), {
+            "role": "tool",
+            "content": json.dumps({
+                "invocation_id": "call_app_001",
+                "tool": "application.rea.list_backends",
+                "arguments": {},
+                "result": {"backends": ["builtin_static"]},
+                "status": "completed",
+                "error": None,
+            }),
+        })(),
+    ]
+
+    formatted = MetaModelProvider._format_messages(history)
+    assert formatted[0] == {"role": "user", "content": "Inspect the app ecosystem."}
+    assert formatted[1]["role"] == "assistant"
+    assert formatted[1]["tool_calls"][0]["id"] == "call_app_001"
+    assert formatted[1]["tool_calls"][0]["function"]["name"] == "application.rea.list_backends"
+    assert formatted[2]["role"] == "tool"
+    assert formatted[2]["tool_call_id"] == "call_app_001"
+    assert "builtin_static" in formatted[2]["content"]
