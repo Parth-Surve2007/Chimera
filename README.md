@@ -469,7 +469,8 @@ Chimera: Lists visible applications (read-only). The operator explicitly authori
 **Architecture**
 - Multi-step planning is foundational, not yet dependency-graph complete
 - Parallel task execution is not implemented
-- Skill library versioning and regression testing are planned
+- TaskStore records session-scoped tasks and events; a separate persistent cross-session goals/ambitions ledger is not yet implemented
+- Skill library versioning, isolated regression testing and governed replay are planned
 
 **Application Ecosystem**
 - Ghidra connector requires native Ghidra and JDK 17+ for headless execution
