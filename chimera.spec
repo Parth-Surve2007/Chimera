@@ -3,7 +3,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['chimera/app.py'],
+    ['launcher.py'],
     pathex=[],
     binaries=[],
     datas=[
