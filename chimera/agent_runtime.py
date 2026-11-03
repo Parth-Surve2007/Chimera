@@ -395,6 +395,177 @@ class AgentRuntime:
                 mapped = {"idle": "completed", "cancelled": "cancelled", "awaiting_approval": "waiting_approval", "failed": "failed", "reasoning": "running"}.get(state, "failed")
                 self.task_store.transition(task_id, mapped)
 
+
+    def execute_workflow_tool(
+        self,
+        session_id: str,
+        tool_id: str,
+        arguments: dict,
+        *,
+        plan_id: str,
+        invocation_id: str,
+        approved: bool = False,
+    ) -> dict:
+        """Execute a workflow step through the same policy boundary as agent tools."""
+        session = self.store.session(session_id)
+        if not session:
+            raise KeyError("agent session not found")
+        if not isinstance(arguments, dict):
+            raise ValueError("workflow arguments must be an object")
+        if not (tool_id.startswith("workspace.") or tool_id.startswith("application.")):
+            raise ValueError("unsupported workflow tool namespace")
+        if not isinstance(plan_id, str) or not plan_id.strip():
+            raise ValueError("workflow plan_id is required")
+        if not isinstance(invocation_id, str) or not invocation_id.strip():
+            raise ValueError("workflow invocation_id is required")
+
+        self._decision({
+            "type": "tool_call",
+            "tool": tool_id,
+            "arguments": arguments,
+            "invocation_id": invocation_id,
+        })
+        operation = tool_id.removeprefix("workspace.") if tool_id.startswith("workspace.") else tool_id
+        self._validate_arguments(operation, arguments)
+
+        connector = None
+        action = None
+        workspace = None
+        if tool_id.startswith("application."):
+            from .applications.registry import get_application_registry
+            from .applications.dispatch import decode_tool_id, validate_application_arguments, APPLICATION_READ_PERMISSIONS
+            decoded = decode_tool_id(tool_id)
+            if not decoded:
+                raise ValueError(f"malformed application tool id: {tool_id}")
+            app_id, action_id = decoded
+            connector = get_application_registry().get(app_id)
+            if connector is None:
+                raise ValueError(f"unregistered application: {app_id}")
+            manifest = connector.discover()
+            if manifest is not None:
+                connector.manifest = manifest
+            action = next((item for item in connector.manifest.actions if item.action_id == action_id), None)
+            if action is None or getattr(action, "unavailable", False):
+                raise ValueError(f"application action is unavailable: {tool_id}")
+            validate_application_arguments(action, arguments)
+            permission = action.permission
+            needs_approval = bool(action.requires_approval or permission not in APPLICATION_READ_PERMISSIONS)
+        else:
+            from .tools import tool_catalog
+            current = self.store.session(session_id)
+            workspace = Path(current["workspace"]) if current and current.get("workspace") else None
+            if workspace is None or not workspace.is_dir():
+                return {"status": "blocked", "error": "a valid workspace is required"}
+            spec = tool_catalog()["operations"].get(operation)
+            if spec is None:
+                raise ValueError(f"unregistered workflow operation: {operation}")
+            permission = spec["permission"]
+            needs_approval = permission not in {"workspace.read", "computer.observe"}
+
+        self._record(session_id, "tool.call.requested", {
+            "turn_id": plan_id, "invocation_id": invocation_id,
+            "tool": tool_id, "arguments": arguments, "source": "workflow",
+        })
+
+        if connector is not None:
+            allowed, reason, action = connector.validate_action_call(
+                action.action_id, arguments, mode=session.get("mode", "plan")
+            )
+            if not allowed:
+                status, data, error = "blocked", {}, reason
+                self.store.add_message(session_id, "tool", json.dumps({
+                    "invocation_id": invocation_id, "tool": tool_id,
+                    "result": data, "status": status, "error": error,
+                }, separators=(",", ":")))
+                self._record(session_id, "tool.failed", {
+                    "turn_id": plan_id, "invocation_id": invocation_id,
+                    "tool": tool_id, "status": status, "data": data, "error": error,
+                })
+                return {"status": status, "error": error}
+
+        try:
+            TaskPolicy.validate(session.get("mode", "plan"), tool_id, permission)
+        except PermissionError as exc:
+            self.store.add_message(session_id, "tool", json.dumps({
+                "invocation_id": invocation_id, "tool": tool_id,
+                "result": {}, "status": "blocked", "error": str(exc),
+            }, separators=(",", ":")))
+            self._record(session_id, "tool.failed", {
+                "turn_id": plan_id, "invocation_id": invocation_id,
+                "tool": tool_id, "status": "blocked", "data": {}, "error": str(exc),
+            })
+            return {"status": "blocked", "error": str(exc)}
+
+        pending = self.store.pending_tool(session_id)
+        if needs_approval and not approved:
+            if pending:
+                if (
+                    pending.get("tool") == tool_id
+                    and pending.get("arguments") == arguments
+                    and pending.get("invocation_id") == invocation_id
+                ):
+                    return {"status": "awaiting_approval", "tool": tool_id, "invocation_id": invocation_id, "arguments": arguments}
+                raise RuntimeError("another action is already awaiting approval in this session")
+            self.store.set_pending_tool(session_id, plan_id, invocation_id, tool_id, arguments)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='awaiting_approval',updated_at=? WHERE session_id=?", (_now(), session_id))
+            self._record(session_id, "tool.permission.required", {
+                "turn_id": plan_id, "invocation_id": invocation_id,
+                "tool": tool_id, "arguments": arguments, "source": "workflow",
+            })
+            return {"status": "awaiting_approval", "tool": tool_id, "invocation_id": invocation_id, "arguments": arguments}
+
+        if needs_approval:
+            if (
+                not pending
+                or pending.get("tool") != tool_id
+                or pending.get("arguments") != arguments
+                or pending.get("invocation_id") != invocation_id
+                or session.get("state") != "awaiting_approval"
+            ):
+                raise PermissionError("approval does not match the exact pending workflow action")
+            self._record(session_id, "tool.permission.granted", {
+                "turn_id": plan_id, "invocation_id": invocation_id,
+                "tool": tool_id, "source": "operator",
+            })
+        elif approved:
+            raise PermissionError("this workflow action is not awaiting approval")
+
+        self._record(session_id, "tool.started", {
+            "turn_id": plan_id, "invocation_id": invocation_id,
+            "tool": tool_id, "arguments": arguments,
+        })
+        try:
+            if connector is not None:
+                raw = connector.execute_action(action.action_id, arguments, approved=approved)
+                status = raw.get("status", "completed") if isinstance(raw, dict) else "failed"
+                data = raw if isinstance(raw, dict) else {}
+                error = raw.get("error") if isinstance(raw, dict) else "connector returned a non-object result"
+            else:
+                from .tools import WorkspaceTools
+                result = WorkspaceTools(
+                    workspace, workspace / ".chimera-agent-artifacts" / session_id
+                ).run(operation, arguments, approved=approved)
+                status, data, error = result.status, result.data, result.error
+        except Exception as exc:
+            status, data, error = "failed", {}, str(exc)
+
+        if needs_approval:
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
+
+        self.store.add_message(session_id, "tool", json.dumps({
+            "invocation_id": invocation_id, "tool": tool_id,
+            "result": data, "status": status, "error": error,
+        }, separators=(",", ":")))
+        self._record(session_id, "tool.completed" if status == "completed" else "tool.failed", {
+            "turn_id": plan_id, "invocation_id": invocation_id,
+            "tool": tool_id, "status": status, "data": data, "error": error,
+        })
+        return {"status": status, "data": data, "error": error, "tool": tool_id, "invocation_id": invocation_id}
+
+
     def _agent_loop(self, session_id, session, message, approved_invocation=None, max_turns=8, max_tools=12, cancel_event=None):
         turn_id = uuid.uuid4().hex
         workspace = Path(session["workspace"]) if session.get("workspace") else None

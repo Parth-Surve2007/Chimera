@@ -1,7 +1,7 @@
 # Chimera Roadmap
 
 > **Last updated:** 2026-11-03
-> **Current version:** Phase 5.2 — Reverse Engineer Anything (REA)
+> **Current version:** Phase 5.3 — Cross-Capability Agentic Workflows
 
 Chimera is an open, local-first AI agent platform. This roadmap describes its engineering direction and capability maturity across eight strategic pillars.
 
@@ -53,7 +53,15 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ---
 
-## Near-Term (Phase 5.1)
+### ✅ Phase 5.3 — Cross-Capability Agentic Workflows
+- Dependency-aware sequential workflow templates across workspace and REA
+- Each step routed through AgentRuntime tool validation and permission enforcement
+- Protected artifact writes pause for explicit operator approval and resume
+- Result verification and truthful completed, failed and blocked states
+- Synthetic workflow-executor success removed; no automatic approval
+- Model-driven planning, general-purpose replanning and parallel execution remain planned
+
+## Near-Term (Phase 5.4)
 
 **Theme: Workspace Agent Maturity**
 
@@ -65,7 +73,7 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ---
 
-## Medium-Term (Phase 5.3)
+## Medium-Term (Phase 5.5)
 
 **Theme: Development Workflow Integration**
 
@@ -77,7 +85,7 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ---
 
-## Medium-Term (Phase 5.4)
+## Medium-Term (Phase 5.6)
 
 **Theme: Application Ecosystem Expansion**
 
@@ -134,13 +142,12 @@ These constraints are non-negotiable at every phase:
 | Task policy enforcement | ✅ | ✅ | ✅ | ✅ |
 | Application connector SDK | ✅ | ✅ | ✅ | 🟡 |
 | Ghidra static analysis | ✅ | ✅ | ✅ | 🟡 (needs Ghidra installed) |
-| REAPER project editing | ✅ | ✅ | ✅ | 🟡 (needs REAPER installed) |
 | Experience learning | ✅ | ✅ | ✅ | 🟡 |
-| Multi-step planning | 🟡 | 🟡 | ✅ | 🔴 |
+| Cross-capability sequential workflows | ✅ | ✅ | ✅ | 🟡 |
 | Parallel task execution | 🔴 | 🔴 | 🟡 | 🔴 |
 | Git connector | 🔴 | 🔴 | 🟡 | 🔴 |
 | Browser connector | 🔴 | 🔴 | 🟡 | 🔴 |
-| Skill library versioning | 🔴 | 🔴 | 🟡 | 🔴 |
+| Skill library versioning and approved replay | 🔴 | 🔴 | 🟡 | 🔴 |
 
 **Key:** ✅ Done · 🟡 Partial/Foundation · 🔴 Not started
 

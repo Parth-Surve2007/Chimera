@@ -34,7 +34,7 @@ Chimera does not claim to be a completed AGI or frontier model equivalent. It is
 | **REA: Reverse Engineer Anything** | ✅ Implemented — Artifact detection, static analysis, Ghidra integration |
 | **Ghidra integration** | 🟡 Partial — Headless execution (requires Ghidra + JDK 17+) |
 | **Experience learning** | 🟡 Partial — Trace capture, skill extraction, approval lifecycle |
-| **Task planning** | 🟡 Foundation — Single-step planning, multi-step planned |
+| **Task planning** | 🟡 Implemented foundation — dependency-aware sequential templates, AgentRuntime-governed execution, permission checks and approval pause/resume; model-driven planning and parallel execution remain planned |
 | **Application connectors** | 🟡 Foundation — Ghidra and REA connectors, ecosystem extensible |
 
 ---
@@ -214,7 +214,6 @@ Persistent Memory & Audit Trail
 **Skill Lifecycle**
 1. **Proposed** — Extracted from trace, stored in skill store
 2. **Approved** — Operator reviews and approves the skill
-3. **Installed** — Skill becomes available for future sessions
 4. **Rejected** — Skill discarded if not useful
 
 **Current State**
@@ -472,23 +471,23 @@ Chimera: [Approval required] Open Notepad? [User approves] [Invokes pywinauto] N
 
 See [ROADMAP.md](ROADMAP.md) for detailed phase planning.
 
-**Current Phase: 5.2 — Reverse Engineer Anything (REA)**
+**Current Phase: 5.3 — Cross-Capability Agentic Workflows**
 
-**Near-Term (Phase 5.1)**
+**Implemented foundation (Phase 5.3)**
 - Persistent task context across sessions
 - Multi-step plan visualization
 - Parallel task execution with safety barriers
 - Agent-generated sub-task delegation
 - Token-budget awareness
 
-**Medium-Term (Phase 5.3)**
+**Medium-Term (Phase 5.5)**
 - Git connector (status, diff, stage, commit)
 - Shell/terminal connector with sandboxed isolation
 - Python/Node REPL connector
 - File-watcher integration
 - Dependency vulnerability scanning
 
-**Medium-Term (Phase 5.4)**
+**Medium-Term (Phase 5.6)**
 - VS Code connector
 - Browser connector (headless Chrome)
 - Obsidian connector

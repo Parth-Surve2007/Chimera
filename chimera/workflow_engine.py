@@ -408,8 +408,21 @@ class WorkflowExecutor:
             ready_step = self._find_next_ready_step(plan)
             if not ready_step:
                 # Check if all steps are completed
-                if all(s.execution_state in (StepState.COMPLETED, StepState.FAILED, StepState.CANCELLED) for s in plan.steps):
-                    plan.status = "completed" if any(s.execution_state == StepState.FAILED for s in plan.steps) else "completed"
+                states = {s.execution_state for s in plan.steps}
+                if states and states.issubset({StepState.COMPLETED}):
+                    plan.status = "completed"
+                    self.plan_store.save_plan(plan)
+                    return
+                if StepState.AWAITING_APPROVAL in states:
+                    plan.status = "awaiting_approval"
+                    self.plan_store.save_plan(plan)
+                    return
+                if StepState.FAILED in states:
+                    plan.status = "failed"
+                    self.plan_store.save_plan(plan)
+                    return
+                if StepState.CANCELLED in states:
+                    plan.status = "cancelled"
                     self.plan_store.save_plan(plan)
                     return
                 # No ready steps but not all done - blocked
@@ -482,18 +495,11 @@ class WorkflowExecutor:
             self.plan_store.save_plan(plan)
 
     def _execute_operation(self, step: WorkflowStep) -> dict[str, Any]:
-        """Execute a single operation through the appropriate capability."""
-        # This is a simplified implementation
-        # In production, this would route through AgentRuntime's tool execution
-        # For now, return a mock result
-        return {
-            "status": "completed",
-            "data": {
-                "operation": step.tool,
-                "capability": step.capability,
-                "arguments": step.arguments,
-            },
-        }
+        """Fail closed when no real AgentRuntime dispatcher is configured."""
+        raise NotImplementedError(
+            "No direct workflow execution backend exists. "
+            "Use AgenticWorkflowOrchestrator and AgentRuntime."
+        )
 
     def _verify_result(self, step: WorkflowStep, result: dict[str, Any]) -> str:
         """Verify that the result meets expectations."""

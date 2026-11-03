@@ -12,6 +12,7 @@ from .local_model import config_from_env, check_status, save_persisted_config, L
 from .agent_loop import execute_objective
 from .tools import CAPABILITY
 from .agent_runtime import AgentRuntime, AgentSessionStore
+from .workflow_integration import AgenticWorkflowOrchestrator
 try: import flet as ft
 except ImportError: ft = None
 
@@ -353,7 +354,7 @@ class MainWindow:
         session_model_info = self.agent_store.session_model(self.agent_session_id)
         selected_pid = session_model_info.get("profile_id")
         provider_badge = "LOCAL (GGUF DEFAULT)" if not selected_pid else f"PROVIDER: {selected_pid} ({'API / CLOUD' if not session_model_info.get('local_only') else 'LOCAL'})"
-        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), ft.Row([ft.Text(f"MODE / {session_mode.upper()}", color=FOCUS, size=10), ft.Text(provider_badge, color=SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=FOCUS)), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
+        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), ft.Row([ft.Text(f"MODE / {session_mode.upper()}", color=FOCUS, size=10), ft.Text(provider_badge, color=SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=FOCUS)), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS)), self._button("RUN WORKFLOW", self._run_multi_capability_workflow)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
         clarification = [ft.Row([self.workspace_path_field, self._button("USE DIRECTORY", self._use_workspace_path), ft.TextButton("BROWSE", on_click=self._pick_workspace, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(f"SELECTED: {self.workspace_path or 'NOT SELECTED'}", color=MUTED, size=10)]
         if self.pending_questions:
             if self.pending_state == "pending":
@@ -382,6 +383,39 @@ class MainWindow:
             else: self.conversation_messages.append(("assistant", f"I could not complete that locally: {result.get('error', 'unknown error')}"))
         finally:
             self.task_busy = False; self._show_overview()
+    async def _run_multi_capability_workflow(self, e=None):
+        if self.task_busy:
+            return self._toast("A request is already running.")
+        if not self.workspace_path:
+            return self._toast("Select a workspace before running a multi-step workflow.")
+        objective = (self.task_field.value or "").strip()
+        if not objective:
+            return self._toast("Describe the workflow objective first.")
+        self.task_busy = True
+        self.conversation_messages.append(("user", f"[MULTI-STEP WORKFLOW] {objective}"))
+        self.task_field.value = ""
+        self._show_overview()
+        try:
+            orchestrator = AgenticWorkflowOrchestrator(
+                self.agent_runtime, self.agent_runtime.task_store, self.workspace_path
+            )
+            result = await asyncio.to_thread(
+                orchestrator.execute_objective, self.agent_session_id, objective
+            )
+            if result.get("status") == "awaiting_approval":
+                self.pending_agent_approval = self.agent_store.pending_tool(self.agent_session_id)
+                self.conversation_messages.append(("assistant", f"Workflow paused for approval after {result.get('steps_executed', 0)} steps. Plan {result.get('plan_id')}"))
+            elif result.get("status") == "completed":
+                self.conversation_messages.append(("assistant", f"Workflow completed: {result.get('steps_executed', 0)}/{result.get('steps_total', 0)} steps. Plan {result.get('plan_id')}"))
+            else:
+                self.conversation_messages.append(("assistant", f"Workflow {result.get('status')}: {result.get('steps_executed', 0)}/{result.get('steps_total', 0)} steps. Plan {result.get('plan_id')}"))
+        except Exception as exc:
+            self.conversation_messages.append(("assistant", f"Workflow could not run: {exc}"))
+            self._toast(f"Workflow failed: {exc}")
+        finally:
+            self.task_busy = False
+            self._show_overview()
+
     async def _pick_workspace(self, e=None):
         try:
             selected = await self.workspace_picker.get_directory_path()
@@ -417,10 +451,26 @@ class MainWindow:
         if self.task_busy: return
         self.task_busy = True
         try:
-            result = await asyncio.to_thread(self.agent_runtime.approve_pending, self.agent_session_id, approved)
-            self.pending_agent_approval = None
-            if result.get("status") == "completed": self.conversation_messages.append(("assistant", result["message"].content))
-            elif result.get("status") not in {"denied"}: self.conversation_messages.append(("assistant", f"The approved operation did not complete: {result.get('error', 'unknown error')}"))
+            pending = self.agent_store.pending_tool(self.agent_session_id)
+            if pending and str(pending.get("invocation_id", "")).startswith("wf:"):
+                orchestrator = AgenticWorkflowOrchestrator(
+                    self.agent_runtime, self.agent_runtime.task_store, self.workspace_path
+                )
+                result = await asyncio.to_thread(
+                    orchestrator.approve_pending, self.agent_session_id, approved
+                )
+                self.pending_agent_approval = self.agent_store.pending_tool(self.agent_session_id)
+                if result.get("status") == "completed":
+                    self.conversation_messages.append(("assistant", f"Workflow completed: {result.get('steps_executed', 0)}/{result.get('steps_total', 0)} steps. Plan {result.get('plan_id')}"))
+                elif result.get("status") == "awaiting_approval":
+                    self.conversation_messages.append(("assistant", "The workflow reached another protected action and is awaiting your approval."))
+                elif result.get("status") != "denied":
+                    self.conversation_messages.append(("assistant", f"Workflow {result.get('status')}: inspect the persisted workflow timeline for details."))
+            else:
+                result = await asyncio.to_thread(self.agent_runtime.approve_pending, self.agent_session_id, approved)
+                self.pending_agent_approval = None
+                if result.get("status") == "completed": self.conversation_messages.append(("assistant", result["message"].content))
+                elif result.get("status") not in {"denied"}: self.conversation_messages.append(("assistant", f"The approved operation did not complete: {result.get('error', 'unknown error')}"))
         except Exception as exc: self._toast(f"Approval handling failed: {exc}")
         finally:
             self.task_busy = False; self._show_overview()
