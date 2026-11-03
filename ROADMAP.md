@@ -64,11 +64,21 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 ### Phase 5.3.1 — First-Run Agent Workspace & Local Runtime Verification
 - Persistent chat workspace with conversation history, resumable sessions, and first-run prompt suggestions
 - Inline user/assistant timeline, visible tool-result cards, active-task indicator, stop control, and exact-action approval cards
-- Graphite / greige / bronze UI; chat opens directly by default, with the intro animation opt-in
+- Chat opens directly by default; intro animation is opt-in
 - Local-model status distinguishes configured assets from a verified inference path
 - A local-only self-test exercises the active conversation model's structured AgentRuntime decision protocol; hosted profiles are rejected by this check
 - Linux and Windows CI matrix for the automated test suite
 - Desktop control remains deliberately bounded to operator-authorized processes and supported UI Automation patterns; unsupported interactions require manual operator input
+
+### Phase 5.3.3 — Oxide Agent Workbench & Persistent Local Runtime
+- Three-panel continuous chat workspace inspired by coding-agent workbenches: thread/tool rail, conversation composer, and live session-intelligence rail
+- Oxide / Fieldwork visual system uses warm graphite, parchment, signal-lime and kiln-coral instead of blue-violet AI styling
+- Persistent `llama-server` model is loaded at app startup and kept resident; server health and model readiness are visible in the workbench
+- Runtime choice is strict: a selected server failure stops the request; there is no silent server-to-CLI, model-to-model, or hosted fallback
+- CLI-only inference remains an explicit one-shot mode and is labelled as such
+- Model Bay persists GGUF/runtime paths and context, output-token, thread and GPU-layer tuning; Q4_K_M is documented as a balanced starting point for compact models
+- CI runs the automated test suite on Windows and Linux and builds a portable Windows desktop bundle
+- Scope remains bounded by installed connectors and governed tools; universal support for every desktop task is not claimed
 
 ### Phase 5.3.2 — Governed Blender Scene-Creation Connector
 - Discover a locally installed Blender executable without downloading binaries or add-ons
