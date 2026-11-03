@@ -277,16 +277,16 @@ def _plain_completion(raw: str) -> str:
     return text.strip()
 
 AGENT_DECISION_GRAMMAR = r'''root ::= message | tool_call
-message ::= "{" ws "\\\"type\\\"" ws ":" ws "\\\"message\\\"" ws "," ws "\\\"content\\\"" ws ":" ws string ws "}" ws
-tool_call ::= "{" ws "\\\"type\\\"" ws ":" ws "\\\"tool_call\\\"" ws "," ws "\\\"tool\\\"" ws ":" ws string ws "," ws "\\\"arguments\\\"" ws ":" ws object ws ("," ws "\\\"invocation_id\\\"" ws ":" ws string)? ws "}" ws
+message ::= "{" ws "\"type\"" ws ":" ws "\"message\"" ws "," ws "\"content\"" ws ":" ws string ws "}" ws
+tool_call ::= "{" ws "\"type\"" ws ":" ws "\"tool_call\"" ws "," ws "\"tool\"" ws ":" ws string ws "," ws "\"arguments\"" ws ":" ws object ws ("," ws "\"invocation_id\"" ws ":" ws string)? ws "}" ws
 object ::= "{" ws (pair ("," ws pair)*)? "}"
 pair ::= string ws ":" ws value
 value ::= object | array | string | number | "true" | "false" | "null"
 array ::= "[" ws (value ("," ws value)*)? "]"
-string ::= "\\\"" ([^"\\\\] | "\\\\" escape)* "\\\""
-escape ::= "\\\"" | "\\\\" | "/" | "b" | "f" | "n" | "r" | "t"
+string ::= "\"" ([^"\\] | "\\" escape)* "\""
+escape ::= "\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t"
 number ::= "-"? ([0-9] | [1-9] [0-9]+) ("." [0-9]+)?
-ws ::= [ \\t\\n\\r]*'''
+ws ::= [ \t\n\r]*'''
 
 class LocalModelProvider:
     def __init__(self, config: LocalModelConfig, runner: Callable[..., Any] | None = None):
@@ -381,7 +381,7 @@ class LocalModelProvider:
 
     def decide(self, messages, catalog, session=None, cancel_event=None, on_delta=None):
         """Return one strictly structured next action for the agent runtime."""
-        transcript = "\\n".join(
+        transcript = "\n".join(
             f"{getattr(item, 'role', 'user').upper()}: {getattr(item, 'content', '')[:3000]}"
             for item in list(messages)[-10:]
         )
@@ -391,11 +391,11 @@ class LocalModelProvider:
         }
         prompt = (
             "You are Chimera's local agent decision engine. Return exactly ONE JSON object, "
-            "using exactly one supported envelope. A normal answer MUST be "
-            "{\\\"type\\\":\\\"message\\\",\\\"content\\\":\\\"...\\\"}. "
-            "A tool action MUST be "
-            "{\\\"type\\\":\\\"tool_call\\\",\\\"tool\\\":\\\"<exact tool id>\\\","
-            "\\\"arguments\\\":{...}} with an optional final invocation_id string. "
+            'using exactly one supported envelope. A normal answer MUST be '
+            '{"type":"message","content":"..."}. '
+            'A tool action MUST be '
+            '{"type":"tool_call","tool":"<exact tool id>","arguments":{...}} '
+            "with an optional final invocation_id string. "
             "The first key must be type. For tool calls, keys must appear in the order type, tool, "
             "arguments, invocation_id. Do not return role/content chat messages, function_call "
             "objects, arrays, markdown, prose outside JSON, version fields, or any other envelope. "
@@ -405,10 +405,10 @@ class LocalModelProvider:
             "Explain that the operator must switch to Build Mode first. If workspace_attached is false, "
             "do not call workspace tools; ask the operator to attach the target folder first. "
             "In particular, do not claim you can write to Desktop until Desktop is attached as the "
-            "workspace and Build Mode is active. After a tool result, use its actual contents before answering.\\n"
+            "workspace and Build Mode is active. After a tool result, use its actual contents before answering.\n"
             "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
-            "\\nTOOLS: " + json.dumps(catalog, separators=(",", ":")) +
-            "\\nCONVERSATION:\\n" + transcript
+            "\nTOOLS: " + json.dumps(catalog, separators=(",", ":")) +
+            "\nCONVERSATION:\n" + transcript
         )
         parsed, metrics = self.structured_with_metrics(
             prompt,
