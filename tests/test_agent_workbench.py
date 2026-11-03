@@ -68,3 +68,49 @@ def test_startup_server_failure_is_visible_and_does_not_change_runtime(tmp_path)
 
     assert window.model_boot_status == "failed"
     assert "No CLI or hosted fallback was attempted" in window.last_turn_notice
+
+
+
+def test_full_workbench_composes_left_chat_and_context_panels():
+    from chimera import ui
+
+    class AgentStore:
+        def list_sessions(self, limit=16):
+            return []
+
+        def session(self, session_id):
+            return {"mode": "plan"}
+
+        def session_model(self, session_id):
+            return {}
+
+        def messages(self, session_id):
+            return []
+
+    window = object.__new__(MainWindow)
+    window.agent_store = AgentStore()
+    window.agent_session_id = "workbench-smoke"
+    window.goal_store = SimpleNamespace(list=lambda **kwargs: [])
+    window.profile_store = SimpleNamespace(list=lambda: [])
+    window.registry = SimpleNamespace(list=lambda: [])
+    window.local_provider = SimpleNamespace(
+        config=LocalModelConfig(None, None),
+        server=None,
+    )
+    window.workspace_path = None
+    window.task_busy = False
+    window.model_boot_status = "missing"
+    window.local_verification = None
+    window.last_turn_notice = None
+    window.pending_agent_approval = None
+    window.conversation_messages = []
+    window.live_events = []
+    window.pending_request = None
+    window.task_field = ui.ft.TextField(multiline=True)
+    window.body = ui.ft.Container(expand=True)
+    window.page = SimpleNamespace(update=lambda: None)
+
+    window._show_overview()
+
+    assert isinstance(window.body.content, ui.ft.Row)
+    assert len(window.body.content.controls) == 3
