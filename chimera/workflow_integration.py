@@ -80,6 +80,10 @@ class AgenticWorkflowOrchestrator:
             "steps_executed": sum(step.execution_state == StepState.COMPLETED for step in plan.steps),
             "steps_total": len(plan.steps),
             "pending_step": next((step.step_id for step in plan.steps if step.execution_state == StepState.AWAITING_APPROVAL), None),
+            "step_summary": [
+                f"{step.position}:{step.tool}:{step.execution_state.value}:{(step.error or '')[:200]}"
+                for step in plan.steps
+            ],
             "step_results": [
                 {
                     "step_id": step.step_id,
