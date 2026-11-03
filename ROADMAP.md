@@ -53,7 +53,7 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ---
 
-### 🟡 Phase 5.3 — Cross-Capability Agentic Workflows (implemented foundation; CI verification pending)
+### 🟡 Phase 5.3 — Cross-Capability Agentic Workflows (implemented foundation; automated CI verification in progress)
 - Dependency-aware sequential workflow templates across workspace and REA
 - Each step routed through AgentRuntime tool validation and permission enforcement
 - Protected artifact writes pause for explicit operator approval and resume
