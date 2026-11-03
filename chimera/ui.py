@@ -16,8 +16,8 @@ from .workflow_integration import AgenticWorkflowOrchestrator
 try: import flet as ft
 except ImportError: ft = None
 
-BG, SURFACE, ELEVATED, BORDER = "#070808", "#101313", "#171B1A", "#29302E"
-TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F3F5F3", "#A7B0AC", "#68736E", "#3F4945", "#8AAE9C"
+BG, SURFACE, ELEVATED, BORDER = "#0A0D0B", "#111713", "#1A211C", "#2B342E"
+TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F1F2EC", "#B6B7AB", "#788175", "#465047", "#C49A6C"
 ACCENT = FOCUS
 
 STATE_COLORS = {"pass": "#8AAE9C", "fail": "#D9897A", "unknown": "#C7A66A", "blocked": "#B77D9A"}
@@ -163,7 +163,9 @@ class MainWindow:
         return ft.Container(ft.Column([ft.Text("NAVIGATION", color=MUTED, size=10), *buttons], spacing=3), width=210, right=18, top=10, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), padding=ft.Padding.all(14), visible=False, shadow=ft.BoxShadow(blur_radius=18, color="#000000"))
     def _toggle_drawer(self, e=None): self.drawer.visible = not self.drawer.visible; self.page.update()
     def _navigate(self, handler): self.drawer.visible = False; handler(); self.page.update()
-    def _runtime_state(self): return "RUNTIME: READY" if check_status(config_from_env()).state == "ready" else "RUNTIME: UNCONFIGURED"
+    def _runtime_state(self):
+        status = check_status(config_from_env())
+        return "RUNTIME: CONFIGURED" if status.state == "ready" else f"RUNTIME: {status.state.upper()}"
     def _statusbar(self):
         try: caps = len(self.registry.list()); review = len(self.review.list())
         except Exception: caps, review = "?", "?"
