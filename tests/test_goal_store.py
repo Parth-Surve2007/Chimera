@@ -152,9 +152,10 @@ def test_goal_rejects_invalid_values_and_limits(tmp_path):
         store.list(limit=0)
     with pytest.raises(ValueError, match="status"):
         store.list(status="done")
-    with pytest.raises(ValueError, match="transition"):
-        store.transition(goal.goal_id, "completed") if False else store.transition(goal.goal_id, "archived")
-    assert store.get(goal.goal_id).status == "active"
+    store.transition(goal.goal_id, "archived")
+    with pytest.raises(ValueError, match="transition from archived to paused"):
+        store.transition(goal.goal_id, "paused")
+    assert store.get(goal.goal_id).status == "archived"
 
 
 def test_goal_events_are_isolated_by_goal(tmp_path):
