@@ -70,6 +70,14 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 - Linux and Windows CI matrix for the automated test suite
 - Desktop control remains deliberately bounded to operator-authorized processes and supported UI Automation patterns; unsupported interactions require manual operator input
 
+### Phase 5.3.2 — Governed Blender Scene-Creation Connector
+- Discover a locally installed Blender executable without downloading binaries or add-ons
+- Accept a bounded JSON scene recipe instead of model-authored Python
+- Create primitive-based .blend projects and PNG previews through a fixed background script
+- Require Build Mode and exact operator approval before writing either artifact
+- Verify both output files after Blender exits; automated connector tests mock the Blender process
+- Scope limitation: primitive scene assembly only; general modelling, advanced materials, animation and unrestricted GUI control remain future work
+
 ## Near-Term (Phase 5.4)
 
 **Theme: Workspace Agent Maturity**
@@ -103,7 +111,7 @@ Priority connectors (each requires: discover → inspect → modify → approval
 - [ ] VS Code connector (extension API or LSP)
 - [ ] Browser connector (headless Chrome via CDP)
 - [ ] Obsidian connector (vault file operations, note linking)
-- [ ] Blender connector (Python API, scene inspection, render)
+- [x] Blender connector foundation: bounded primitive-scene generation and PNG render preview; broader Blender API coverage remains planned
 - [ ] OBS Studio connector (scene switching, source management)
 - [ ] JIRA / GitHub Issues connector (read-only first, write with approval)
 
