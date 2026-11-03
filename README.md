@@ -129,10 +129,13 @@ Chimera's provider registry supports 8 adapter types through a unified interface
 - No silent cloud fallback — model selection is always explicit
 
 **Local Inference**
-- Configure via `CHIMERA_MODEL_PATH` (GGUF file) and `CHIMERA_LLAMA_CLI` (llama.cpp executable)
-- Optional: `CHIMERA_MODEL_CONTEXT`, `CHIMERA_MODEL_MAX_TOKENS`, `CHIMERA_MODEL_TIMEOUT`, `CHIMERA_MODEL_THREADS`, `CHIMERA_MODEL_GPU_LAYERS`
-- Model weights are never downloaded automatically
-- Run `python -m chimera.smoke_test` to verify local inference without fake success
+- Recommended persistent mode: configure `CHIMERA_MODEL_PATH` (GGUF) and `CHIMERA_LLAMA_SERVER` (llama.cpp server). Chimera starts the selected server at app launch, binds it to loopback, and keeps the model resident for the session.
+- Explicit one-shot mode: configure `CHIMERA_MODEL_PATH` and `CHIMERA_LLAMA_CLI` without selecting a server. The CLI loads the GGUF for each request and is visibly labelled as one-shot mode.
+- Runtime selection is strict: a selected server failure fails the request. Chimera does not switch to CLI, another local model, or a hosted provider.
+- Tuning: `CHIMERA_MODEL_CONTEXT`, `CHIMERA_MODEL_MAX_TOKENS`, `CHIMERA_MODEL_TIMEOUT`, `CHIMERA_MODEL_THREADS`, `CHIMERA_MODEL_GPU_LAYERS`
+- For a compact 3B model, Q4_K_M is a balanced quality/memory starting point; Q5_K_M may improve fidelity but consumes more memory. Quantization is part of the GGUF file, not a runtime conversion.
+- Model weights are never downloaded automatically. Use the Model Bay to select a model and runtime explicitly.
+- Run `python -m chimera.smoke_test` or **VERIFY AGENT PROTOCOL** to test real local inference without fake success.
 
 ---
 
@@ -342,12 +345,13 @@ Set environment variables or configure in Settings:
 
 ```powershell
 $env:CHIMERA_MODEL_PATH = "path\to\model.gguf"
-$env:CHIMERA_LLAMA_CLI = "path\to\llama-cli.exe"
-# Optional server runtime (can be used without llama-cli)
+# Preferred: persistent server, model loaded once and kept resident
 $env:CHIMERA_LLAMA_SERVER = "path\to\llama-server.exe"
+# Explicit alternative only: one-shot CLI (do not set if you choose server mode)
+# $env:CHIMERA_LLAMA_CLI = "path\to\llama-cli.exe"
 ```
 
-A model/runtime pair being present is shown as **configured**, not as proven working. In the chat header or Settings, choose **VERIFY MODEL / VERIFY AGENT CHAT** to perform a real, local structured agent-decision request. The check must receive a valid message decision from the selected local GGUF; it does not substitute a mock response. No hosted fallback or model download is attempted. A successful self-test proves this inference path worked at that moment, not that every prompt or future run is guaranteed to succeed.
+A model/runtime pair being present is shown as **configured**, not as proven working. Persistent server mode is loaded during application startup; the chat header reports loading, loaded, working, or failed state. In the Model Bay, choose **VERIFY AGENT PROTOCOL** to perform a real local structured agent-decision request. The check must receive a valid message decision from the selected GGUF; it does not substitute a mock response. No alternate runtime, hosted fallback or model download is attempted. A successful self-test proves this inference path worked at that moment, not that every task or future run is guaranteed to succeed.
 
 Optional limits:
 - `CHIMERA_MODEL_CONTEXT` — Context window size
@@ -425,7 +429,7 @@ Models are selected explicitly through the UI or configuration. Chimera never si
 
 ### Basic Conversation
 
-The desktop app opens directly into the chat workspace. It uses a persistent conversation rail, resumable sessions, a message timeline, inline tool-result cards, a live activity indicator, a task-mode switch, and an approval card for protected actions. The graphite / greige / bronze interface keeps the conversation central while Model Hub, Applications, Workflow Studio, Capabilities, and Run History remain one click away.
+The desktop app opens directly into the continuous chat workbench. Its Oxide / Fieldwork interface uses warm graphite, parchment, signal-lime and kiln-coral accents rather than the typical blue-violet AI palette. Three panels keep recent threads and tools on the left, the conversation and composer in the centre, and live model/workspace/goal context on the right. Protected operations remain visible inline and require exact approval.
 
 After launch:
 1. Open **Settings** and configure a local GGUF plus either llama.cpp CLI or server runtime if they were not auto-discovered.
