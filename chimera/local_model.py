@@ -390,7 +390,9 @@ class LocalModelProvider:
             "workspace_attached": bool((session or {}).get("workspace")),
         }
         prompt = (
-            "You are Chimera's local agent decision engine. Return exactly ONE JSON object, "
+            "You are Chimera's local agent decision engine. Return exactly ONE JSON object. " 
+            "Treat the most recent USER message as the current task; earlier turns are context only. "
+            "Do not resurrect an unrelated earlier topic or invent a different user request. "
             'using exactly one supported envelope. A normal answer MUST be '
             '{"type":"message","content":"..."}. '
             'A tool action MUST be '
