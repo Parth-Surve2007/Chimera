@@ -80,13 +80,17 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ## Near-Term (Phase 5.4)
 
-**Theme: Workspace Agent Maturity**
+**Theme: Workspace Agent Maturity and Persistent Operator Goals**
 
 - [ ] Persistent task context across sessions (resume interrupted jobs)
+- [ ] Operator-owned goal and ambition ledger: active, paused and completed goals with success criteria, priority, constraints and linked evidence
+- [ ] Distinguish long-term goals, project milestones and individual task runs; never infer a goal as completed from an assistant message alone
+- [ ] Retrieve relevant active goals into planning context with local provenance and operator-editable scope
 - [ ] Multi-step plan visualization in UI (dependency graph view)
 - [ ] Parallel task execution with safety barriers
 - [ ] Agent-generated sub-task delegation (spawn governed sub-agents)
 - [ ] Token-budget awareness: estimate and report context costs before long tasks
+- [ ] Skill lifecycle: versioned proposals, isolated regression tests, explicit promotion and rollback before reusable execution
 
 ---
 
@@ -114,6 +118,9 @@ Priority connectors (each requires: discover → inspect → modify → approval
 - [x] Blender connector foundation: bounded primitive-scene generation and PNG render preview; broader Blender API coverage remains planned
 - [ ] OBS Studio connector (scene switching, source management)
 - [ ] JIRA / GitHub Issues connector (read-only first, write with approval)
+- [ ] KiCad/EDA connector for PCB projects, schematic inspection and design-rule-check workflows
+- [ ] LibreOffice Writer/Calc/Impress connector for governed document, spreadsheet and presentation workflows
+- [ ] Graphics-editor connector for bounded image and layer operations
 
 ---
 
