@@ -1,4 +1,4 @@
-name: Chimera tests
+name: Chimera tests and desktop build
 
 on:
   pull_request:
@@ -19,7 +19,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -34,3 +34,30 @@ jobs:
           python -m pip install -e ".[test]"
       - name: Run automated test suite
         run: python -m pytest tests/ --ignore=tests/test_ui.py -q
+
+  windows-package:
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install application and packaging dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]" pyinstaller
+      - name: Build portable Windows desktop application
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+      - name: Upload portable application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chimera-Windows-portable
+          path: dist/Chimera/
+          if-no-files-found: error
+          retention-days: 14
