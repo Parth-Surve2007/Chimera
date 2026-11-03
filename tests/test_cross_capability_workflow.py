@@ -510,9 +510,16 @@ def test_synthetic_binary_analysis_scenario(test_env):
     assert exe_path.exists()
     assert exe_path.stat().st_size > 0
 
-    # Verify it's a valid PE (has MZ header)
+    # Verify DOS/PE linkage and section bounds, not just the MZ magic.
     content = exe_path.read_bytes()
     assert content[:2] == b"MZ"
+    pe_offset = struct.unpack_from("<I", content, 0x3C)[0]
+    assert content[pe_offset:pe_offset + 4] == b"PE\x00\x00"
+    section_table = pe_offset + 24 + struct.unpack_from("<H", content, pe_offset + 20)[0]
+    for index in range(struct.unpack_from("<H", content, pe_offset + 6)[0]):
+        section = section_table + index * 40
+        raw_size, raw_offset = struct.unpack_from("<II", content, section + 16)
+        assert raw_offset + raw_size <= len(content)
 
     # Create orchestrator
     orchestrator = AgenticWorkflowOrchestrator(
