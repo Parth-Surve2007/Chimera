@@ -81,3 +81,81 @@ def test_local_provider_adapter_exposes_agent_protocol_verification():
     adapter = object.__new__(LocalModelAdapter)
     adapter.local_provider = SimpleNamespace(verify_agent_protocol=lambda: expected)
     assert adapter.verify_agent_protocol() == expected
+
+
+
+def test_explicit_server_failure_never_falls_back_to_cli(tmp_path, monkeypatch):
+    from chimera.local_model import ServerUnavailable
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    server_exe = tmp_path / "llama-server.exe"
+    server_exe.write_bytes(b"fixture")
+
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli), server_path=str(server_exe)),
+    )
+
+    class BrokenServer:
+        def status(self):
+            return {"state": "ready", "url": "http://127.0.0.1:1234", "pid": 10}
+
+        def complete(self, *args, **kwargs):
+            raise ServerUnavailable("server crashed")
+
+        def stop(self):
+            pass
+
+    provider.server = BrokenServer()
+    calls = []
+    monkeypatch.setattr("chimera.local_model._run_streaming", lambda *a, **k: calls.append(a))
+    with pytest.raises(RuntimeError, match="no CLI or hosted fallback was attempted"):
+        provider.converse([{"role": "user", "content": "hello"}])
+    assert calls == []
+
+
+def test_invalid_explicit_server_does_not_select_valid_cli(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    missing_server = tmp_path / "missing-llama-server.exe"
+
+    status = check_status(
+        LocalModelConfig(model, str(cli), server_path=str(missing_server))
+    )
+
+    assert status.state == "missing"
+    assert "no alternate runtime" in status.detail
+
+
+def test_persisted_runtime_and_inference_tuning_round_trip(tmp_path, monkeypatch):
+    from chimera.local_model import save_persisted_config
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    server = tmp_path / "llama-server.exe"
+    server.write_bytes(b"fixture")
+    monkeypatch.setenv("CHIMERA_DATA_DIR", str(tmp_path))
+
+    save_persisted_config(
+        model,
+        str(cli),
+        server_path=str(server),
+        context=4096,
+        max_tokens=512,
+        threads=6,
+        gpu_layers=20,
+    )
+    loaded = config_from_env({})
+
+    assert loaded.model_path == model.resolve()
+    assert loaded.cli_path == str(cli.resolve())
+    assert loaded.server_path == str(server.resolve())
+    assert loaded.context == 4096
+    assert loaded.max_tokens == 512
+    assert loaded.threads == 6
+    assert loaded.gpu_layers == 20
