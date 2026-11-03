@@ -254,8 +254,11 @@ def test_meta_tool_formatter_exposes_registered_application_actions():
     names = [item["function"]["name"] for item in formatted]
     assert "application.rea.list_backends" in names
     assert "workspace.list_files" in names
+    workspace_tool = next(item for item in formatted if item["function"]["name"] == "workspace.list_files")
+    assert workspace_tool["function"]["parameters"]["required"] == ["relative", "recursive"]
     app_tool = next(item for item in formatted if item["function"]["name"] == "application.rea.list_backends")
     assert app_tool["function"]["parameters"]["additionalProperties"] is False
+    assert app_tool["function"]["parameters"]["required"] == []
 
 
 def test_meta_tool_history_reconstructs_assistant_call_and_result_pair():
