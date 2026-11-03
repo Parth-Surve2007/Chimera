@@ -44,7 +44,9 @@ class LlamaServerManager:
             if not self.model or not self.model.is_file(): raise ServerUnavailable("GGUF model is unavailable")
             self.state = "starting"; self.last_error = None
             command = [self.executable, "--host", "127.0.0.1", "--port", str(self.port), "--model", str(self.model), "--ctx-size", str(self.context), "--threads", str(self.threads), "--n-gpu-layers", str(self.gpu_layers), "--parallel", "1", "--no-webui"]
-            # Never leave an unread PIPE attached to the long-lived inference process.\n            # The server can emit enough startup logs to fill a pipe and deadlock.\n            kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "shell": False, "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+            # Never leave an unread PIPE attached to the long-lived inference process.
+            # The server can emit enough startup logs to fill a pipe and deadlock.
+            kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "shell": False, "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
             self.process = subprocess.Popen(command, **kwargs); self.started_at = time.monotonic()
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
