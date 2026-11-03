@@ -53,7 +53,7 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ---
 
-### ✅ Phase 5.3 — Cross-Capability Agentic Workflows
+### 🟡 Phase 5.3 — Cross-Capability Agentic Workflows (implemented foundation; CI verification pending)
 - Dependency-aware sequential workflow templates across workspace and REA
 - Each step routed through AgentRuntime tool validation and permission enforcement
 - Protected artifact writes pause for explicit operator approval and resume
@@ -142,7 +142,7 @@ These constraints are non-negotiable at every phase:
 | Task policy enforcement | ✅ | ✅ | ✅ | ✅ |
 | Application connector SDK | ✅ | ✅ | ✅ | 🟡 |
 | Ghidra static analysis | ✅ | ✅ | ✅ | 🟡 (needs Ghidra installed) |
-| Experience learning | ✅ | ✅ | ✅ | 🟡 |
+| Experience learning | ✅ | 🟡 | ✅ | 🟡 (proposals, not executable replay) |
 | Cross-capability sequential workflows | ✅ | ✅ | ✅ | 🟡 |
 | Parallel task execution | 🔴 | 🔴 | 🟡 | 🔴 |
 | Git connector | 🔴 | 🔴 | 🟡 | 🔴 |

@@ -419,6 +419,8 @@ class AgentRuntime:
         if not isinstance(invocation_id, str) or not invocation_id.strip():
             raise ValueError("workflow invocation_id is required")
 
+        if session_id in self._cancelled:
+            raise InterruptedError("workflow cancelled before tool execution")
         self._decision({
             "type": "tool_call",
             "tool": tool_id,

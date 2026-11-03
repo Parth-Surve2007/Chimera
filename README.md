@@ -32,8 +32,8 @@ Chimera does not claim to be a completed AGI or frontier model equivalent. It is
 | **Computer use (Windows)** | 🟡 Partial — UI automation via pywinauto, governed approval required |
 | **Application SDK** | ✅ Implemented — Universal connector framework with risk levels |
 | **REA: Reverse Engineer Anything** | ✅ Implemented — Artifact detection, static analysis, Ghidra integration |
-| **Ghidra integration** | 🟡 Partial — Headless execution (requires Ghidra + JDK 17+) |
-| **Experience learning** | 🟡 Partial — Trace capture, skill extraction, approval lifecycle |
+| **Ghidra integration** | 🟡 Partial — Installation discovery and bounded static parsing; automated headless analysis actions remain unavailable |
+| **Experience learning** | 🟡 Partial — Trace capture, secret redaction, stored skill proposals and approval status updates; replay and promotion remain planned |
 | **Task planning** | 🟡 Implemented foundation — dependency-aware sequential templates, AgentRuntime-governed execution, permission checks and approval pause/resume; model-driven planning and parallel execution remain planned |
 | **Application connectors** | 🟡 Foundation — Ghidra and REA connectors, ecosystem extensible |
 
@@ -212,15 +212,16 @@ Persistent Memory & Audit Trail
 - Extracts reusable workflows as `ProposedSkill` objects
 
 **Skill Lifecycle**
-1. **Proposed** — Extracted from trace, stored in skill store
-2. **Approved** — Operator reviews and approves the skill
-4. **Rejected** — Skill discarded if not useful
+1. **Proposed** — Extracted from a trace and stored for operator review
+2. **Approved** — Operator approval is recorded in the skill store
+
+Approved proposals are not yet installed or automatically replayed as executable skills. Rejection, versioning, regression testing and governed replay remain planned.
 
 **Current State**
 - Trace capture and secret redaction: ✅ Implemented
 - Skill extraction and storage: ✅ Implemented
-- Approval lifecycle: ✅ Implemented
-- Skill library versioning: 🟡 Planned
+- Approval status update: ✅ Implemented
+- Rejection, versioning, regression testing and executable replay: 🟡 Planned
 - Automated regression testing: 🟡 Planned
 
 ---
@@ -474,11 +475,18 @@ See [ROADMAP.md](ROADMAP.md) for detailed phase planning.
 **Current Phase: 5.3 — Cross-Capability Agentic Workflows**
 
 **Implemented foundation (Phase 5.3)**
-- Persistent task context across sessions
-- Multi-step plan visualization
-- Parallel task execution with safety barriers
-- Agent-generated sub-task delegation
-- Token-budget awareness
+- Dependency-aware sequential workflow templates for workspace and REA tasks
+- Runtime-owned dispatch for every workflow step
+- Per-step permission validation and protected-action approval pause/resume
+- Persisted step results and verification states
+- Fail-closed handling for unresolved dependencies and ambiguous artifact discovery
+
+**Next (Phase 5.4)**
+- Model-driven plan generation and replanning
+- Safe resume of interrupted workflow runs
+- Dependency graph visualization
+- Bounded parallel execution for read-only steps
+- Token-budget awareness and sub-task delegation
 
 **Medium-Term (Phase 5.5)**
 - Git connector (status, diff, stage, commit)

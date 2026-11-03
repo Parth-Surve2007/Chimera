@@ -101,6 +101,11 @@ class AgenticWorkflowOrchestrator:
         plan.status = "running"
         self.plan_store.save_plan(plan)
         while True:
+            if session_id in self.agent_runtime._cancelled:
+                self.agent_runtime._cancelled.discard(session_id)
+                plan.status = "cancelled"
+                self.plan_store.save_plan(plan)
+                return "cancelled"
             step = self._find_next_ready_step(plan)
             if step is None:
                 states = {item.execution_state for item in plan.steps}
@@ -189,6 +194,9 @@ class AgenticWorkflowOrchestrator:
             step.result_data = result
             step.verification_status = verification.status
             step.completed_at = datetime.now(timezone.utc).isoformat()
+        except InterruptedError as exc:
+            step.execution_state = StepState.CANCELLED
+            step.error = str(exc)
         except Exception as exc:
             failure = self.recovery.analyze_failure(step.capability, step.tool or "", str(exc), step.retry_count)
             read_only = (
