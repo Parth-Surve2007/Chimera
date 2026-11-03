@@ -106,10 +106,34 @@ def load_persisted_config(data_dir: Path | None = None) -> tuple[dict, str | Non
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {}, f"Could not read {path.name}: {exc}. Defaults were used; save a new configuration to recover."
 
-def save_persisted_config(model_path: Path | None, cli_path: str | None, data_dir: Path | None = None) -> Path:
-    root = data_dir or config_data_dir(); root.mkdir(parents=True, exist_ok=True)
+def save_persisted_config(
+    model_path: Path | None,
+    cli_path: str | None,
+    data_dir: Path | None = None,
+    *,
+    server_path: str | None = None,
+    context: int | None = None,
+    max_tokens: int | None = None,
+    threads: int | None = None,
+    gpu_layers: int | None = None,
+) -> Path:
+    """Persist an explicit runtime choice and optional inference tuning."""
+    root = data_dir or config_data_dir()
+    root.mkdir(parents=True, exist_ok=True)
     path = root / "model_config.json"
-    payload = {"model_path": str(model_path.resolve()) if model_path else None, "cli_path": str(Path(cli_path).expanduser().resolve()) if cli_path else None}
+    payload = {
+        "model_path": str(model_path.expanduser().resolve()) if model_path else None,
+        "cli_path": str(Path(cli_path).expanduser().resolve()) if cli_path else None,
+        "server_path": str(Path(server_path).expanduser().resolve()) if server_path else None,
+    }
+    for key, value in {
+        "context": context,
+        "max_tokens": max_tokens,
+        "threads": threads,
+        "gpu_layers": gpu_layers,
+    }.items():
+        if value is not None:
+            payload[key] = int(value)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
 
@@ -118,6 +142,7 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
     persisted, _ = load_persisted_config()
     model_value = env.get("CHIMERA_MODEL_PATH") or persisted.get("model_path")
     cli_value = env.get("CHIMERA_LLAMA_CLI") or persisted.get("cli_path")
+    server_value = env.get("CHIMERA_LLAMA_SERVER") or persisted.get("server_path")
     if not model_value:
         candidate = Path(r"C:\ChimeraModels\Llama-3.2-3B-Instruct-Q4_K_M.gguf")
         if candidate.is_file(): model_value = str(candidate)
@@ -132,36 +157,55 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
         except ValueError: raise ValueError(f"{name} must be a positive integer")
         if value < 1: raise ValueError(f"{name} must be a positive integer")
         return value
-    try: gpu_layers = int(env.get("CHIMERA_MODEL_GPU_LAYERS", "0"))
-    except ValueError: raise ValueError("CHIMERA_MODEL_GPU_LAYERS must be an integer")
+    try: gpu_layers = int(env.get("CHIMERA_MODEL_GPU_LAYERS", persisted.get("gpu_layers", 0)))
+    except (TypeError, ValueError): raise ValueError("CHIMERA_MODEL_GPU_LAYERS must be an integer")
     if gpu_layers < 0: raise ValueError("CHIMERA_MODEL_GPU_LAYERS cannot be negative")
-    server_value = env.get("CHIMERA_LLAMA_SERVER")
     if not server_value and os.environ.get("LOCALAPPDATA"):
         matches = list(Path(os.environ["LOCALAPPDATA"]).glob(r"Microsoft\WinGet\Packages\*llamacpp*\**\llama-server.exe"))
         if matches: server_value = str(matches[0])
-    return LocalModelConfig(Path(model_value).expanduser().resolve() if model_value else None, str(Path(cli_value).expanduser().resolve()) if cli_value else None, positive("CHIMERA_MODEL_CONTEXT", 2048), positive("CHIMERA_MODEL_MAX_TOKENS", 256), float(env.get("CHIMERA_MODEL_TIMEOUT", "60")), positive("CHIMERA_MODEL_THREADS", 4), gpu_layers, server_value)
+    return LocalModelConfig(
+        Path(model_value).expanduser().resolve() if model_value else None,
+        str(Path(cli_value).expanduser().resolve()) if cli_value else None,
+        positive("CHIMERA_MODEL_CONTEXT", persisted.get("context", 2048)),
+        positive("CHIMERA_MODEL_MAX_TOKENS", persisted.get("max_tokens", 256)),
+        float(env.get("CHIMERA_MODEL_TIMEOUT", "120")),
+        positive("CHIMERA_MODEL_THREADS", persisted.get("threads", 4)),
+        gpu_layers,
+        str(Path(server_value).expanduser().resolve()) if server_value else None,
+    )
 
 def check_status(config: LocalModelConfig) -> ModelStatus:
     if not config.model_path:
         return ModelStatus("missing", "A local GGUF model path is not configured")
     if not config.model_path.is_file():
-        return ModelStatus("missing", "configured GGUF model file does not exist", str(config.model_path), config.cli_path or config.server_path)
+        return ModelStatus("missing", "configured GGUF model file does not exist", str(config.model_path), config.server_path or config.cli_path)
     if config.model_path.suffix.lower() != ".gguf":
-        return ModelStatus("incompatible", "model path is not a .gguf file", str(config.model_path), config.cli_path or config.server_path)
-    cli_ok = bool(config.cli_path and Path(config.cli_path).is_file())
-    server_ok = bool(config.server_path and Path(config.server_path).is_file())
-    if not cli_ok and not server_ok:
-        detail = "Neither a valid llama-cli nor llama-server executable is configured"
-        return ModelStatus("missing", detail, str(config.model_path), config.cli_path or config.server_path)
-    runtime = config.server_path if server_ok else config.cli_path
-    detail = "GGUF and llama.cpp runtime are present; a real inference test is still required"
-    return ModelStatus("ready", detail, str(config.model_path), runtime)
+        return ModelStatus("incompatible", "model path is not a .gguf file", str(config.model_path), config.server_path or config.cli_path)
+
+    # Runtime selection is explicit. A configured server must work as a server;
+    # Chimera never silently swaps it for CLI or a hosted provider.
+    if config.server_path:
+        if not Path(config.server_path).is_file():
+            return ModelStatus("missing", "configured llama-server executable does not exist; no alternate runtime will be selected", str(config.model_path), config.server_path)
+        return ModelStatus("ready", "GGUF and the explicitly selected llama-server are present; model loading is verified at startup", str(config.model_path), config.server_path)
+
+    if config.cli_path and Path(config.cli_path).is_file():
+        return ModelStatus("ready", "GGUF and explicitly selected llama-cli are present; this mode loads the model per request", str(config.model_path), config.cli_path)
+    return ModelStatus("missing", "Configure a llama-server for a persistent loaded model, or explicitly select llama-cli mode", str(config.model_path), None)
 
 def config_source(env: dict[str, str] | None = None, data_dir: Path | None = None) -> dict[str, str]:
-    env = env or os.environ; persisted, _ = load_persisted_config(data_dir)
+    env = env or os.environ
+    persisted, _ = load_persisted_config(data_dir)
     result = {}
-    result["model"] = "environment" if env.get("CHIMERA_MODEL_PATH") else "persisted" if persisted.get("model_path") else "discovered" if Path(r"C:\ChimeraModels\Llama-3.2-3B-Instruct-Q4_K_M.gguf").is_file() else "default"
-    result["runtime"] = "environment" if env.get("CHIMERA_LLAMA_CLI") else "persisted" if persisted.get("cli_path") else "discovered"
+    result["model"] = "environment" if env.get("CHIMERA_MODEL_PATH") else "persisted" if persisted.get("model_path") else "discovered" if Path(r"C:\ChimeraModels\Llama-3.2-3B-Instruct-Q4_K_M.gguf").is_file() else "unconfigured"
+    result["runtime"] = (
+        "environment server" if env.get("CHIMERA_LLAMA_SERVER")
+        else "persisted server" if persisted.get("server_path")
+        else "discovered server" if env.get("LOCALAPPDATA") and list(Path(env["LOCALAPPDATA"]).glob(r"Microsoft\WinGet\Packages\*llamacpp*\**\llama-server.exe"))
+        else "environment CLI" if env.get("CHIMERA_LLAMA_CLI")
+        else "persisted CLI" if persisted.get("cli_path")
+        else "discovered CLI"
+    )
     return result
 
 def tool_version(executable: str | None) -> str | None:
@@ -246,7 +290,14 @@ class LocalModelProvider:
     def __init__(self, config: LocalModelConfig, runner: Callable[..., Any] | None = None):
         self.config, self.runner, self.last_inference_metrics = config, runner, {}
         policy = load_policy()
-        self.server = None if runner else LlamaServerManager(config.server_path, config.model_path, config.context, config.threads, config.gpu_layers, policy["request_timeout"], idle_timeout=policy["idle_timeout"] if policy["mode"] == "idle_shutdown" else 0)
+        self.server = (
+            LlamaServerManager(
+                config.server_path, config.model_path, config.context, config.threads,
+                config.gpu_layers, policy["request_timeout"],
+                idle_timeout=policy["idle_timeout"] if policy["mode"] == "idle_shutdown" else 0,
+            )
+            if not runner and config.server_path else None
+        )
     def stop(self):
         if self.server: self.server.stop()
     def status(self):
@@ -267,21 +318,17 @@ class LocalModelProvider:
             output = self.runner(prompt, self.config)
         elif self.server:
             try:
-                output, metrics = self.server.complete(prompt, self.config.max_tokens, cancel_event=cancel_event, on_delta=on_delta)
-                metrics.update({"reasoning_source": "local_llama_server", "model": str(self.config.model_path)})
-                self.last_inference_metrics = metrics
-                return ConversationResult(output, metrics)
+                output, metrics = self.server.complete(
+                    prompt, self.config.max_tokens, cancel_event=cancel_event, on_delta=on_delta
+                )
             except ServerUnavailable as exc:
-                self.last_inference_metrics = {"provider": "llama-cli-fallback", "server_error": str(exc)}
-                self.server.stop()
-                self.server = None
-                if not self.config.cli_path or not Path(self.config.cli_path).is_file():
-                    raise RuntimeError(f"local llama-server failed and no valid llama-cli fallback is configured: {exc}") from exc
-                command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt", "-p", prompt]
-                process = _run_streaming(command, self.config.timeout, cancel_event)
-                if process.cancelled: raise InterruptedError("local inference cancelled")
-                if process.returncode: raise RuntimeError(f"local inference exited with code {process.returncode}")
-                output = process.stdout
+                self.last_inference_metrics = {"provider": "llama-server", "status": "failed", "error": str(exc)}
+                raise RuntimeError(
+                    f"the selected llama-server failed; no CLI or hosted fallback was attempted: {exc}"
+                ) from exc
+            metrics.update({"reasoning_source": "local_llama_server", "model": str(self.config.model_path)})
+            self.last_inference_metrics = metrics
+            return ConversationResult(output, metrics)
         else:
             command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt", "-p", prompt]
             raw_stream = []; emitted = ""
@@ -350,13 +397,19 @@ class LocalModelProvider:
         prompt = "Return ONLY one complete JSON object, with no markdown or explanation. Required keys: outcome (string), inputs (object), deliverables (array), constraints (array), resources (object), permissions (array), acceptance_criteria (array), evidence (array). Do not execute anything.\nUser outcome: " + request
         started = time.perf_counter()
         try:
-            if self.runner: output = self.runner(prompt, self.config)
+            if self.runner:
+                output = self.runner(prompt, self.config)
+                data = _json_output(str(output))
+            elif self.server:
+                data, _ = self.structured_with_metrics(prompt)
+                output = json.dumps(data, ensure_ascii=False)
             else:
                 command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "-p", prompt]
                 process = subprocess.run(command, capture_output=True, text=True, timeout=self.config.timeout, shell=False, **_hidden_process_kwargs())
                 if process.returncode: raise RuntimeError(f"local inference exited with code {process.returncode}")
                 output = process.stdout
-            data = _json_output(str(output)); task = _task(data)
+                data = _json_output(str(output))
+            task = _task(data)
             return InferenceResult("ready", task, str(output), int((time.perf_counter()-started)*1000), len(str(output).split()))
         except subprocess.TimeoutExpired: return InferenceResult("timeout", None, "", int((time.perf_counter()-started)*1000), 0, "local inference timed out")
         except (json.JSONDecodeError, ValueError) as exc: return InferenceResult("malformed", None, str(output) if 'output' in locals() else "", int((time.perf_counter()-started)*1000), 0, str(exc))
@@ -382,14 +435,19 @@ def parse_proposal(data: Any) -> CapabilityProposal:
 
 def _provider_structured(self, prompt: str):
     status = self.status()
-    if status.state != "ready" and self.runner is None: raise RuntimeError(status.detail)
-    if self.runner: output = self.runner(prompt, self.config)
-    else:
-        command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "-p", prompt]
-        process = subprocess.run(command, capture_output=True, text=True, timeout=self.config.timeout, shell=False, **_hidden_process_kwargs())
-        if process.returncode: raise RuntimeError(f"local inference exited with code {process.returncode}")
-        output = process.stdout
-    return _json_output(str(output))
+    if status.state != "ready" and self.runner is None:
+        raise RuntimeError(status.detail)
+    if self.runner:
+        output = self.runner(prompt, self.config)
+        return _json_output(str(output))
+    if self.server:
+        parsed, _ = self.structured_with_metrics(prompt)
+        return parsed
+    command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "-p", prompt]
+    process = subprocess.run(command, capture_output=True, text=True, timeout=self.config.timeout, shell=False, **_hidden_process_kwargs())
+    if process.returncode:
+        raise RuntimeError(f"local inference exited with code {process.returncode}")
+    return _json_output(process.stdout)
 
 def structured_with_metrics(self, prompt: str, json_schema: dict | None = None, grammar: str | None = None, cancel_event=None, on_delta=None):
     """Run one bounded structured request and retain honest runtime metrics."""
@@ -401,25 +459,29 @@ def structured_with_metrics(self, prompt: str, json_schema: dict | None = None, 
             output = str(self.runner(prompt, self.config)); stderr = ""
         elif self.server and json_schema is None:
             try:
-                output, metrics = self.server.complete(prompt, self.config.max_tokens, grammar=grammar, cancel_event=cancel_event, on_delta=on_delta)
-                metrics.update({"prompt_tokens_estimate": len(prompt.split()), "generated_tokens_estimate": len(output.split()), "reasoning_source": "local_llama_server"})
-                self.last_inference_metrics = metrics
-                parsed, completion = _json_completion(output)
-                metrics["raw_completion"] = completion
-                return parsed, metrics
+                output, metrics = self.server.complete(
+                    prompt, self.config.max_tokens, grammar=grammar,
+                    cancel_event=cancel_event, on_delta=on_delta,
+                )
             except ServerUnavailable as exc:
-                self.last_inference_metrics = {"provider": "llama-cli-fallback", "server_error": str(exc)}
-                self.server.stop()
-                self.server = None
-                if not self.config.cli_path or not Path(self.config.cli_path).is_file():
-                    raise RuntimeError(f"local llama-server failed and no valid llama-cli fallback is configured: {exc}") from exc
-                command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt"]
-                if grammar is not None: command.extend(["--grammar", grammar])
-                command.extend(["-p", prompt])
-                process = _run_streaming(command, self.config.timeout, cancel_event)
-                if process.cancelled: raise InterruptedError("local inference cancelled")
-                if process.returncode: raise RuntimeError(f"local inference exited with code {process.returncode}")
-                output = process.stdout; stderr = process.stderr or ""
+                self.last_inference_metrics = {"provider": "llama-server", "status": "failed", "error": str(exc)}
+                raise RuntimeError(
+                    f"the selected llama-server failed; no CLI or hosted fallback was attempted: {exc}"
+                ) from exc
+            metrics.update({
+                "prompt_tokens_estimate": len(prompt.split()),
+                "generated_tokens_estimate": len(output.split()),
+                "reasoning_source": "local_llama_server",
+            })
+            self.last_inference_metrics = metrics
+            parsed, completion = _json_completion(output)
+            metrics["raw_completion"] = completion
+            return parsed, metrics
+        elif self.server and json_schema is not None:
+            raise RuntimeError(
+                "the selected persistent llama-server path does not support this JSON-schema request; "
+                "no alternate runtime will be selected"
+            )
         else:
             command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt"]
             if json_schema is not None:
