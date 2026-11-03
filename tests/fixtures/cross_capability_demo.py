@@ -151,32 +151,23 @@ def create_synthetic_pe_executable(path: Path) -> None:
         + section2_characteristics
     )
 
-    # Section data with embedded strings
-    text_section_data = (
-        b"\x90\x90\x90\x90"  # NOP sled
-        + b"\xB8\x01\x00\x00\x00"  # MOV EAX, 1
-        + b"\xC3"  # RET
-        + b"\x00" * (0x200 - 9)
-    )
+    # Align section payloads with the raw offsets declared in the PE headers.
+    text_section_data = b"\x90\x90\x90\x90" + b"\xB8\x01\x00\x00\x00" + b"\xC3"
+    text_section_data += b"\x00" * (0x200 - len(text_section_data))
 
     data_section_data = (
         b"ChimeraTestArtifact\x00"
         + b"ProductionBuild2024\x00"
         + b"SecretFunctionEntry\x00"
-        + b"\x00" * (0x200 - 63)
     )
+    data_section_data += b"\x00" * (0x200 - len(data_section_data))
 
-    # Combine all parts
-    pe_file = (
-        dos_stub
-        + pe_signature
-        + coff_header
-        + optional_header
-        + data_directories
-        + section_headers
-        + text_section_data
-        + data_section_data
-    )
+    headers = dos_stub + pe_signature + coff_header + optional_header + data_directories + section_headers
+    if len(headers) > 0x400:
+        raise ValueError("synthetic PE headers exceed SizeOfHeaders")
+    header_padding = b"\x00" * (0x400 - len(headers))
+    section_gap = b"\x00" * (0x600 - (0x400 + len(text_section_data)))
+    pe_file = headers + header_padding + text_section_data + section_gap + data_section_data
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(pe_file)
