@@ -45,3 +45,29 @@ def test_streaming_process_can_be_cancelled_without_waiting_for_exit():
     assert result.cancelled is True
     assert time.monotonic() - started < 4
     assert "partial" in result.stdout
+
+
+def test_server_only_configuration_is_a_valid_runtime(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    server = tmp_path / "llama-server.exe"
+    server.write_bytes(b"fixture")
+    from chimera.local_model import LocalModelConfig
+    status = check_status(LocalModelConfig(model, None, server_path=str(server)))
+    assert status.state == "ready"
+    assert status.cli_path == str(server)
+
+
+def test_local_agent_protocol_verification_uses_structured_decision(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda prompt, config: '{"type":"message","content":"Local agent protocol is working."}',
+    )
+    result = provider.verify_agent_protocol()
+    assert result["state"] == "verified"
+    assert result["response_preview"] == "Local agent protocol is working."
+    assert result["duration_ms"] >= 0
