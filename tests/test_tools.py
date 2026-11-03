@@ -17,3 +17,32 @@ def test_workspace_tool_refuses_overwrite(tmp_path):
     out = tmp_path / "out"; out.mkdir(); (out / "x.md").write_text("old")
     result = WorkspaceTools(tmp_path, out).run("create_artifact", {"name": "x.md", "content": "new"}, approved=True)
     assert result.status == "failed" and (out / "x.md").read_text() == "old"
+
+
+def test_workspace_reads_are_side_effect_free(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = workspace / ".chimera-agent-artifacts" / "session"
+    tools = WorkspaceTools(workspace, output)
+    assert not output.exists()
+    result = tools.run("list_files", {"relative": ".", "recursive": True})
+    assert result.status == "completed"
+    assert not output.exists()
+
+
+def test_search_text_never_follows_external_symlinks(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("sensitive-marker", encoding="utf-8")
+    (workspace / "inside.txt").write_text("ordinary", encoding="utf-8")
+    link = workspace / "linked.txt"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        return
+    result = WorkspaceTools(workspace, workspace / "out").run(
+        "search_text", {"query": "sensitive-marker"}
+    )
+    assert result.status == "completed"
+    assert result.data["matches"] == []
