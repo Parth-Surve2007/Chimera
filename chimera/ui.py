@@ -391,6 +391,10 @@ class MainWindow:
         if model and not model.is_file(): return self._toast("Selected model file does not exist.")
         if runtime and not Path(runtime).is_file(): return self._toast("Selected llama.cpp executable does not exist.")
         save_persisted_config(model, runtime)
+        try:
+            self.local_provider.stop()
+        except Exception:
+            pass
         self.local_provider = LocalModelProvider(config_from_env())
         self.agent_runtime.provider = self.local_provider
         self.local_verification = None
@@ -734,8 +738,19 @@ class MainWindow:
         self.model_verifying = True
         self._show_overview()
         try:
-            provider = LocalModelProvider(config_from_env())
-            result = await asyncio.to_thread(provider.verify_agent_protocol)
+            selection = self.agent_store.session_model(self.agent_session_id)
+            profile_id = selection.get("profile_id")
+            if profile_id:
+                profile = next((item for item in self.profile_store.list() if item.profile_id == profile_id and item.enabled), None)
+                if profile is None:
+                    raise RuntimeError("the conversation's selected model profile is missing or disabled")
+                if profile.hosted:
+                    raise RuntimeError("the selected conversation model is hosted; choose a local GGUF profile before running this local-only check")
+            provider = self.agent_runtime._provider_for(self.agent_session_id)
+            verifier = getattr(provider, "verify_agent_protocol", None)
+            if not callable(verifier):
+                raise RuntimeError("the selected local provider does not support Chimera's structured agent protocol test")
+            result = await asyncio.to_thread(verifier)
             self.local_verification = result
             self._toast(f"Local agent protocol verified in {result['duration_ms']} ms. No hosted provider was used.")
         except Exception as exc:
