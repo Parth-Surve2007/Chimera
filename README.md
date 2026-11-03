@@ -315,7 +315,11 @@ Set environment variables or configure in Settings:
 ```powershell
 $env:CHIMERA_MODEL_PATH = "path\to\model.gguf"
 $env:CHIMERA_LLAMA_CLI = "path\to\llama-cli.exe"
+# Optional server runtime (can be used without llama-cli)
+$env:CHIMERA_LLAMA_SERVER = "path\to\llama-server.exe"
 ```
+
+A model/runtime pair being present is shown as **configured**, not as proven working. In the chat header or Settings, choose **VERIFY MODEL / VERIFY AGENT CHAT** to perform a real, local structured agent-decision request. The check must receive a valid message decision from the selected local GGUF; it does not substitute a mock response. No hosted fallback or model download is attempted. A successful self-test proves this inference path worked at that moment, not that every prompt or future run is guaranteed to succeed.
 
 Optional limits:
 - `CHIMERA_MODEL_CONTEXT` — Context window size
@@ -393,7 +397,15 @@ Models are selected explicitly through the UI or configuration. Chimera never si
 
 ### Basic Conversation
 
-Launch Chimera and start a conversation. The AgentRuntime manages sessions, messages, and tool execution.
+The desktop app opens directly into the chat workspace. It uses a persistent conversation rail, resumable sessions, a message timeline, inline tool-result cards, a live activity indicator, a task-mode switch, and an approval card for protected actions. The graphite / greige / bronze interface keeps the conversation central while Model Hub, Applications, Workflow Studio, Capabilities, and Run History remain one click away.
+
+After launch:
+1. Open **Settings** and configure a local GGUF plus either llama.cpp CLI or server runtime if they were not auto-discovered.
+2. Select **VERIFY MODEL**. Do not treat a configured path as a successful inference test.
+3. Start a conversation. Attach an existing workspace when you want project inspection or workspace tools.
+4. Review every protected write or application action in the inline approval card before allowing it.
+
+The AgentRuntime persists messages, model/tool events, approvals, and task state in SQLite. The UI reconstructs the timeline from that persisted store when a conversation is reopened. The intro animation is opt-in with `CHIMERA_INTRO=1`; by default the app opens directly into chat.
 
 ### Reverse-Engineering Analysis
 
@@ -412,8 +424,8 @@ Chimera: [Invokes REA] Extracted 24 strings (min length 4): "version", "copyrigh
 ### Computer Use (Windows)
 
 ```
-User: Open Notepad and type "Hello"
-Chimera: Lists visible applications (read-only). The operator selects and authorizes one process in APPLICATIONS. Chimera inspects its UI Automation tree. Protected Invoke/Value/Toggle/Selection/Expand actions require approval and target the exact observed control. If the required semantic pattern is unavailable, Chimera stops for manual operator input.
+User: Inspect the open editor and update a selected field
+Chimera: Lists visible applications (read-only). The operator explicitly authorizes one process for the active conversation. Chimera inspects its UI Automation tree and may use exact semantic patterns on fresh, process-bound element references. Protected mutations require approval. Global keyboard/mouse injection, foreground stealing, blind typing and remote window closing are disabled. If a required safe semantic operation is unavailable, Chimera stops for manual operator input.
 ```
 
 ---
