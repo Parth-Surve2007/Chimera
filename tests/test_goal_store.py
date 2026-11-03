@@ -89,7 +89,13 @@ def test_completed_and_archived_goals_require_reason_to_reopen(tmp_path):
     reopened = store.transition(goal.goal_id, "active", reason="The acceptance criteria changed")
     assert reopened.status == "active"
     assert reopened.completed_at is None
-    assert reopened.evidence == ["test:passed"]
+    assert reopened.evidence == []
+    reopen_event = next(
+        event for event in store.events(goal.goal_id)
+        if event.event_type == "goal.status_changed"
+        and event.payload.get("to") == "active"
+    )
+    assert reopen_event.payload["previous_completion_evidence"] == ["test:passed"]
 
 
 def test_goal_update_validation_and_terminal_protection(tmp_path):
