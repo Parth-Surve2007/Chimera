@@ -277,7 +277,11 @@ class AgentRuntime:
         try:
             from .applications.registry import get_application_registry
             from .applications.dispatch import application_tool_catalog
-            catalog_tools.extend(application_tool_catalog(get_application_registry()))
+            application_registry = get_application_registry()
+            # Discover local connectors before advertising their installed-only actions.
+            # Discovery is read-only; execution remains behind the runtime policy gate.
+            application_registry.discover_all()
+            catalog_tools.extend(application_tool_catalog(application_registry))
         except Exception:
             pass
         return {"version": 1, "tools": catalog_tools, "authorized_applications": authorized_applications, "interaction_inventory": self.computer.interaction_inventory()}
@@ -764,7 +768,7 @@ class AgentRuntime:
                 })()
             else:
                 result = tools.run(operation, decision["arguments"])
-            self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result.data, "status": result.status, "error": result.error}, separators=(",", ":")))
+            self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"], "result": result.data, "status": result.status, "error": result.error}, separators=(",", ":")))
             self._record(session_id, "tool.completed" if result.status == "completed" else "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": result.status, "data": result.data, "error": result.error})
             max_tools -= 1
         raise RuntimeError("maximum agent-turn limit reached")
@@ -882,7 +886,7 @@ class AgentRuntime:
                 workspace, workspace / ".chimera-agent-artifacts" / session_id
             ).run(operation, pending["arguments"], approved=True)
         self.store.clear_pending_tool(session_id)
-        self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "tool": pending["tool"], "result": result.data, "status": result.status, "error": result.error}))
+        self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "tool": pending["tool"], "arguments": pending["arguments"], "result": result.data, "status": result.status, "error": result.error}))
         self._record(session_id, "tool.completed" if result.status == "completed" else "tool.failed", {"invocation_id": pending["invocation_id"], "status": result.status, "data": result.data, "error": result.error})
         self.store.add_message(session_id, "system", "The approved tool operation completed. Decide the next step using its actual result.")
         session = self.store.session(session_id)

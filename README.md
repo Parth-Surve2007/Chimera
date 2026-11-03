@@ -108,9 +108,17 @@ Chimera's provider registry supports 8 adapter types through a unified interface
 - Anthropic Messages API
 - Gemini Content API
 - Gemini Interactions API
-- Meta Model API (requires credentials)
+- Meta Model API (Muse Spark; requires credentials)
 - llama.cpp (local GGUF models)
 - Custom adapters via SDK
+
+**Meta Model API Tool Integration**
+- Muse Spark is an optional, explicitly selected hosted provider; it is not a local model and is never a silent fallback.
+- Tool schemas include eligible workspace, computer and discovered application-connector actions.
+- Meta returns a proposed tool call; AgentRuntime still validates the registered action, risk, mode, permission and approval before execution.
+- Tool-call arguments and their actual results are preserved as a valid provider conversation history for subsequent reasoning turns.
+- Usage accounting and the Standard data-use header are applied by the Meta provider.
+- CI tests use a local mock API server to verify the protocol and AgentRuntime dispatch. A live Meta request still requires a valid API credential and network access.
 
 **Features**
 - SSRF protection: DNS rebinding protection, 0.0.0.0 rejection, IPv4-mapped IPv6 blocking
@@ -139,13 +147,15 @@ The Application SDK provides a universal framework for connecting Chimera to ext
 - `ApplicationRegistry` — Central discovery and execution dispatcher
 
 **Current Connectors**
-- **GhidraConnector** — Headless binary analysis, PE/ELF string extraction, function enumeration
+- **GhidraConnector** — Ghidra discovery, bounded binary inspection, PE/ELF string extraction and function enumeration
 - **ReaConnector** — REA reverse-engineering intelligence through Application SDK
+- **BlenderConnector** — Local Blender discovery and approval-gated creation of primitive-based .blend scenes plus PNG render previews from bounded JSON recipes
 
 **Governance**
 - Plan Mode blocks Level 2+ actions (read-only execution)
 - Build Mode requires approval for Level 3+ actions
-- Read-only permissions (`ghidra.read`, `rea.read`) do not require approval in Build Mode
+- Read-only permissions (`ghidra.read`, `rea.read`, `blender.read`) do not require approval in Build Mode
+- Blender project creation uses `blender.project.write` and requires exact operator approval before files are written
 - All actions are logged with full provenance
 
 **Extensibility**
@@ -315,7 +325,11 @@ Set environment variables or configure in Settings:
 ```powershell
 $env:CHIMERA_MODEL_PATH = "path\to\model.gguf"
 $env:CHIMERA_LLAMA_CLI = "path\to\llama-cli.exe"
+# Optional server runtime (can be used without llama-cli)
+$env:CHIMERA_LLAMA_SERVER = "path\to\llama-server.exe"
 ```
+
+A model/runtime pair being present is shown as **configured**, not as proven working. In the chat header or Settings, choose **VERIFY MODEL / VERIFY AGENT CHAT** to perform a real, local structured agent-decision request. The check must receive a valid message decision from the selected local GGUF; it does not substitute a mock response. No hosted fallback or model download is attempted. A successful self-test proves this inference path worked at that moment, not that every prompt or future run is guaranteed to succeed.
 
 Optional limits:
 - `CHIMERA_MODEL_CONTEXT` — Context window size
@@ -393,7 +407,15 @@ Models are selected explicitly through the UI or configuration. Chimera never si
 
 ### Basic Conversation
 
-Launch Chimera and start a conversation. The AgentRuntime manages sessions, messages, and tool execution.
+The desktop app opens directly into the chat workspace. It uses a persistent conversation rail, resumable sessions, a message timeline, inline tool-result cards, a live activity indicator, a task-mode switch, and an approval card for protected actions. The graphite / greige / bronze interface keeps the conversation central while Model Hub, Applications, Workflow Studio, Capabilities, and Run History remain one click away.
+
+After launch:
+1. Open **Settings** and configure a local GGUF plus either llama.cpp CLI or server runtime if they were not auto-discovered.
+2. Select **VERIFY MODEL**. Do not treat a configured path as a successful inference test.
+3. Start a conversation. Attach an existing workspace when you want project inspection or workspace tools.
+4. Review every protected write or application action in the inline approval card before allowing it.
+
+The AgentRuntime persists messages, model/tool events, approvals, and task state in SQLite. The UI reconstructs the timeline from that persisted store when a conversation is reopened. The intro animation is opt-in with `CHIMERA_INTRO=1`; by default the app opens directly into chat.
 
 ### Reverse-Engineering Analysis
 
@@ -412,8 +434,8 @@ Chimera: [Invokes REA] Extracted 24 strings (min length 4): "version", "copyrigh
 ### Computer Use (Windows)
 
 ```
-User: Open Notepad and type "Hello"
-Chimera: Lists visible applications (read-only). The operator selects and authorizes one process in APPLICATIONS. Chimera inspects its UI Automation tree. Protected Invoke/Value/Toggle/Selection/Expand actions require approval and target the exact observed control. If the required semantic pattern is unavailable, Chimera stops for manual operator input.
+User: Inspect the open editor and update a selected field
+Chimera: Lists visible applications (read-only). The operator explicitly authorizes one process for the active conversation. Chimera inspects its UI Automation tree and may use exact semantic patterns on fresh, process-bound element references. Protected mutations require approval. Global keyboard/mouse injection, foreground stealing, blind typing and remote window closing are disabled. If a required safe semantic operation is unavailable, Chimera stops for manual operator input.
 ```
 
 ---
@@ -447,12 +469,14 @@ Chimera: Lists visible applications (read-only). The operator selects and author
 **Architecture**
 - Multi-step planning is foundational, not yet dependency-graph complete
 - Parallel task execution is not implemented
-- Skill library versioning and regression testing are planned
+- TaskStore records session-scoped tasks and events; a separate persistent cross-session goals/ambitions ledger is not yet implemented
+- Skill library versioning, isolated regression testing and governed replay are planned
 
 **Application Ecosystem**
 - Ghidra connector requires native Ghidra and JDK 17+ for headless execution
 - radare2 and Rizin backends are discovered but not auto-executed (governed mode)
-- Only Ghidra and REA connectors are implemented; broader ecosystem is planned
+- Ghidra, REA and an initial bounded Blender connector are implemented; Office, PCB/CAD, browser and broad desktop workflows are not yet implemented
+- The Blender connector creates primitive-based scenes and PNG previews; it does not yet provide arbitrary mesh modelling, materials/node editing, animation, or full Blender UI control
 
 **Computer Use**
 - Windows UI Automation is partial and requires explicit per-conversation application authorization

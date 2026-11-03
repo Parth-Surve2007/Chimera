@@ -61,7 +61,18 @@ class MetaApiMockHandler(BaseHTTPRequestHandler):
         else:
             # Verify tool execution result was returned to model
             messages = payload.get("messages", [])
-            assert any(m.get("role") == "tool" for m in messages)
+            assistant_call = next(
+                (m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")),
+                None,
+            )
+            tool_result = next((m for m in messages if m.get("role") == "tool"), None)
+            assert assistant_call is not None
+            assert tool_result is not None
+            call = assistant_call["tool_calls"][0]
+            assert call["id"] == "call_meta_001"
+            assert call["function"]["name"] == "workspace.list_files"
+            assert json.loads(call["function"]["arguments"]) == {"relative": ".", "recursive": True}
+            assert tool_result["tool_call_id"] == "call_meta_001"
             resp = {
                 "id": "chatcmpl-mock-turn2",
                 "object": "chat.completion",
@@ -220,3 +231,225 @@ def test_sam_visual_perception_corroboration():
     # menu-1 has no matching visual region
     assert corroborated[2].reference_id == "menu-1"
     assert corroborated[2].verified is False
+
+
+def test_meta_tool_formatter_exposes_registered_application_actions():
+    """Meta receives app capabilities from AgentRuntime, not only workspace tools."""
+    catalog = {
+        "tools": [
+            {
+                "id": "application.rea.list_backends",
+                "description": "List registered reverse-engineering analysis backends.",
+                "arguments": {},
+            },
+            {
+                "id": "workspace.list_files",
+                "description": "List files in the active workspace.",
+                "arguments": {"relative": "string", "recursive": "boolean"},
+            },
+        ]
+    }
+
+    formatted = MetaModelProvider._format_tools(catalog)
+    names = [item["function"]["name"] for item in formatted]
+    assert "application.rea.list_backends" in names
+    assert "workspace.list_files" in names
+    workspace_tool = next(item for item in formatted if item["function"]["name"] == "workspace.list_files")
+    assert workspace_tool["function"]["parameters"]["required"] == ["relative", "recursive"]
+    app_tool = next(item for item in formatted if item["function"]["name"] == "application.rea.list_backends")
+    assert app_tool["function"]["parameters"]["additionalProperties"] is False
+    assert app_tool["function"]["parameters"]["required"] == []
+
+
+def test_meta_tool_history_reconstructs_assistant_call_and_result_pair():
+    """Persisted results become the assistant-call/tool-result pair expected by Meta."""
+    history = [
+        type("Message", (), {"role": "user", "content": "Inspect the app ecosystem."})(),
+        type("Message", (), {
+            "role": "tool",
+            "content": json.dumps({
+                "invocation_id": "call_app_001",
+                "tool": "application.rea.list_backends",
+                "arguments": {},
+                "result": {"backends": ["builtin_static"]},
+                "status": "completed",
+                "error": None,
+            }),
+        })(),
+    ]
+
+    formatted = MetaModelProvider._format_messages(history)
+    assert formatted[0] == {"role": "user", "content": "Inspect the app ecosystem."}
+    assert formatted[1]["role"] == "assistant"
+    assert formatted[1]["tool_calls"][0]["id"] == "call_app_001"
+    assert formatted[1]["tool_calls"][0]["function"]["name"] == "application.rea.list_backends"
+    assert formatted[2]["role"] == "tool"
+    assert formatted[2]["tool_call_id"] == "call_app_001"
+    assert "builtin_static" in formatted[2]["content"]
+
+
+class MetaApplicationProbeConnector:
+    """A deterministic local connector used to verify Meta-to-Application dispatch."""
+
+    def __init__(self):
+        from chimera.applications.manifest import (
+            ActionRiskLevel, ApplicationAction, ApplicationManifest, IntegrationSurface,
+        )
+        from chimera.applications.base import BaseApplicationConnector
+
+        class Connector(BaseApplicationConnector):
+            def __init__(self):
+                manifest = ApplicationManifest(
+                    application_id="meta_probe",
+                    display_name="Meta Integration Probe",
+                    vendor="Chimera Tests",
+                    connector_version="1.0.0",
+                    supported_surfaces=[IntegrationSurface.NATIVE_API],
+                    actions=[
+                        ApplicationAction(
+                            action_id="ping",
+                            display_name="Probe Connector",
+                            description="Return a deterministic probe result.",
+                            risk_level=ActionRiskLevel.LEVEL_0_OBSERVE,
+                            permission="rea.read",
+                            arguments_schema={},
+                        )
+                    ],
+                )
+                super().__init__(manifest)
+
+            def discover(self):
+                self.manifest.is_installed = True
+                return self.manifest
+
+            def execute_action(self, action_id, arguments, approved=False):
+                if action_id == "ping":
+                    return {"status": "completed", "probe": "application-dispatch-ok"}
+                return {"status": "failed", "error": "unknown probe action"}
+
+        self.connector = Connector()
+
+
+class MetaApplicationApiMockHandler(BaseHTTPRequestHandler):
+    requests_received = []
+
+    def do_POST(self):
+        length = int(self.headers["Content-Length"])
+        payload = json.loads(self.rfile.read(length))
+        MetaApplicationApiMockHandler.requests_received.append(payload)
+        assert "Bearer mock-meta-secret-key" in self.headers.get("Authorization", "")
+        assert self.headers.get("X-Meta-Data-Policy") == "standard"
+
+        if len(MetaApplicationApiMockHandler.requests_received) == 1:
+            tools = payload.get("tools", [])
+            assert any(
+                item.get("function", {}).get("name") == "application.meta_probe.ping"
+                for item in tools
+            )
+            response = {
+                "id": "chatcmpl-meta-app-turn1",
+                "object": "chat.completion",
+                "model": "muse-spark-1.3",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call_meta_app_001",
+                            "type": "function",
+                            "function": {
+                                "name": "application.meta_probe.ping",
+                                "arguments": "{}",
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+            }
+        else:
+            messages = payload.get("messages", [])
+            assistant_call = next(
+                (item for item in messages if item.get("role") == "assistant" and item.get("tool_calls")),
+                None,
+            )
+            tool_result = next((item for item in messages if item.get("role") == "tool"), None)
+            assert assistant_call is not None
+            assert assistant_call["tool_calls"][0]["id"] == "call_meta_app_001"
+            assert assistant_call["tool_calls"][0]["function"]["name"] == "application.meta_probe.ping"
+            assert tool_result is not None
+            assert tool_result["tool_call_id"] == "call_meta_app_001"
+            assert "application-dispatch-ok" in tool_result["content"]
+            response = {
+                "id": "chatcmpl-meta-app-turn2",
+                "object": "chat.completion",
+                "model": "muse-spark-1.3",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "The registered application connector executed successfully."},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 150, "completion_tokens": 25, "total_tokens": 175},
+            }
+
+        body = json.dumps(response).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_meta_model_calls_registered_application_connector_through_agent_runtime(tmp_path, monkeypatch):
+    """Prove the full Meta → tool schema → AgentRuntime → connector → Meta result loop."""
+    from chimera.applications.registry import get_application_registry
+
+    MetaApplicationApiMockHandler.requests_received = []
+    registry = get_application_registry()
+    probe = MetaApplicationProbeConnector().connector
+    monkeypatch.setitem(registry._connectors, "meta_probe", probe)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MetaApplicationApiMockHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        profile = ModelProfile(
+            profile_id="meta-application-probe",
+            provider_id="meta",
+            model_id="muse-spark-1.3",
+            hosted=True,
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            tool_calling=True,
+            capability_evidence="tested",
+        )
+        profiles = ModelProfileStore(tmp_path / "profiles.json")
+        profiles.save(profile)
+        provider = MetaModelProvider(profile, MockMetaCredentials(), UsageAccountant(tmp_path / "usage.json"))
+        store = AgentSessionStore(tmp_path / "sessions.db")
+        runtime = AgentRuntime(store, provider, profiles)
+
+        session_id = runtime.create_session(tmp_path, mode="plan")
+        runtime.set_session_model(session_id, profile.profile_id, local_only=False)
+        result = runtime.send(session_id, "Use the registered application probe.")
+
+        assert result["status"] == "completed"
+        assert "registered application connector executed successfully" in result["message"].content.lower()
+        assert len(MetaApplicationApiMockHandler.requests_received) == 2
+
+        tool_message = next(message for message in store.messages(session_id) if message.role == "tool")
+        tool_data = json.loads(tool_message.content)
+        assert tool_data["tool"] == "application.meta_probe.ping"
+        assert tool_data["status"] == "completed"
+        assert tool_data["result"]["probe"] == "application-dispatch-ok"
+
+        event_types = [event.event_type for event in store.events(session_id)]
+        assert "tool.call.requested" in event_types
+        assert "tool.started" in event_types
+        assert "tool.completed" in event_types
+        assert "turn.completed" in event_types
+    finally:
+        server.shutdown()
+        server.server_close()

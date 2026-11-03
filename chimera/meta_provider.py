@@ -179,6 +179,13 @@ class MetaModelProvider:
 
     @staticmethod
     def _format_messages(messages: list[Any]) -> list[dict[str, Any]]:
+        """Translate persisted Chimera messages into a valid chat-completions tool history.
+
+        AgentRuntime stores the executed tool result (including its original arguments).
+        Rebuild the assistant tool-call message immediately before the matching tool result,
+        as required by function-calling APIs. Legacy tool records without arguments are
+        retained as plain assistant context rather than emitting an orphan tool message.
+        """
         result = []
         for item in messages:
             role = getattr(item, "role", None) or (item.get("role") if isinstance(item, dict) else "user")
@@ -186,15 +193,51 @@ class MetaModelProvider:
             if role == "tool":
                 try:
                     data = json.loads(content)
-                    result.append({
-                        "role": "tool",
-                        "tool_call_id": data.get("invocation_id", ""),
-                        "content": json.dumps(data.get("result", data), separators=(",", ":")),
-                    })
+                    invocation_id = data.get("invocation_id")
+                    tool_id = data.get("tool")
+                    arguments = data.get("arguments")
+                    if (
+                        isinstance(invocation_id, str) and invocation_id
+                        and isinstance(tool_id, str) and tool_id
+                        and isinstance(arguments, dict)
+                    ):
+                        result.append({
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "id": invocation_id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_id,
+                                    "arguments": json.dumps(arguments, separators=(",", ":")),
+                                },
+                            }],
+                        })
+                        tool_payload = {
+                            "status": data.get("status", "completed"),
+                            "result": data.get("result", {}),
+                            "error": data.get("error"),
+                        }
+                        result.append({
+                            "role": "tool",
+                            "tool_call_id": invocation_id,
+                            "content": json.dumps(tool_payload, separators=(",", ":")),
+                        })
+                    else:
+                        # Older persisted tool records did not retain arguments. Keep
+                        # their evidence in context without creating an invalid tool turn.
+                        summary = {
+                            "tool": tool_id or "unknown",
+                            "status": data.get("status", "unknown"),
+                            "result": data.get("result", data),
+                            "error": data.get("error"),
+                        }
+                        result.append({
+                            "role": "assistant",
+                            "content": "Historical tool result: " + json.dumps(summary, separators=(",", ":")),
+                        })
                 except (TypeError, ValueError):
-                    result.append({"role": "tool", "content": str(content)})
+                    result.append({"role": "assistant", "content": "Historical tool result: " + str(content)})
             elif role == "assistant":
-                # Check if it was a tool call message
                 if isinstance(item, dict) and "tool_calls" in item:
                     result.append(item)
                 else:
@@ -208,7 +251,8 @@ class MetaModelProvider:
         tools = []
         for item in catalog.get("tools", []):
             tool_id = item.get("id", "")
-            if not tool_id.startswith(("workspace.", "computer.")):
+            # AgentRuntime supplies only registered, schema-validated application actions.
+            if not tool_id.startswith(("workspace.", "computer.", "application.")):
                 continue
             properties = {}
             for name, kind in item.get("arguments", {}).items():
@@ -228,6 +272,7 @@ class MetaModelProvider:
                     "parameters": {
                         "type": "object",
                         "properties": properties,
+                        "required": list(properties.keys()),
                         "additionalProperties": False,
                     },
                 },

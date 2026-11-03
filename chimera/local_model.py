@@ -142,12 +142,20 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
     return LocalModelConfig(Path(model_value).expanduser().resolve() if model_value else None, str(Path(cli_value).expanduser().resolve()) if cli_value else None, positive("CHIMERA_MODEL_CONTEXT", 2048), positive("CHIMERA_MODEL_MAX_TOKENS", 256), float(env.get("CHIMERA_MODEL_TIMEOUT", "60")), positive("CHIMERA_MODEL_THREADS", 4), gpu_layers, server_value)
 
 def check_status(config: LocalModelConfig) -> ModelStatus:
-    if not config.model_path: return ModelStatus("missing", "CHIMERA_MODEL_PATH is not configured")
-    if not config.model_path.is_file(): return ModelStatus("missing", "configured GGUF model file does not exist", str(config.model_path), config.cli_path)
-    if config.model_path.suffix.lower() != ".gguf": return ModelStatus("incompatible", "model path is not a .gguf file", str(config.model_path), config.cli_path)
-    if not config.cli_path: return ModelStatus("missing", "CHIMERA_LLAMA_CLI is not configured", str(config.model_path), None)
-    if not Path(config.cli_path).is_file(): return ModelStatus("unavailable", "configured llama.cpp executable does not exist", str(config.model_path), config.cli_path)
-    return ModelStatus("ready", "local model and llama.cpp executable are present", str(config.model_path), config.cli_path)
+    if not config.model_path:
+        return ModelStatus("missing", "A local GGUF model path is not configured")
+    if not config.model_path.is_file():
+        return ModelStatus("missing", "configured GGUF model file does not exist", str(config.model_path), config.cli_path or config.server_path)
+    if config.model_path.suffix.lower() != ".gguf":
+        return ModelStatus("incompatible", "model path is not a .gguf file", str(config.model_path), config.cli_path or config.server_path)
+    cli_ok = bool(config.cli_path and Path(config.cli_path).is_file())
+    server_ok = bool(config.server_path and Path(config.server_path).is_file())
+    if not cli_ok and not server_ok:
+        detail = "Neither a valid llama-cli nor llama-server executable is configured"
+        return ModelStatus("missing", detail, str(config.model_path), config.cli_path or config.server_path)
+    runtime = config.server_path if server_ok else config.cli_path
+    detail = "GGUF and llama.cpp runtime are present; a real inference test is still required"
+    return ModelStatus("ready", detail, str(config.model_path), runtime)
 
 def config_source(env: dict[str, str] | None = None, data_dir: Path | None = None) -> dict[str, str]:
     env = env or os.environ; persisted, _ = load_persisted_config(data_dir)
@@ -267,6 +275,8 @@ class LocalModelProvider:
                 self.last_inference_metrics = {"provider": "llama-cli-fallback", "server_error": str(exc)}
                 self.server.stop()
                 self.server = None
+                if not self.config.cli_path or not Path(self.config.cli_path).is_file():
+                    raise RuntimeError(f"local llama-server failed and no valid llama-cli fallback is configured: {exc}") from exc
                 command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt", "-p", prompt]
                 process = _run_streaming(command, self.config.timeout, cancel_event)
                 if process.cancelled: raise InterruptedError("local inference cancelled")
@@ -288,6 +298,37 @@ class LocalModelProvider:
         text = _plain_completion(output)
         if not text: raise ValueError("local model returned an empty conversational response")
         return ConversationResult(text, {"duration_ms": int((time.perf_counter() - started) * 1000), "generated_tokens_estimate": len(text.split()), "model": str(self.config.model_path), "runtime": str(self.config.cli_path), "reasoning_source": "local_llama_cpp"})
+
+    def verify_agent_protocol(self) -> dict:
+        """Run a real, local, structured model request using the same decision protocol as chat."""
+        from types import SimpleNamespace
+        status = self.status()
+        if status.state != "ready":
+            raise RuntimeError(status.detail)
+        started = time.perf_counter()
+        probe = SimpleNamespace(
+            role="user",
+            content="For this runtime self-test, reply with one short sentence confirming that the local agent protocol is working.",
+        )
+        decision = self.decide(
+            [probe],
+            {"version": 1, "tools": [], "authorized_applications": [], "interaction_inventory": []},
+        )
+        if not isinstance(decision, dict) or decision.get("type") != "message":
+            raise RuntimeError("local model did not return a valid agent message decision")
+        answer = decision.get("content")
+        if not isinstance(answer, str) or not answer.strip():
+            raise RuntimeError("local model returned an empty agent message")
+        metrics = decision.get("_metrics", {})
+        return {
+            "state": "verified",
+            "model": str(self.config.model_path),
+            "runtime": str(self.config.server_path or self.config.cli_path),
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "generated_tokens_estimate": metrics.get("generated_tokens_estimate"),
+            "response_preview": answer.strip()[:180],
+            "reasoning_source": metrics.get("reasoning_source", "local_llama_cpp"),
+        }
 
     def decide(self, messages, catalog, session=None, cancel_event=None, on_delta=None):
         """Return one strictly structured next action for the agent runtime."""
@@ -370,6 +411,8 @@ def structured_with_metrics(self, prompt: str, json_schema: dict | None = None, 
                 self.last_inference_metrics = {"provider": "llama-cli-fallback", "server_error": str(exc)}
                 self.server.stop()
                 self.server = None
+                if not self.config.cli_path or not Path(self.config.cli_path).is_file():
+                    raise RuntimeError(f"local llama-server failed and no valid llama-cli fallback is configured: {exc}") from exc
                 command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt"]
                 if grammar is not None: command.extend(["--grammar", grammar])
                 command.extend(["-p", prompt])
