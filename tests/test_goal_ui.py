@@ -1,6 +1,24 @@
 from chimera.goals import GoalStore
 
 
+def _text_values(control):
+    seen = set()
+    stack = [control]
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        value = getattr(current, "value", None)
+        if isinstance(value, str):
+            yield value
+        children = getattr(current, "controls", None) or []
+        stack.extend(children)
+        content = getattr(current, "content", None)
+        if content is not None:
+            stack.append(content)
+
+
 def test_goals_screen_renders_empty_state_and_persistent_store(tmp_path):
     from chimera.ui import MainWindow
 
@@ -10,14 +28,10 @@ def test_goals_screen_renders_empty_state_and_persistent_store(tmp_path):
 
     window._show_goals()
 
-    assert any(
-        getattr(control, "value", None) == "GOALS & AMBITIONS"
-        for control in window.rendered_controls
-    )
-    assert any(
-        getattr(control, "value", None) == "YOUR GOALS"
-        for control in window.rendered_controls
-    )
+    visible_text = [value for control in window.rendered_controls for value in _text_values(control)]
+    assert "GOALS & AMBITIONS" in visible_text
+    assert "YOUR GOALS" in visible_text
+    assert any("No goals recorded yet" in value for value in visible_text)
 
 
 def test_goals_screen_lists_persisted_goal_cards(tmp_path):
@@ -36,8 +50,7 @@ def test_goals_screen_lists_persisted_goal_cards(tmp_path):
 
     window._show_goals()
 
-    # The last control is a card for the persisted goal, rather than the empty state.
-    last = window.rendered_controls[-1]
-    card_text = str(last)
-    assert "Build Chimera" in card_text
-    assert "ACTIVE" in card_text
+    visible_text = [value for control in window.rendered_controls for value in _text_values(control)]
+    assert "Build Chimera" in visible_text
+    assert any("CRITICAL PRIORITY" in value for value in visible_text)
+    assert any("Complete real application work" in value for value in visible_text)
