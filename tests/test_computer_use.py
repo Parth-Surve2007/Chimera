@@ -6,6 +6,8 @@ from chimera.tools import tool_catalog
 def test_computer_tools_are_registered_and_observation_is_read_only(tmp_path):
     catalog = tool_catalog()["operations"]
     assert "computer.list_applications" in catalog
+    for disabled in ("computer.focus", "computer.focus_window", "computer.type_text", "computer.close", "computer.focus_element"):
+        assert disabled not in catalog
     result = WindowsComputerUse(tmp_path).list_applications()
     assert isinstance(result, list)
 
