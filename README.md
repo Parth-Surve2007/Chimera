@@ -1,8 +1,8 @@
 # Chimera
 
-**A model-agnostic, local-first general-purpose AI agent with an extensible application ecosystem, reverse-engineering intelligence and governed self-learning.**
+**A model-agnostic, local-first general-purpose AI computer agent.**
 
-Chimera is designed to understand tasks, operate applications, develop software, reverse-engineer systems, perform authorized cybersecurity research and learn reusable workflows. It aims to become an extensible intelligence layer across your digital environment — with explicit operator control, local-first by default, and governed execution at every step.
+Chimera is designed to understand and execute complex tasks across your digital environment: general computer and application control, software engineering, authorized cybersecurity research, technical analysis, and governed self-learning. It aims to become an extensible intelligence layer that operates with explicit operator control, local-first by default, and governed execution at every step.
 
 ---
 
@@ -14,8 +14,8 @@ Chimera is not a chatbot or a coding assistant. It is an agent platform that:
 - **Prioritizes local-first** — Run inference locally when possible; remote providers are explicit choices, never silent fallbacks.
 - **Governs all execution** — Every tool call, application action, and system modification passes through approval gates with full audit trails.
 - **Learns from experience** — Capture execution traces, extract reusable skills, and promote them with operator approval.
-- **Integrates applications** — Connect to specialized tools (Ghidra, IDEs, browsers, build systems) through a governed Application SDK.
-- **Reverse-engineers anything** — REA provides general-purpose binary analysis across PE, ELF, Mach-O, firmware and more.
+- **Integrates applications** — Connect to specialized tools (IDEs, browsers, build systems, analysis tools) through a governed Application SDK.
+- **Reverse-engineers software** — REA provides binary and artifact analysis as one specialized capability domain.
 
 Chimera does not claim to be a completed AGI or frontier model equivalent. It is a foundation for building capable, transparent, and controllable AI agents.
 
@@ -41,9 +41,9 @@ Chimera does not claim to be a completed AGI or frontier model equivalent. It is
 
 ## REA: Reverse Engineer Anything
 
-**REA is Chimera's general-purpose reverse-engineering intelligence domain.**
+**REA is one specialized capability domain within Chimera.**
 
-It is NOT Cockos REAPER (the audio workstation). REA stands for Reverse Engineer Anything.
+REA stands for Reverse Engineer Anything. It is NOT Cockos REAPER (the audio workstation). REA provides Chimera with the ability to understand software artifacts, binaries, firmware, file formats and application internals through multiple analysis backends.
 
 ### What REA Does
 

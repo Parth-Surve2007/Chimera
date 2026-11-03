@@ -1,53 +1,100 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
 
-datas = [('assets', 'assets'), ('fonts', 'fonts')]
-binaries = []
-hiddenimports = []
-tmp_ret = collect_all('flet')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('chimera')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
+block_cipher = None
 
 a = Analysis(
-    ['run_chimera.py'],
+    ['chimera/app.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[],
+    datas=[
+        ('fonts', 'fonts'),
+    ],
+    hiddenimports=[
+        'flet',
+        'flet_core',
+        'pywinauto',
+        'pywinauto.keyboard',
+        'pywinauto.mouse',
+        'pywinauto.application',
+        'sqlite3',
+        'json',
+        'pathlib',
+        'dataclasses',
+        'typing',
+        'threading',
+        'uuid',
+        'datetime',
+        'hashlib',
+        'struct',
+        'inspect',
+        'enum',
+        're',
+        'logging',
+        'chimera.workflow_engine',
+        'chimera.workflow_planner',
+        'chimera.result_verification',
+        'chimera.failure_recovery',
+        'chimera.workflow_integration',
+        'chimera.workflow_learning',
+        'chimera.workflow_ui',
+        'chimera.applications',
+        'chimera.applications.registry',
+        'chimera.applications.dispatch',
+        'chimera.applications.connectors',
+        'chimera.applications.connectors.ghidra_connector',
+        'chimera.applications.connectors.rea_connector',
+        'chimera.reverse_engineering',
+        'chimera.reverse_engineering.engine',
+        'chimera.reverse_engineering.artifact',
+        'chimera.reverse_engineering.backends',
+        'chimera.reverse_engineering.backends.builtin_static',
+        'chimera.reverse_engineering.backends.ghidra',
+        'chimera.reverse_engineering.backends.radare2',
+        'chimera.reverse_engineering.backends.rizin',
+        'chimera.providers',
+        'chimera.providers.registry',
+        'chimera.providers.base',
+        'chimera.providers.adapters',
+        'chimera.providers.adapters.local_adapter',
+        'chimera.learning',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'matplotlib',
+        'numpy',
+        'pandas',
+        'scipy',
+        'tkinter',
+        'pytest',
+    ],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
     noarchive=False,
-    optimize=0,
 )
-pyz = PYZ(a.pure)
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='Chimera',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='Chimera',
+    icon=None,
 )
