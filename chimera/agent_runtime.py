@@ -262,10 +262,17 @@ class AgentRuntime:
         session_workspace = session.get("workspace") if session else None
         if not session_workspace or not Path(session_workspace).is_dir():
             aliases = {key: value for key, value in aliases.items() if not key.startswith("workspace.")}
-        context = []
-        try:
-            for app in self.computer.backend.list_applications()[:20]: context.append({"pid": app["pid"], "executable": app.get("executable"), "windows": app.get("windows", [])[:6]})
-        except Exception: pass
+        authorized_applications = [
+            {
+                "session_id": identity.session_id,
+                "pid": identity.pid,
+                "executable": identity.executable,
+                "process_create_time": identity.process_create_time,
+            }
+            for identity in self.computer.sessions.values()
+            if identity.owner_session_id == (session.get("session_id") if session else None)
+            and self.computer._identity_is_current(identity)
+        ]
         catalog_tools = [{"id": key, **tool_catalog()["operations"][value]} for key, value in aliases.items()]
         try:
             from .applications.registry import get_application_registry
@@ -273,7 +280,7 @@ class AgentRuntime:
             catalog_tools.extend(application_tool_catalog(get_application_registry()))
         except Exception:
             pass
-        return {"version": 1, "tools": catalog_tools, "computer_observation": context, "interaction_inventory": self.computer.interaction_inventory()}
+        return {"version": 1, "tools": catalog_tools, "authorized_applications": authorized_applications, "interaction_inventory": self.computer.interaction_inventory()}
 
     @staticmethod
     def _decision(value):
@@ -315,20 +322,15 @@ class AgentRuntime:
             "create_artifact": {"name": str, "content": str},
             "computer.list_applications": {},
             "computer.list_windows": {},
-            "computer.inspect_controls": {"hwnd": int},
+            "computer.inspect_controls": {"session_id": str, "hwnd": int},
             "computer.inspect_elements": {"session_id": str},
-            "computer.focus": {"hwnd": int},
-            "computer.focus_window": {"hwnd": int},
             "computer.launch": {"executable": str},
-            "computer.type_text": {"hwnd": int, "text": str},
-            "computer.screenshot": {"hwnd": int, "path": str},
-            "computer.close": {"hwnd": int},
+            "computer.screenshot": {"session_id": str, "hwnd": int, "path": str},
             "computer.inspect_window": {"session_id": str},
             "computer.inspect_pattern_support": {"session_id": str, "reference_id": str},
             "computer.invoke_element": {"session_id": str, "reference_id": str},
             "computer.set_value": {"session_id": str, "reference_id": str, "value": str},
             "computer.read_text": {"session_id": str, "reference_id": str},
-            "computer.focus_element": {"session_id": str, "reference_id": str},
             "computer.toggle_element": {"session_id": str, "reference_id": str},
             "computer.select_element": {"session_id": str, "reference_id": str},
             "computer.expand_element": {"session_id": str, "reference_id": str},
@@ -663,31 +665,103 @@ class AgentRuntime:
                 result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
             elif tool_id.startswith("computer."):
                 computer = WindowsComputerUse(workspace)
-                if operation in {"computer.list_applications", "computer.list_windows"}:
-                    result_data = []
-                    for app in computer.list_applications():
-                        identity = self.computer.create(app["pid"], app.get("executable")); self._computer_sessions[identity.session_id] = identity; app["computer_session_id"] = identity.session_id; result_data.append(app)
+                args = decision["arguments"]
+
+                def require_authorized_app(app_session_id):
+                    identity = self.computer.sessions.get(app_session_id)
+                    if not identity or identity.owner_session_id != session_id:
+                        raise PermissionError("authorize this exact application for the active Chimera conversation first")
+                    if not self.computer._identity_is_current(identity):
+                        raise PermissionError("authorized application process identity has changed")
+                    return identity
+
+                if operation == "computer.list_applications":
+                    result_data = computer.list_applications()
                     result_status, result_error = "completed", None
-                elif operation == "computer.inspect_controls": result_data = computer.controls(decision["arguments"]["hwnd"]); result_status, result_error = "completed", None
-                elif operation == "computer.inspect_elements":
-                    observation = self.computer.observe(decision["arguments"]["session_id"]); result_data = {"observation_id": observation.observation_id, "session_id": observation.session_id, "generation": observation.generation, "backend": observation.backend, "elements": observation.elements[:250]}; result_status, result_error = "completed", None
+                elif operation == "computer.list_windows":
+                    result_data = [
+                        window for application in computer.list_applications()
+                        for window in application.get("windows", [])
+                    ]
+                    result_status, result_error = "completed", None
                 elif operation == "computer.inspect_window":
-                    observation = self.computer.observe(decision["arguments"]["session_id"]); result_data = {"session_id": observation.session_id, "windows": observation.windows, "backend": observation.backend}; result_status, result_error = "completed", None
+                    require_authorized_app(args["session_id"])
+                    observation = self.computer.observe(args["session_id"])
+                    result_data = {
+                        "session_id": observation.session_id,
+                        "windows": observation.windows,
+                        "backend": observation.backend,
+                    }
+                    result_status, result_error = "completed", None
+                elif operation == "computer.inspect_controls":
+                    require_authorized_app(args["session_id"])
+                    self.computer.validate_window(args["session_id"], args["hwnd"])
+                    result_data = computer.controls(args["hwnd"])
+                    result_status, result_error = "completed", None
+                elif operation == "computer.inspect_elements":
+                    require_authorized_app(args["session_id"])
+                    observation = self.computer.observe(args["session_id"])
+                    result_data = {
+                        "observation_id": observation.observation_id,
+                        "session_id": observation.session_id,
+                        "generation": observation.generation,
+                        "backend": observation.backend,
+                        "elements": observation.elements[:250],
+                        "limitation": observation.limitation,
+                    }
+                    result_status, result_error = "completed", None
                 elif operation == "computer.inspect_pattern_support":
-                    reference = self.computer.references.get(decision["arguments"]["reference_id"]); result_data = {"patterns": [], "status": "failed" if not reference else "completed"};
-                    if reference:
-                        observation = self.computer.observe(reference.session_id); result_data["patterns"] = next((e.get("patterns", []) for e in observation.elements if e.get("reference_id") == decision["arguments"]["reference_id"]), [])
-                    result_status, result_error = result_data["status"], None if result_data["status"] == "completed" else "unknown reference"
-                elif operation in {"computer.invoke_element", "computer.set_value", "computer.read_text", "computer.focus_element", "computer.toggle_element", "computer.select_element", "computer.expand_element", "computer.collapse_element"}:
-                    action = operation.removeprefix("computer."); value = decision["arguments"].get("value")
-                    strategy = self.computer.choose_interaction(action, evidence={"semantic_control": True})
-                    result_data = self.computer.act_reference(decision["arguments"]["session_id"], decision["arguments"]["reference_id"], action, value, approved=True)
+                    require_authorized_app(args["session_id"])
+                    reference = self.computer.references.get(args["reference_id"])
+                    if not reference or reference.session_id != args["session_id"]:
+                        result_data, result_status, result_error = {}, "failed", "unknown or cross-session reference"
+                    else:
+                        self.computer.validate_reference(reference)
+                        observed = self.computer.observations.get(args["session_id"], (0, None))[1]
+                        result_data = {
+                            "patterns": next(
+                                (element.get("patterns", []) for element in (observed.elements if observed else [])
+                                 if element.get("reference_id") == args["reference_id"]),
+                                [],
+                            )
+                        }
+                        result_status, result_error = "completed", None
+                elif operation in {
+                    "computer.invoke_element", "computer.set_value", "computer.read_text",
+                    "computer.toggle_element", "computer.select_element",
+                    "computer.expand_element", "computer.collapse_element",
+                }:
+                    require_authorized_app(args["session_id"])
+                    action = operation.removeprefix("computer.")
+                    strategy_action = {
+                        "toggle_element": "toggle",
+                        "select_element": "select_item",
+                        "expand_element": "expand",
+                        "collapse_element": "collapse",
+                    }.get(action, action)
+                    strategy = self.computer.choose_interaction(
+                        strategy_action, evidence={"semantic_control": True}
+                    )
+                    result_data = self.computer.act_reference(
+                        args["session_id"], args["reference_id"], action,
+                        args.get("value"), approved=False,
+                    )
                     result_data["strategy"] = strategy
                     result_status, result_error = result_data.get("status"), result_data.get("reason")
-                elif operation in {"computer.focus", "computer.focus_window"}: result_data = computer.focus(decision["arguments"]["hwnd"]); result_status, result_error = result_data.get("status"), result_data.get("reason")
-                elif operation == "computer.focus": result_data = computer.focus(decision["arguments"]["hwnd"]); result_status, result_error = result_data.get("status"), result_data.get("reason")
-                else: result_data, result_status, result_error = {}, "failed", "unsupported computer operation"
-                result = type("ComputerResult", (), {"data": {"items": result_data}, "status": result_status, "error": result_error})()
+                elif operation == "computer.screenshot":
+                    require_authorized_app(args["session_id"])
+                    self.computer.validate_window(args["session_id"], args["hwnd"])
+                    result_data = computer.screenshot(
+                        args["hwnd"], Path(args["path"]), approved=True
+                    )
+                    result_status, result_error = result_data.get("status"), result_data.get("reason")
+                else:
+                    result_data, result_status, result_error = {}, "blocked", "unsupported or disabled computer operation"
+                result = type("ComputerResult", (), {
+                    "data": {"items": result_data},
+                    "status": result_status,
+                    "error": result_error,
+                })()
             else:
                 result = tools.run(operation, decision["arguments"])
             self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result.data, "status": result.status, "error": result.error}, separators=(",", ":")))
@@ -715,7 +789,9 @@ class AgentRuntime:
         workspace = Path(session["workspace"]) if session.get("workspace") else None
         if pending["tool"].startswith("application."):
             from .applications.registry import get_application_registry
-            from .applications.dispatch import decode_tool_id
+            from .applications.dispatch import (
+                decode_tool_id, validate_application_arguments, APPLICATION_READ_PERMISSIONS,
+            )
             decoded = decode_tool_id(pending["tool"])
             if not decoded:
                 raise ValueError(f"malformed pending application tool: {pending['tool']}")
@@ -723,22 +799,88 @@ class AgentRuntime:
             connector = get_application_registry().get(app_id)
             if not connector:
                 raise ValueError(f"unregistered application: {app_id}")
+            refreshed = connector.discover()
+            if refreshed is not None:
+                connector.manifest = refreshed
+            action = next((item for item in connector.manifest.actions if item.action_id == action_id), None)
+            if action is None or getattr(action, "unavailable", False):
+                raise PermissionError("application action is no longer available")
+            self._validate_arguments(pending["tool"], pending["arguments"])
+            validate_application_arguments(action, pending["arguments"])
+            allowed, reason, action = connector.validate_action_call(
+                action_id, pending["arguments"], mode=session.get("mode", "plan")
+            )
+            if not allowed:
+                raise PermissionError(reason)
+            TaskPolicy.validate(session.get("mode", "plan"), pending["tool"], action.permission)
+            if not (action.requires_approval or action.permission not in APPLICATION_READ_PERMISSIONS):
+                raise PermissionError("the action no longer requires approval")
+            self._record(session_id, "tool.permission.granted", {
+                "invocation_id": pending["invocation_id"], "tool": pending["tool"], "source": "operator",
+            })
+            self._record(session_id, "tool.started", {
+                "invocation_id": pending["invocation_id"], "tool": pending["tool"],
+                "arguments": pending["arguments"],
+            })
             act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
             res_status = act_res.get("status", "completed")
             res_err = act_res.get("error")
             result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
-        elif pending["tool"].startswith("computer.") and pending["tool"] in {"computer.invoke_element", "computer.set_value", "computer.toggle_element", "computer.select_element", "computer.expand_element", "computer.collapse_element"}:
-            operation = pending["tool"].removeprefix("computer."); args = pending["arguments"]; result_data = self.computer.act_reference(args["session_id"], args["reference_id"], operation, args.get("value"), approved=True); result = type("ComputerResult", (), {"data": result_data, "status": result_data.get("status", "failed"), "error": result_data.get("reason")})()
-        elif pending["tool"] == "computer.launch":
-            result_data = WindowsComputerUse(workspace).launch(pending["arguments"]["executable"], approved=True); result = type("ComputerResult", (), {"data": result_data, "status": result_data.get("status", "failed"), "error": result_data.get("reason")})()
-        elif pending["tool"] == "computer.type_text":
-            result_data = WindowsComputerUse(workspace).type_text(pending["arguments"]["hwnd"], pending["arguments"]["text"], approved=True); result = type("ComputerResult", (), {"data": result_data, "status": result_data.get("status", "failed"), "error": result_data.get("reason")})()
-        elif pending["tool"] == "computer.screenshot":
-            result_data = WindowsComputerUse(workspace).screenshot(pending["arguments"]["hwnd"], Path(pending["arguments"]["path"]), approved=True); result = type("ComputerResult", (), {"data": result_data, "status": result_data.get("status", "failed"), "error": result_data.get("reason")})()
-        elif pending["tool"] == "computer.close":
-            result_data = WindowsComputerUse(workspace).close(pending["arguments"]["hwnd"], approved=True); result = type("ComputerResult", (), {"data": result_data, "status": result_data.get("status", "failed"), "error": result_data.get("reason")})()
+        elif pending["tool"].startswith("computer.") and pending["tool"] in {
+            "computer.invoke_element", "computer.set_value", "computer.toggle_element",
+            "computer.select_element", "computer.expand_element", "computer.collapse_element",
+            "computer.screenshot", "computer.launch",
+        }:
+            operation = pending["tool"]
+            args = pending["arguments"]
+            self._validate_arguments(operation, args)
+            self._record(session_id, "tool.permission.granted", {
+                "invocation_id": pending["invocation_id"], "tool": operation, "source": "operator",
+            })
+            self._record(session_id, "tool.started", {
+                "invocation_id": pending["invocation_id"], "tool": operation, "arguments": args,
+            })
+            if operation == "computer.launch":
+                result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
+            elif operation == "computer.screenshot":
+                identity = self.computer.sessions.get(args["session_id"])
+                if not identity or identity.owner_session_id != session_id:
+                    raise PermissionError("application is not authorized for this Chimera conversation")
+                self.computer.validate_window(args["session_id"], args["hwnd"])
+                result_data = WindowsComputerUse(workspace).screenshot(args["hwnd"], Path(args["path"]), approved=True)
+            else:
+                identity = self.computer.sessions.get(args["session_id"])
+                if not identity or identity.owner_session_id != session_id:
+                    raise PermissionError("application is not authorized for this Chimera conversation")
+                result_data = self.computer.act_reference(
+                    args["session_id"], args["reference_id"],
+                    operation.removeprefix("computer."), args.get("value"), approved=True,
+                )
+            result = type("ComputerResult", (), {
+                "data": result_data, "status": result_data.get("status", "failed"),
+                "error": result_data.get("reason"),
+            })()
+        elif pending["tool"].startswith("computer."):
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
+            self._record(session_id, "tool.permission.denied", {
+                "invocation_id": pending["invocation_id"], "tool": pending["tool"],
+                "reason": "legacy or unsupported desktop interaction is disabled",
+            })
+            return {"status": "blocked", "error": "legacy or unsupported desktop interaction is disabled"}
         else:
-            result = WorkspaceTools(workspace, workspace / ".chimera-agent-artifacts" / session_id).run(pending["tool"].removeprefix("workspace."), pending["arguments"], approved=True)
+            operation = pending["tool"].removeprefix("workspace.")
+            self._validate_arguments(operation, pending["arguments"])
+            spec = tool_catalog()["operations"].get(operation)
+            if spec is None:
+                raise ValueError(f"unregistered workspace operation: {operation}")
+            TaskPolicy.validate(session.get("mode", "plan"), pending["tool"], spec["permission"])
+            if spec["permission"] == "workspace.read":
+                raise PermissionError("workspace reads do not require approval")
+            result = WorkspaceTools(
+                workspace, workspace / ".chimera-agent-artifacts" / session_id
+            ).run(operation, pending["arguments"], approved=True)
         self.store.clear_pending_tool(session_id)
         self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "tool": pending["tool"], "result": result.data, "status": result.status, "error": result.error}))
         self._record(session_id, "tool.completed" if result.status == "completed" else "tool.failed", {"invocation_id": pending["invocation_id"], "status": result.status, "data": result.data, "error": result.error})
