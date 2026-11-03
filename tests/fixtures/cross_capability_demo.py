@@ -10,8 +10,11 @@ from pathlib import Path
 
 def create_synthetic_pe_executable(path: Path) -> None:
     """Create a minimal but valid PE executable for testing."""
-    # PE header magic and DOS stub
-    dos_stub = b"MZ\x90\x00" + b"\x00" * 60
+    # PE header magic and a valid DOS header. e_lfanew at 0x3C points to byte 64.
+    dos_header = bytearray(64)
+    dos_header[:4] = b"MZ\x90\x00"
+    struct.pack_into("<I", dos_header, 0x3C, 64)
+    dos_stub = bytes(dos_header)
 
     # PE signature and COFF header
     pe_signature = b"PE\x00\x00"
