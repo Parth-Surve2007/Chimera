@@ -242,6 +242,7 @@ class MainWindow:
             profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id), None)
             local_only = not (profile and profile.hosted)
             self.agent_runtime.set_session_model(self.agent_session_id, profile_id, local_only=local_only)
+            self.local_verification = None
             self._toast(f"Model {profile_id} selected ({'API / CLOUD' if profile and profile.hosted else 'LOCAL'}).")
             self._show_model_hub()
         except Exception as exc: self._toast(f"Model selection failed: {exc}")
@@ -833,6 +834,7 @@ class MainWindow:
             self.agent_session_id = self.agent_runtime.create_session(path)
             self.conversation_messages = []
             self.pending_agent_approval = None
+            self.local_verification = None
             self.last_turn_notice = None
             self._bind_agent_session()
             self._show_overview()
@@ -916,6 +918,7 @@ class MainWindow:
         self.agent_session_id = self.agent_runtime.create_session(self.workspace_path)
         self.conversation_messages = []
         self.pending_agent_approval = None
+        self.local_verification = None
         self.last_turn_notice = None
         self._bind_agent_session()
         if getattr(self, "drawer", None):
@@ -931,6 +934,7 @@ class MainWindow:
         self.workspace_path_field.value = str(self.workspace_path or "")
         self.conversation_messages = [(m.role, m.content) for m in self.agent_store.messages(session_id) if m.role in {"user", "assistant"}]
         self.pending_agent_approval = self.agent_store.pending_tool(session_id)
+        self.local_verification = None
         self.last_turn_notice = None
         self._bind_agent_session()
         if getattr(self, "drawer", None):
