@@ -5,6 +5,7 @@ workspace-to-REA execution, result verification, failure recovery, and
 governed learning integration.
 """
 import json
+import struct
 import tempfile
 import uuid
 from pathlib import Path
@@ -541,7 +542,8 @@ def test_synthetic_binary_analysis_scenario(test_env):
         mode="plan",
     )
 
-    assert result["status"] in ("completed", "failed")
-    if result["status"] == "completed":
-        assert "plan_id" in result
-        assert result["steps_executed"] > 0
+    # Plan Mode is read-only: the static-analysis steps complete, then report creation is blocked.
+    assert result["status"] == "blocked"
+    assert "plan_id" in result
+    assert result["steps_executed"] >= 3
+    assert test_env["store"].pending_tool(session_id) is None
