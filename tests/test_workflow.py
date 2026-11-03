@@ -239,10 +239,13 @@ def test_paint_adapter_creates_and_verifies_real_artifact(tmp_path):
     assert result.status == "completed" and result.observation["valid"]
     assert result.artifact and result.artifact.is_file()
 
-def test_execution_slice_persists_plan_observation_and_artifact(tmp_path):
-    from chimera.execution import run
+def test_execution_slice_persists_plan_observation_and_artifact(tmp_path, monkeypatch):
+    import sys
+    import chimera.execution as execution
+    from chimera.adapters import PaintAdapter
     from chimera.local_model import LocalModelConfig, LocalModelProvider
-    result = run("create a red circle on black background", tmp_path, open_in_app=False, provider=LocalModelProvider(LocalModelConfig(None, None)))
+    monkeypatch.setattr(execution, "PaintAdapter", lambda: PaintAdapter(executable=sys.executable))
+    result = execution.run("create a red circle on black background", tmp_path, open_in_app=False, provider=LocalModelProvider(LocalModelConfig(None, None)))
     assert result["status"] == "completed"
     assert result["plan"]["application"] == "Microsoft Paint"
     assert result["observation"]["valid"]

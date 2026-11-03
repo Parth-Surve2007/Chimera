@@ -13,7 +13,9 @@ def test_computer_tools_are_registered_and_observation_is_read_only(tmp_path):
 def test_application_launch_requires_allowlist_and_approval(tmp_path):
     computer = WindowsComputerUse(tmp_path)
     assert computer.launch("powershell.exe")["status"] == "blocked"
-    assert computer.launch(r"C:\Windows\System32\notepad.exe")["status"] == "awaiting_approval"
+    executable = tmp_path / "sample.exe"
+    executable.write_bytes(b"MZ")
+    assert computer.launch(str(executable))["status"] == "awaiting_approval"
 
 
 def test_backend_selection_reports_uia_limit_and_win32_fallback():

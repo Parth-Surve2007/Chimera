@@ -303,7 +303,7 @@ class AgentRuntime:
                 raise ValueError(f"unknown application connector: {app_id}")
             action = next((a for a in connector.manifest.actions if a.action_id == action_id), None)
             if not action:
-                raise ValueError(f"unknown action '{action_id}' on application '{app_id}'")
+                raise ValueError(f"unregistered action '{action_id}' on application '{app_id}'")
             validate_application_arguments(action, arguments)
             return
         contracts = {

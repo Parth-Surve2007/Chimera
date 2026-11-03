@@ -42,7 +42,7 @@ def test_workflow_runs_real_workspace_and_rea_steps_then_pauses_for_write_approv
         env["session_id"],
         "Analyze the executable in this workspace, identify its format, architecture, sections, imports, exports and interesting strings, then generate a report.",
     )
-    assert result["status"] == "awaiting_approval"
+    assert result["status"] == "awaiting_approval", result
     plan = env["orchestrator"].plan_store.get_plan(result["plan_id"])
     completed = [step for step in plan.steps if step.execution_state.value == "completed"]
     assert {"list_files", "detect_format", "extract_strings", "analyze_artifact"} <= {step.tool for step in completed}
@@ -77,7 +77,7 @@ def test_ambiguous_binary_discovery_fails_closed(workflow_env):
     result = env["orchestrator"].execute_objective(
         env["session_id"], "Analyze the executable and produce a report."
     )
-    assert result["status"] == "failed"
+    assert result["status"] == "failed", result
     plan = env["orchestrator"].plan_store.get_plan(result["plan_id"])
     assert not any(step.tool == "analyze_artifact" and step.execution_state.value == "completed" for step in plan.steps)
     failed = next(step for step in plan.steps if step.execution_state.value == "failed")

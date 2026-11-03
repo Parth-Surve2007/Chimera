@@ -190,9 +190,10 @@ class ResultVerifier:
                     reason="Findings not in result or not a dict",
                 )
 
-            # Check for expected analysis fields
+            # StructuredFindings stores parser facts under observed_facts.
+            facts = findings.get("observed_facts", findings)
             required_fields = ["sha256", "format_type", "architecture"]
-            missing_fields = [f for f in required_fields if f not in findings]
+            missing_fields = [f for f in required_fields if f not in facts]
             if missing_fields:
                 return VerificationResult(
                     status="failed",
@@ -204,9 +205,9 @@ class ResultVerifier:
                 status="verified",
                 evidence={
                     "artifact_id": data.get("artifact_id"),
-                    "format": findings.get("format_type"),
-                    "architecture": findings.get("architecture"),
-                    "sections_count": findings.get("sections_count", 0),
+                    "format": facts.get("format_type"),
+                    "architecture": facts.get("architecture"),
+                    "sections_count": facts.get("sections_count", 0),
                 },
             )
 
@@ -220,7 +221,8 @@ class ResultVerifier:
                     reason="Findings not in result",
                 )
 
-            strings = findings.get("strings")
+            facts = findings.get("observed_facts", findings)
+            strings = facts.get("strings")
             if not isinstance(strings, list):
                 return VerificationResult(
                     status="failed",
@@ -243,7 +245,8 @@ class ResultVerifier:
                     reason="Findings not in result",
                 )
 
-            if "format_type" not in findings:
+            facts = findings.get("observed_facts", findings)
+            if "format_type" not in facts:
                 return VerificationResult(
                     status="failed",
                     evidence={"findings": findings},
@@ -253,8 +256,8 @@ class ResultVerifier:
             return VerificationResult(
                 status="verified",
                 evidence={
-                    "format": findings.get("format_type"),
-                    "architecture": findings.get("architecture"),
+                    "format": facts.get("format_type"),
+                    "architecture": facts.get("architecture"),
                     "confidence": data.get("confidence"),
                 },
             )
