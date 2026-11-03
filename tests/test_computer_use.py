@@ -31,23 +31,33 @@ def test_profiles_are_validated_and_do_not_imply_permission(tmp_path):
     assert store.load() == profiles
 
 
-def test_session_observation_requires_fresh_identity(tmp_path):
+def test_session_creation_rejects_unverifiable_process_identity(tmp_path):
     manager = ComputerSessionManager(tmp_path)
-    session = manager.create(999999, "missing.exe")
     try:
-        manager.observe(session.session_id)
+        manager.create(999999, "missing.exe")
     except RuntimeError as exc:
-        assert "no longer running" in str(exc)
+        assert "identity could not be verified" in str(exc)
     else:
-        raise AssertionError("missing process must not produce an observation")
+        raise AssertionError("an unknown process must not be authorized")
+
+
+def test_global_focus_keyboard_and_window_close_are_disabled(tmp_path):
+    computer = WindowsComputerUse(tmp_path)
+    assert computer.focus(1)["status"] == "blocked"
+    assert computer.type_text(1, "must not be injected")["status"] == "blocked"
+    assert computer.close(1, approved=True)["status"] == "blocked"
 
 
 def test_semantic_action_requires_fresh_reference_and_approval(tmp_path):
     from chimera.computer_runtime import ComputerSessionManager
     manager = ComputerSessionManager(tmp_path)
-    session = manager.create(999999, "missing.exe")
     try:
-        manager.act(type("Reference", (), {"session_id": session.session_id, "generation": 1, "expires_at": 0, "hwnd": 1, "runtime_id": "x", "reference_id": "r"})(), "invoke_element")
+        manager.create(999999, "missing.exe")
+    except RuntimeError:
+        return
+    raise AssertionError("an unknown process must not be authorized")
+    try:
+        manager.act(type("Reference", (), {"session_id": "s", "generation": 1, "expires_at": 0, "hwnd": 1, "runtime_id": "x", "reference_id": "r"})(), "invoke_element")
     except ValueError as exc:
         assert "fresh" in str(exc) or "stale" in str(exc)
     else:
