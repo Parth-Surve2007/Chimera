@@ -55,9 +55,9 @@ def get_application_registry() -> ApplicationRegistry:
     global _GLOBAL_APP_REGISTRY
     if _GLOBAL_APP_REGISTRY is None:
         _GLOBAL_APP_REGISTRY = ApplicationRegistry()
-        # Auto-register built-in connectors (Ghidra, REAPER)
+        # Auto-register built-in connectors (Ghidra, REA)
         from .connectors.ghidra_connector import GhidraConnector
-        from .connectors.reaper_connector import ReaperConnector
+        from .connectors.rea_connector import ReaConnector
         _GLOBAL_APP_REGISTRY.register(GhidraConnector())
-        _GLOBAL_APP_REGISTRY.register(ReaperConnector())
+        _GLOBAL_APP_REGISTRY.register(ReaConnector())
     return _GLOBAL_APP_REGISTRY

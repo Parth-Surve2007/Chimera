@@ -28,7 +28,7 @@ _TYPE_MAP: dict[str, type] = {
 # operator approval in Build Mode (same semantics as workspace.read / computer.observe).
 APPLICATION_READ_PERMISSIONS = {
     "ghidra.read",
-    "reaper.read",
+    "rea.read",
 }
 
 
@@ -47,7 +47,7 @@ def decode_tool_id(tool_id: str) -> tuple[str, str] | None:
 
     Splitting strategy: strip the ``application.`` prefix, then split on the
     first remaining dot to separate app_id from action_id.  action_id may itself
-    contain dots (e.g. ``reaper.project.read``).
+    contain dots (e.g. ``ghidra.extract_strings``).
     """
     if not tool_id.startswith(APPLICATION_TOOL_PREFIX):
         return None

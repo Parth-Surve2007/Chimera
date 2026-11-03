@@ -1,10 +1,53 @@
-from PyInstaller.utils.hooks import collect_submodules
-from pathlib import Path
-import flet
-hiddenimports = collect_submodules("chimera")
-flet_root = Path(flet.__file__).parent
-datas = [("fonts", "fonts"), ("assets", "assets"), (str(flet_root / "controls" / "material" / "icons.json"), "flet/controls/material")]
-a = Analysis(["chimera_entry.py"], pathex=["."], hiddenimports=hiddenimports, datas=datas, binaries=[], hookspath=[], runtime_hooks=[], excludes=["tests"])
+# -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('assets', 'assets'), ('fonts', 'fonts')]
+binaries = []
+hiddenimports = []
+tmp_ret = collect_all('flet')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('chimera')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+
+a = Analysis(
+    ['run_chimera.py'],
+    pathex=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Chimera", console=False)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Chimera")
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='Chimera',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='Chimera',
+)

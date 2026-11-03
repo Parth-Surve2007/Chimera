@@ -1,7 +1,7 @@
 # Chimera Roadmap
 
-> **Last updated:** 2026-11-02  
-> **Current version:** Phase 5.0 — General-Purpose Agent Platform
+> **Last updated:** 2026-11-03
+> **Current version:** Phase 5.2 — Reverse Engineer Anything (REA)
 
 Chimera is an open, local-first AI agent platform. This roadmap describes its engineering direction and capability maturity across eight strategic pillars.
 
@@ -37,9 +37,19 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 ### ✅ Phase 5.0 — General-Purpose Agent Platform Foundation
 - Application Integration SDK (`chimera/applications/`) with manifest, risk levels, and governance
 - GhidraConnector: headless binary analysis, PE/ELF string extraction, function enumeration
-- ReaperConnector: RPP project parsing (state-machine parser), non-destructive track addition, backup
+
 - ExperienceLearningEngine: skill extraction from traces, approval lifecycle, secret redaction
 - **Outcome:** 166 tests passing, application platform foundation established
+
+### ✅ Phase 5.2 — Reverse Engineer Anything (REA)
+|- REA: General-purpose reverse-engineering intelligence domain
+|- Artifact detection: PE, ELF, Mach-O, .NET, APK, DEX, firmware, archives
+|- Built-in static analysis: zero-dependency PE/ELF parsers, strings, entropy, exports/imports
+|- Backend architecture: modular adapters for Ghidra, radare2, Rizin
+|- Security controls: read-only analysis, size limits, path validation
+|- Normalized results: evidence provenance, confidence scoring, structured findings
+|- Application SDK integration: REA actions governed through AgentRuntime
+|- **Outcome:** REA as first-class capability, Ghidra preserved as specialized backend
 
 ---
 
@@ -55,7 +65,7 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ---
 
-## Medium-Term (Phase 5.2)
+## Medium-Term (Phase 5.3)
 
 **Theme: Development Workflow Integration**
 
@@ -67,7 +77,7 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 ---
 
-## Medium-Term (Phase 5.3)
+## Medium-Term (Phase 5.4)
 
 **Theme: Application Ecosystem Expansion**
 

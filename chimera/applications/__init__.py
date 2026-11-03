@@ -10,7 +10,7 @@ from .manifest import (
 from .base import BaseApplicationConnector
 from .registry import ApplicationRegistry, get_application_registry
 from .connectors.ghidra_connector import GhidraConnector
-from .connectors.reaper_connector import ReaperConnector
+from .connectors.rea_connector import ReaConnector
 
 __all__ = [
     "IntegrationSurface",
@@ -21,5 +21,5 @@ __all__ = [
     "ApplicationRegistry",
     "get_application_registry",
     "GhidraConnector",
-    "ReaperConnector",
+    "ReaConnector",
 ]

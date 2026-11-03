@@ -1,55 +1,563 @@
 # Chimera
 
-Chimera is a local-first foundation for acquiring, verifying, packaging, and reusing capabilities across domains. Its core is domain-agnostic: a task specification can describe any requested outcome, while providers, runtimes, and verifiers are selected through typed contracts.
+**A model-agnostic, local-first general-purpose AI agent with an extensible application ecosystem, reverse-engineering intelligence and governed self-learning.**
 
-## Install and run
+Chimera is designed to understand tasks, operate applications, develop software, reverse-engineer systems, perform authorized cybersecurity research and learn reusable workflows. It aims to become an extensible intelligence layer across your digital environment — with explicit operator control, local-first by default, and governed execution at every step.
+
+---
+
+## Vision & Philosophy
+
+Chimera is not a chatbot or a coding assistant. It is an agent platform that:
+
+- **Remains model-agnostic** — Switch between local GGUF models, OpenAI, Anthropic, Gemini, Meta, or custom providers without changing your workflow.
+- **Prioritizes local-first** — Run inference locally when possible; remote providers are explicit choices, never silent fallbacks.
+- **Governs all execution** — Every tool call, application action, and system modification passes through approval gates with full audit trails.
+- **Learns from experience** — Capture execution traces, extract reusable skills, and promote them with operator approval.
+- **Integrates applications** — Connect to specialized tools (Ghidra, IDEs, browsers, build systems) through a governed Application SDK.
+- **Reverse-engineers anything** — REA provides general-purpose binary analysis across PE, ELF, Mach-O, firmware and more.
+
+Chimera does not claim to be a completed AGI or frontier model equivalent. It is a foundation for building capable, transparent, and controllable AI agents.
+
+---
+
+## Key Capabilities
+
+| Capability | Status |
+|------------|--------|
+| **Multi-provider inference** | ✅ Implemented — 8 provider adapters (OpenAI, Anthropic, Gemini, Meta, llama.cpp, Custom) |
+| **Local GGUF inference** | ✅ Implemented — llama.cpp integration with explicit model configuration |
+| **AgentRuntime & session persistence** | ✅ Implemented — SQLite-backed sessions, messages, and events |
+| **Workspace tools (read/write)** | ✅ Implemented — Governed file operations with approval gates |
+| **Computer use (Windows)** | 🟡 Partial — UI automation via pywinauto, governed approval required |
+| **Application SDK** | ✅ Implemented — Universal connector framework with risk levels |
+| **REA: Reverse Engineer Anything** | ✅ Implemented — Artifact detection, static analysis, Ghidra integration |
+| **Ghidra integration** | 🟡 Partial — Headless execution (requires Ghidra + JDK 17+) |
+| **Experience learning** | 🟡 Partial — Trace capture, skill extraction, approval lifecycle |
+| **Task planning** | 🟡 Foundation — Single-step planning, multi-step planned |
+| **Application connectors** | 🟡 Foundation — Ghidra and REA connectors, ecosystem extensible |
+
+---
+
+## REA: Reverse Engineer Anything
+
+**REA is Chimera's general-purpose reverse-engineering intelligence domain.**
+
+It is NOT Cockos REAPER (the audio workstation). REA stands for Reverse Engineer Anything.
+
+### What REA Does
+
+**Artifact Detection**
+- Progressive identification of PE (Windows), ELF (Linux), Mach-O (macOS), .NET, APK, DEX, firmware images, archives, and static libraries
+- Format detection from byte signatures and structural headers
+- Architecture and endianness identification (x86, x86_64, ARM, AArch64, MIPS, RISC-V)
+- Target OS detection where available
+
+**Built-in Static Analysis**
+- Zero-dependency Python parsers for PE32, PE32+, ELF32, ELF64
+- Hash calculation (SHA-256, MD5, SHA-1)
+- ASCII and UTF-16LE string extraction with file offsets
+- Section and header inspection with entropy analysis
+- Export and import symbol enumeration
+- Symbol table parsing (symtab, dynsym)
+- Safe bounds checking — malformed files fail gracefully
+
+**Backend Architecture**
+- Modular adapters for specialized tools:
+  - **Ghidra** — NSA Ghidra SRE Suite (headless analysis, decompilation)
+  - **radare2** — radare2 reverse engineering framework (discovery-only, governed)
+  - **Rizin** — Rizin binary analysis framework (discovery-only, governed)
+- Backend capability manifests declare supported operations
+- Engine selects appropriate backend per capability
+- Missing backends report clear status rather than fabricating success
+
+**Application SDK Integration**
+- REA exposed through `ReaConnector` with governed actions:
+  - `analyze_artifact` — Comprehensive static analysis
+  - `extract_strings` — String extraction
+  - `detect_format` — Format identification
+  - `analyze_unknown` — Progressive unknown binary analysis
+  - `run_ghidra_headless` — Ghidra headless execution (Level 2, requires approval)
+  - `list_backends` — Backend enumeration
+- All actions pass through AgentRuntime permissions and approval pipeline
+
+**Security Controls**
+- Never automatically executes imported binaries
+- Strict file-size limits (150MB default)
+- Bounded string scanning (4MB max, 2000 strings)
+- Path validation with optional root restrictions
+- Read-only analysis by default
+- Subprocess timeouts (60 seconds)
+
+### What REA Does Not Do
+
+- REA does not claim complete parsing for every detected format
+- Ghidra, radare2, and Rizin require their respective installations for external analysis
+- Dynamic analysis capabilities are not yet implemented
+- Automatic decompilation requires native Ghidra and JDK 17+
+
+---
+
+## Universal Model-Provider Architecture
+
+Chimera's provider registry supports 8 adapter types through a unified interface:
+
+**Supported Protocols**
+- OpenAI-compatible APIs (Azure, DeepSeek, local vLLM, etc.)
+- OpenAI Responses API
+- Anthropic Messages API
+- Gemini Content API
+- Gemini Interactions API
+- Meta Model API (requires credentials)
+- llama.cpp (local GGUF models)
+- Custom adapters via SDK
+
+**Features**
+- SSRF protection: DNS rebinding protection, 0.0.0.0 rejection, IPv4-mapped IPv6 blocking
+- Capability detection via provider compatibility lab
+- Usage accounting and token tracking
+- Type-validated adapter SDK (`chimera_provider_sdk/`)
+- No silent cloud fallback — model selection is always explicit
+
+**Local Inference**
+- Configure via `CHIMERA_MODEL_PATH` (GGUF file) and `CHIMERA_LLAMA_CLI` (llama.cpp executable)
+- Optional: `CHIMERA_MODEL_CONTEXT`, `CHIMERA_MODEL_MAX_TOKENS`, `CHIMERA_MODEL_TIMEOUT`, `CHIMERA_MODEL_THREADS`, `CHIMERA_MODEL_GPU_LAYERS`
+- Model weights are never downloaded automatically
+- Run `python -m chimera.smoke_test` to verify local inference without fake success
+
+---
+
+## Application Integration Ecosystem
+
+The Application SDK provides a universal framework for connecting Chimera to external software.
+
+**Connector Architecture**
+- `BaseApplicationConnector` — Abstract base for all integrations
+- `ApplicationManifest` — Declares capabilities, risk levels, and permissions
+- `ApplicationAction` — Individual operations with argument schemas
+- `ActionRiskLevel` — Five-tier risk taxonomy (Observe → Recommend → Reversible → Protected → External Sensitive)
+- `ApplicationRegistry` — Central discovery and execution dispatcher
+
+**Current Connectors**
+- **GhidraConnector** — Headless binary analysis, PE/ELF string extraction, function enumeration
+- **ReaConnector** — REA reverse-engineering intelligence through Application SDK
+
+**Governance**
+- Plan Mode blocks Level 2+ actions (read-only execution)
+- Build Mode requires approval for Level 3+ actions
+- Read-only permissions (`ghidra.read`, `rea.read`) do not require approval in Build Mode
+- All actions are logged with full provenance
+
+**Extensibility**
+- Implement `BaseApplicationConnector` with `discover()` and `execute_action()`
+- Register via `ApplicationRegistry.register(MyConnector())`
+- Actions exposed to agents through normalized tool catalog
+
+---
+
+## AgentRuntime & Security Architecture
+
+**Execution Authority**
+AgentRuntime is the sole execution authority. Model adapters do not directly execute tools. All tool calls follow this pipeline:
+
+```
+User Request
+    ↓
+Chimera Interface
+    ↓
+AgentRuntime (Session Store, Task Policy)
+    ↓
+Planning & Task Orchestration
+    ↓
+Universal Provider Interface
+    ↓
+Model Provider (adapter selected)
+    ↓
+Normalized Tool Calls
+    ↓
+Permission & Approval System
+    ↓
+Application Registry / Tool Catalog
+    ↓
+Application Connectors & REA
+    ↓
+Execution Results (with evidence)
+    ↓
+Persistent Memory & Audit Trail
+```
+
+**Security Model**
+- No silent cloud fallback — provider selection is explicit
+- No capability escalation without approval — write/execute actions require authorization
+- No global input injection — no pyautogui, SendInput, or global keyboard/mouse hooks
+- No automatic commits or pushes — VCS operations require explicit confirmation
+- No model downloads without consent — operator must authorize acquisition
+- Audit trail always on — every tool invocation, approval, and provider call is logged
+- SSRF protection always active — provider endpoint validation enforced
+- Local-first by default — remote inference only when operator chooses
+
+**Session Persistence**
+- SQLite-backed sessions, messages, and events
+- Resume interrupted conversations
+- Full replay capability for audit and debugging
+
+---
+
+## Memory & Governed Self-Learning
+
+**ExperienceLearningEngine**
+- Captures execution traces from agent sessions
+- Inspects tool calls, arguments, and results
+- Redacts secrets and sensitive data automatically
+- Extracts reusable workflows as `ProposedSkill` objects
+
+**Skill Lifecycle**
+1. **Proposed** — Extracted from trace, stored in skill store
+2. **Approved** — Operator reviews and approves the skill
+3. **Installed** — Skill becomes available for future sessions
+4. **Rejected** — Skill discarded if not useful
+
+**Current State**
+- Trace capture and secret redaction: ✅ Implemented
+- Skill extraction and storage: ✅ Implemented
+- Approval lifecycle: ✅ Implemented
+- Skill library versioning: 🟡 Planned
+- Automated regression testing: 🟡 Planned
+
+---
+
+## Architecture Diagram
+
+```mermaid
+graph TD
+    User[User] --> Interface[Chimera Interface]
+    Interface --> Runtime[AgentRuntime]
+    Runtime --> Planning[Planning & Task Orchestration]
+    Runtime --> SessionStore[Session Store]
+    Runtime --> TaskPolicy[Task Policy]
+
+    Planning --> ProviderInterface[Universal Provider Interface]
+    ProviderInterface --> ProviderRegistry[Provider Registry]
+    ProviderRegistry --> ModelProvider[Model Provider]
+
+    Runtime --> ToolCatalog[Tool Catalog]
+    ToolCatalog --> PermissionSystem[Permission & Approval System]
+    PermissionSystem --> AppRegistry[Application Registry]
+
+    AppRegistry --> Connectors[Application Connectors]
+    AppRegistry --> REA[REA: Reverse Engineer Anything]
+
+    Connectors --> Execution[Execution Results]
+    REA --> Execution
+
+    Execution --> Memory[Persistent Memory]
+    Execution --> Audit[Audit Trail]
+
+    Memory --> Runtime
+    Audit --> Runtime
+
+    ModelProvider --> Planning
+```
+
+---
+
+## Technology Stack
+
+**Core**
+- Python 3.11+
+- Flet 1.0+ (native desktop UI)
+- SQLite (session persistence, registry, audit)
+
+**Provider Adapters**
+- `httpx` (HTTP client with timeout limits)
+- `pydantic` (request/response validation)
+- Type-validated adapter SDK
+
+**Application SDK**
+- Universal connector framework
+- Risk-based action governance
+- Permission and approval pipeline
+
+**REA**
+- Zero-dependency PE/ELF parsers
+- Shannon entropy calculation
+- Modular backend architecture
+
+**Learning**
+- Trace capture and inspection
+- Secret redaction via regex patterns
+- JSON-based skill storage
+
+**Computer Use**
+- pywinauto (Windows UI automation, governed)
+- Subprocess supervision with timeouts
+
+---
+
+## Installation & Setup
+
+### Requirements
+- Python 3.11 or later
+- Windows (primary platform), Linux/macOS support varies by feature
+
+### Installation from Source
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
+```
+
+### Local Model Configuration (Optional)
+
+Set environment variables or configure in Settings:
+
+```powershell
+$env:CHIMERA_MODEL_PATH = "path\to\model.gguf"
+$env:CHIMERA_LLAMA_CLI = "path\to\llama-cli.exe"
+```
+
+Optional limits:
+- `CHIMERA_MODEL_CONTEXT` — Context window size
+- `CHIMERA_MODEL_MAX_TOKENS` — Maximum generation tokens
+- `CHIMERA_MODEL_TIMEOUT` — Inference timeout (seconds)
+- `CHIMERA_MODEL_THREADS` — Thread count
+- `CHIMERA_MODEL_GPU_LAYERS` — GPU offload layers (0 for CPU)
+
+### Launch
+
+```powershell
 python -m chimera
 ```
 
-The database defaults to `.chimera/chimera.db`; set `CHIMERA_DATA_DIR` to change it. Run `python -m pytest -q` for tests.
+Or use the entry point:
 
-## Current architecture
+```powershell
+chimera
+```
 
-- `contracts.py` contains domain-independent task, provider, verifier, discovery, and acquisition result contracts.
-- `acquisition.py` implements a bounded observable lifecycle and deterministic fixture provider. It is not model integration.
-- `discovery.py` reports available tools and runtimes.
-- `models.py` defines versioned Capability Capsules and lifecycle states.
-- `registry.py` stores SQLite metadata, immutable artifact versions, manifests, integrity checks, acceptance, and rollback.
-- `audit.py` persists execution traces; `policy.py` validates paths and permissions.
-- `supervisor.py` runs explicit subprocess commands with bounded output and timeouts.
-- `ui.py` provides the native PySide6 shell.
-- `local_model.py` provides an explicitly configured, local-only llama.cpp provider for GGUF models. It never contacts a hosted API or downloads weights.
-- `workflow.py` connects local task analysis, proposal validation, isolated staging, independent static verification, and pending review.
+### Data Directory
 
-Accepted artifacts are independently verified before retention. Failed or inconclusive candidates are not accepted, and repair attempts are bounded. Subprocess supervision is limited containment, not a complete security sandbox. No hosted model, model training, arbitrary application control, or universal task completion is implemented.
+- Source runs: `.chimera/` (relative to working directory)
+- Packaged builds: `%LOCALAPPDATA%\Chimera`
+- Override: Set `CHIMERA_DATA_DIR` environment variable
 
-The acquisition workflow has explicit states: blocked, rejected, pending review, and accepted only after the existing registry acceptance path. Model proposals are treated as untrusted data. Candidate paths, file counts, file sizes, permissions, and prohibited operations are checked statically. Behavioral verification of untrusted generated code is reported as unresolved rather than executed automatically. Execution approval and acceptance approval are separate gates.
+### Windows Build (Optional)
 
-## Review and acceptance
+```powershell
+python -m pip install pyinstaller
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
+```
 
-Pending candidates are persisted under `.chimera/candidates`. Review them with `python -m chimera.review list`, then use `inspect`, `verify`, `approve-execution`, `approve-acceptance`, `accept`, `reject --reason "..."`, and `history` with the candidate ID. Acceptance rechecks the current manifest and routes promotion through `Registry.accept`; it never executes candidate code. Approval is bound to the candidate metadata and current digest. Filesystem and SQLite updates are not a single cross-resource transaction, so orphaned staging data remains recoverable for inspection.
+Launch packaged build:
 
-The native Capabilities view uses the same `ReviewService` for refresh, inspection, safe verification, acceptance approval, acceptance confirmation, and rejection. Static verification is labelled separately from behavioral verification. The CLI remains authoritative and both interfaces require the same approvals; candidate code is never run by either review path.
+```powershell
+scripts\run_chimera.bat
+```
 
-The earlier Verilog benchmark and adapter were development fixtures, not product architecture, and have been removed from the core. Domain adapters can be added later through the generic contracts without changing the orchestrator.
+---
 
-## Local model configuration
+## Configuration & Model Providers
 
-Set `CHIMERA_MODEL_PATH` to a user-provided `.gguf` file and `CHIMERA_LLAMA_CLI` to a local llama.cpp executable, or select them in Settings. GUI-selected paths persist in `model_config.json` under the active Chimera data directory (`%LOCALAPPDATA%\Chimera` for packaged builds, `.chimera` from source). Explicit environment variables override persisted paths. Optional limits are `CHIMERA_MODEL_CONTEXT`, `CHIMERA_MODEL_MAX_TOKENS`, `CHIMERA_MODEL_TIMEOUT`, and `CHIMERA_MODEL_THREADS`. If either required file is absent, the provider reports `missing` or `unavailable` and does not fall back to a network service. Model weights are never downloaded automatically. Automated tests use an explicitly injected fake runner; they do not perform model inference.
+### Configuring External Providers
 
-Run `python -m chimera.diagnostic` to inspect readiness without printing the full environment. Run `python -m chimera.smoke_test` for genuine local inference; it exits nonzero when the runtime or model is missing and never uses the fake runner. Use `CHIMERA_MODEL_GPU_LAYERS=0` for the CPU baseline; positive values opt into llama.cpp GPU offload. `python -m chimera.benchmark` is not a CLI yet, but the reporting API is available through `chimera.benchmark.run` and writes ignored JSON reports under `.chimera/benchmarks`. Peak RAM and GPU metrics are reported as unavailable unless measurement support is added; no values are estimated.
+Set credentials via environment variables or configure in Settings:
 
-Run a real production-path acquisition demonstration with `python -m chimera.demo_run "Create a deterministic local utility that converts Celsius to Fahrenheit" --json`. It validates the configured local runtime, performs model-driven task analysis and proposal generation, stages the candidate under `.chimera/candidates`, performs independent static verification, and records an audit row. It never executes or accepts generated code. A missing model is reported as `blocked`; no fake success is substituted. After a successful run, inspect with `python -m chimera.review inspect <candidate-id>`, verify again, approve acceptance explicitly, and then accept it through `python -m chimera.review accept <candidate-id>`.
+**OpenAI**
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+```
 
-## Windows build and launch
+**Anthropic**
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```
 
-Install the build dependency once with `python -m pip install pyinstaller`, then run `powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1`. The script runs tests and compilation checks, builds a one-folder distribution, validates `dist\Chimera\Chimera.exe`, and only then replaces the previous distribution. Launch it with `scripts\run_chimera.bat`, or use `scripts\build_and_run.bat` to build and open the newest validated app. `scripts\run_chimera_dev.bat` launches from source.
+**Gemini**
+```powershell
+$env:GOOGLE_API_KEY = "..."
+```
 
-Packaged writable state defaults to `%LOCALAPPDATA%\Chimera`; source runs continue using `.chimera` unless `CHIMERA_DATA_DIR` is set. Model weights and llama.cpp remain external through `CHIMERA_MODEL_PATH` and `CHIMERA_LLAMA_CLI`; they are never bundled. The build output is intentionally git-ignored. The GUI uses Flet `1.0.5` in native desktop mode; it is not a browser UI.
+**Meta**
+```powershell
+$env:META_API_KEY = "..."
+```
 
-The current visual system is monochrome (`#050505` through `#F2F2F2`) with no colored accents. The bundled font source is `fonts/ec-dots-life-font/EcDotsLifeRegular-AydL.ttf` (“EC Dots Life”); its included metadata marks it CC BY-NC-SA, so review its license before redistributing a packaged build. Manim 0.22.0 renders the startup animation from `scripts/animation/chimera_intro.py` into `assets/chimera_intro.gif`; Manim is build-time only and is not imported by the application. The full-window intro runs for 2.5 seconds by default and can be skipped with `CHIMERA_INTRO=0`.
+### Provider Selection
+
+Models are selected explicitly through the UI or configuration. Chimera never silently switches providers. The provider registry validates capabilities before use.
+
+---
+
+## Usage & Examples
+
+### Basic Conversation
+
+Launch Chimera and start a conversation. The AgentRuntime manages sessions, messages, and tool execution.
+
+### Reverse-Engineering Analysis
+
+```
+User: Analyze this executable
+Chimera: [Invokes REA connector] Analyzing artifact... Format: PE32, Architecture: x86_64, Exports: 12, Imports: 5, Entropy: 6.2/8.0
+```
+
+### Application Integration
+
+```
+User: Extract strings from this binary
+Chimera: [Invokes REA] Extracted 24 strings (min length 4): "version", "copyright", "OpenSSL", ...
+```
+
+### Computer Use (Windows)
+
+```
+User: Open Notepad and type "Hello"
+Chimera: [Approval required] Open Notepad? [User approves] [Invokes pywinauto] Notepad opened. Typing...
+```
+
+---
+
+## Security & Privacy
+
+**Local-First Philosophy**
+- Local inference is preferred where possible
+- Remote providers are explicit choices, never automatic
+- All data storage is local (SQLite, JSON)
+
+**Audit Trail**
+- Every tool invocation is logged with timestamp, arguments, and result
+- Approval decisions are recorded with operator identity
+- Provider calls are tracked with provenance
+
+**Data Handling**
+- Secrets are redacted from learning traces
+- File paths are validated against configured workspaces
+- Size limits prevent unbounded resource consumption
+
+**Network Security**
+- SSRF protection prevents DNS rebinding attacks
+- 0.0.0.0 and IPv4-mapped IPv6 addresses are rejected
+- Provider endpoints are validated before outbound requests
+
+---
+
+## Current Limitations
+
+**Architecture**
+- Multi-step planning is foundational, not yet dependency-graph complete
+- Parallel task execution is not implemented
+- Skill library versioning and regression testing are planned
+
+**Application Ecosystem**
+- Ghidra connector requires native Ghidra and JDK 17+ for headless execution
+- radare2 and Rizin backends are discovered but not auto-executed (governed mode)
+- Only Ghidra and REA connectors are implemented; broader ecosystem is planned
+
+**Computer Use**
+- Windows pywinauto automation is partial
+- No Linux/macOS computer use implementation
+- No global input injection (intentional security choice)
+
+**Learning**
+- Skills are stored but not yet versioned or automatically tested
+- Skill federation/sharing is planned
+
+**Platform**
+- Windows is the primary platform; Linux/macOS support varies by feature
+
+---
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for detailed phase planning.
+
+**Current Phase: 5.2 — Reverse Engineer Anything (REA)**
+
+**Near-Term (Phase 5.1)**
+- Persistent task context across sessions
+- Multi-step plan visualization
+- Parallel task execution with safety barriers
+- Agent-generated sub-task delegation
+- Token-budget awareness
+
+**Medium-Term (Phase 5.3)**
+- Git connector (status, diff, stage, commit)
+- Shell/terminal connector with sandboxed isolation
+- Python/Node REPL connector
+- File-watcher integration
+- Dependency vulnerability scanning
+
+**Medium-Term (Phase 5.4)**
+- VS Code connector
+- Browser connector (headless Chrome)
+- Obsidian connector
+- Blender connector
+- OBS Studio connector
+- JIRA / GitHub Issues connector
+
+**Long-Term (Phase 6.0)**
+- Skill library with versioning and rollback
+- Automated regression testing of promoted skills
+- Operator-defined capability profiles
+- Natural-language policy engine
+- Federated skill sharing
+- Multi-modal inputs (screen capture, audio, images)
+
+---
+
+## Contribution Guidelines
+
+Chimera welcomes contributions that align with its local-first, governed execution philosophy.
+
+**Contributing a Provider Adapter**
+
+See [`docs/provider_integration_guide.md`](docs/provider_integration_guide.md) for the adapter SDK.
+
+**Contributing an Application Connector**
+
+Implement `BaseApplicationConnector` from `chimera/applications/base.py`:
+
+```python
+from chimera.applications.base import BaseApplicationConnector
+from chimera.applications.manifest import ApplicationManifest, ApplicationAction, ActionRiskLevel
+
+class MyAppConnector(BaseApplicationConnector):
+    def discover(self) -> ApplicationManifest:
+        # Probe installation, return manifest
+        pass
+
+    def execute_action(self, action_id, arguments, approved=False) -> dict:
+        # Execute governed action
+        pass
+```
+
+Register via `ApplicationRegistry.register(MyAppConnector())`.
+
+**Contributing to REA**
+
+Extend backend adapters in `chimera/reverse_engineering/backends/` or enhance static parsers in `builtin_static.py`.
+
+**Testing**
+
+Run tests with:
+
+```powershell
+python -m pytest
+```
+
+**Governance Principles**
+
+All contributions must respect:
+- No silent cloud fallback
+- No capability escalation without approval
+- No global input injection
+- No automatic commits or pushes
+- No model downloads without consent
+- Audit trail always on
+- SSRF protection always active
+- Local-first by default
+
+---
+
+**Chimera is a local-first platform. This README reflects what can be built without cloud dependencies, proprietary licenses, or surveillance infrastructure.**
