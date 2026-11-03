@@ -71,3 +71,13 @@ def test_local_agent_protocol_verification_uses_structured_decision(tmp_path):
     assert result["state"] == "verified"
     assert result["response_preview"] == "Local agent protocol is working."
     assert result["duration_ms"] >= 0
+
+
+def test_local_provider_adapter_exposes_agent_protocol_verification():
+    from types import SimpleNamespace
+    from chimera.providers.adapters.local_adapter import LocalModelAdapter
+
+    expected = {"state": "verified", "response_preview": "active conversation model"}
+    adapter = object.__new__(LocalModelAdapter)
+    adapter.local_provider = SimpleNamespace(verify_agent_protocol=lambda: expected)
+    assert adapter.verify_agent_protocol() == expected
