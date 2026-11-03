@@ -8,6 +8,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('fonts', 'fonts'),
+        ('chimera', 'chimera'),
     ],
     hiddenimports=[
         'flet',
