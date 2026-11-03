@@ -28,3 +28,21 @@ def test_chat_ui_exposes_local_protocol_verification_and_no_blue_theme():
     assert ui.ACCENT == "#C49A6C"
     assert hasattr(ui.MainWindow, "_verify_local_agent")
     assert hasattr(ui.MainWindow, "_chat_sidebar")
+
+
+def test_empty_conversation_renders_welcome_prompts_without_model():
+    from chimera.ui import MainWindow
+
+    class EmptyStore:
+        def messages(self, _session_id):
+            return []
+
+    window = object.__new__(MainWindow)
+    window.agent_store = EmptyStore()
+    window.agent_session_id = "empty-session"
+    window.conversation_messages = []
+    window.task_busy = False
+    window.last_turn_notice = None
+    window.pending_agent_approval = None
+    controls = window._conversation_content()
+    assert len(controls) == 1
