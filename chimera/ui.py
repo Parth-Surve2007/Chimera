@@ -17,11 +17,13 @@ from .workflow_integration import AgenticWorkflowOrchestrator
 try: import flet as ft
 except ImportError: ft = None
 
-BG, SURFACE, ELEVATED, BORDER = "#0A0D0B", "#111713", "#1A211C", "#2B342E"
-TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F1F2EC", "#B6B7AB", "#788175", "#465047", "#C49A6C"
-ACCENT = FOCUS
-
-STATE_COLORS = {"pass": "#8AAE9C", "fail": "#D9897A", "unknown": "#C7A66A", "blocked": "#B77D9A"}
+# Oxide / Fieldwork visual system: warm graphite, parchment, signal-lime and kiln coral.
+# Deliberately avoids the default blue-violet "AI dashboard" palette.
+BG, SURFACE, ELEVATED, BORDER = "#171B16", "#20261F", "#2B3328", "#414A3C"
+TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F2EEDC", "#C6C0AA", "#918B76", "#555C4B", "#D7F16B"
+ACCENT = "#E98564"
+PANEL_WARM = "#2B241E"
+STATE_COLORS = {"pass": "#D7F16B", "fail": "#E98564", "unknown": "#D5B56E", "blocked": "#A99A7B"}
 
 def _upper(value, default="UNKNOWN"):
     """Format optional persisted/status values without allowing the UI to crash."""
@@ -94,13 +96,27 @@ def launch(registry):
 class MainWindow:
     def __init__(self, page, registry):
         self.page, self.registry, self.review = page, registry, ReviewService(registry.data_dir); self.drawer_open = False; self.selected = None
-        self.model_picker = ft.FilePicker(on_result=self._model_picked); self.runtime_picker = ft.FilePicker(on_result=self._runtime_picked); self.workspace_picker = ft.FilePicker(on_result=self._workspace_picked); self.workspace_path = None; page.services.extend([self.model_picker, self.runtime_picker, self.workspace_picker])
-        self.model_path_field = ft.TextField(label="GGUF MODEL PATH", color=TEXT, border_color=BORDER, value=str(config_from_env().model_path or ""), expand=True)
-        self.runtime_path_field = ft.TextField(label="LLAMA.CPP EXECUTABLE", color=TEXT, border_color=BORDER, value=str(config_from_env().cli_path or ""), expand=True)
-        page.title = "Chimera"; page.bgcolor = BG; page.padding = 0; page.window.width = 1200; page.window.height = 760; page.window.min_width = 860; page.window.min_height = 560
+        initial_config = config_from_env()
+        self.model_picker = ft.FilePicker(on_result=self._model_picked)
+        self.runtime_picker = ft.FilePicker(on_result=self._runtime_picked)
+        self.server_picker = ft.FilePicker(on_result=self._server_picked)
+        self.workspace_picker = ft.FilePicker(on_result=self._workspace_picked)
+        self.workspace_path = None
+        page.services.extend([self.model_picker, self.runtime_picker, self.server_picker, self.workspace_picker])
+        self.model_path_field = ft.TextField(label="GGUF MODEL PATH", color=TEXT, border_color=BORDER, value=str(initial_config.model_path or ""), expand=True)
+        self.runtime_path_field = ft.TextField(label="LLAMA.CPP CLI (EXPLICIT ONE-SHOT MODE)", color=TEXT, border_color=BORDER, value=str(initial_config.cli_path or ""), expand=True)
+        self.server_path_field = ft.TextField(label="LLAMA-SERVER (PERSISTENT MODEL MODE)", color=TEXT, border_color=BORDER, value=str(initial_config.server_path or ""), expand=True)
+        self.context_field = ft.TextField(label="CONTEXT", color=TEXT, border_color=BORDER, value=str(initial_config.context), width=120)
+        self.max_tokens_field = ft.TextField(label="MAX TOKENS", color=TEXT, border_color=BORDER, value=str(initial_config.max_tokens), width=120)
+        self.threads_field = ft.TextField(label="CPU THREADS", color=TEXT, border_color=BORDER, value=str(initial_config.threads), width=120)
+        self.gpu_layers_field = ft.TextField(label="GPU LAYERS", color=TEXT, border_color=BORDER, value=str(initial_config.gpu_layers), width=120)
+        page.title = "Chimera"; page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
-        self.task_busy = False; self.model_verifying = False; self.local_verification = None; self.last_turn_notice = None; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""; self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.task_field = ft.TextField(multiline=True, min_lines=2, max_lines=5, hint_text="Message Chimera…  Describe the outcome you want...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.workspace_path_field = ft.TextField(label="WORKSPACE DIRECTORY", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, value="", expand=True)
+        self.task_busy = False; self.model_verifying = False; self.local_verification = None; self.model_boot_status = "checking"; self.last_turn_notice = None; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""
+        self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=8, expand=True)
+        self.task_field = ft.TextField(multiline=True, min_lines=3, max_lines=8, hint_text="Give Chimera the outcome. Keep talking as it works...", hint_style=ft.TextStyle(color=MUTED), bgcolor="#252B23", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=11, expand=True, text_size=14)
+        self.workspace_path_field = ft.TextField(label="WORKSPACE DIRECTORY", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, value="", expand=True)
         self.agent_store = AgentSessionStore(registry.data_dir / "chimera.db")
         self.goal_store = GoalStore(registry.data_dir / "chimera.db")
         self.profile_store = ModelProfileStore(registry.data_dir / "model_profiles.json")
@@ -119,11 +135,13 @@ class MainWindow:
                 reason_text = current_reason if current_reason else "No current recovery reason is persisted (legacy or unavailable)."
                 self.pending_reason = f"State: {self.pending_state}. Continuation: {pending[0]['current_run_id']}. Recovery reason: {reason_text}. Reconciliation is read-only; no retry is performed automatically." if self.pending_state != "pending" else ""
         except Exception: pass
-        self.body = ft.Container(expand=True, padding=ft.Padding.symmetric(horizontal=56, vertical=36)); self.drawer = self._drawer(); self._show_overview()
+        self.body = ft.Container(expand=True, padding=ft.Padding.all(0)); self.drawer = self._drawer(); self._show_overview()
         self.shell = ft.Column([self._topbar(), ft.Stack([self.body, self.drawer], expand=True), self._statusbar()], expand=True, spacing=0)
         if not self._show_intro(): page.add(self.shell)
+        # Keep a configured local model resident before the first prompt.
+        page.run_task(self._warm_local_model)
     def _show_intro(self):
-        if str(__import__("os").environ.get("CHIMERA_INTRO", "1")).lower() in ("0", "false", "off"): return False
+        if str(__import__("os").environ.get("CHIMERA_INTRO", "0")).lower() in ("0", "false", "off"): return False
         asset = Path(__file__).resolve().parent.parent / "assets" / "chimera_intro.gif"
         if not asset.exists(): return False
         self._intro = ft.Container(ft.Image(src=str(asset), fit=ft.BoxFit.COVER, expand=True), expand=True, bgcolor=BG)
@@ -173,7 +191,7 @@ class MainWindow:
         except Exception: caps, review = "?", "?"
         return ft.Container(ft.Text(f"MODEL: {self._runtime_state().split(': ')[-1]}   ·   CAPABILITIES: {caps}   ·   REVIEW: {review}   ·   STATE: IDLE", color=MUTED, size=10), height=34, padding=ft.Padding.symmetric(horizontal=24, vertical=8), border=ft.Border.only(top=ft.BorderSide(1, BORDER)))
     def _set(self, controls): self.body.content = ft.Column(controls, expand=True, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=18); self.page.update()
-    def _button(self, label, handler): return ft.FilledButton(label, on_click=handler, style=ft.ButtonStyle(bgcolor=TEXT, color=BG, overlay_color=SECONDARY))
+    def _button(self, label, handler): return ft.FilledButton(label, on_click=handler, style=ft.ButtonStyle(bgcolor=FOCUS, color=BG, overlay_color=ACCENT))
 
     def _show_capabilities(self, e=None): self._set([ft.Row([ft.Text("CAPABILITIES", size=18, color=TEXT), ft.Text("/ REVIEW QUEUE", size=11, color=MUTED)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), self._candidate_list()])
     def _show_workflow_studio(self, e=None):
@@ -377,23 +395,130 @@ class MainWindow:
 
     def _show_runs(self, e=None): self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
     def _show_settings(self, e=None):
-        c = config_from_env(); s = check_status(c); source = config_source(); policy = load_policy(self.registry.data_dir); server = self.local_provider.server.status() if self.local_provider.server else {"state": "unavailable"}
-        self._set([ft.Text("SETTINGS", size=18, color=TEXT), ft.Text(f"LOCAL RUNTIME: {_upper(s.state)}\nSERVER: {_upper(server['state'])}\nMODEL: {c.model_path or 'NOT CONFIGURED'} ({source['model']})\nSERVER EXECUTABLE: {c.server_path or 'NOT AVAILABLE'}\nSERVER PID: {server.get('pid') or 'none'}  PORT: {server.get('url') or 'none'}\nCONTEXT: {c.context}  TOKENS: {c.max_tokens}  THREADS: {c.threads}  GPU LAYERS: {c.gpu_layers}\nPOLICY: {policy['mode']}  IDLE TIMEOUT: {policy['idle_timeout']}s\n\nDATA: {self.registry.data_dir}\nEnvironment variables override persisted model_config.json.", color=SECONDARY), ft.Row([self.model_path_field, ft.TextButton("SELECT GGUF", on_click=lambda e: self.model_picker.pick_files(allowed_extensions=["gguf"]))]), ft.Row([self.runtime_path_field, ft.TextButton("SELECT CLI RUNTIME", on_click=lambda e: self.runtime_picker.pick_files())]), ft.Row([self._button("SAVE + VALIDATE", self._save_model_config), ft.TextButton("VERIFY AGENT CHAT", on_click=self._verify_local_agent, style=ft.ButtonStyle(color=ACCENT)), ft.TextButton("START SERVER", on_click=self._start_local_server, style=ft.ButtonStyle(color=TEXT)), ft.TextButton("STOP SERVER", on_click=self._stop_local_server, style=ft.ButtonStyle(color=TEXT))]), ft.Text("A successful protocol verification runs a real local structured inference. A configured file alone is not treated as proof that the model works. The managed server is loopback-only; no model download or hosted fallback is used.", color=MUTED, size=11)])
-    def _start_local_server(self, e=None):
-        try: self.local_provider.server.start(); self._toast("Local model server is ready."); self._show_settings()
-        except Exception as exc: self._toast(f"Server start failed: {exc}")
+        config = self.local_provider.config
+        status = check_status(config)
+        server = self.local_provider.server.status() if self.local_provider.server else {"state": "not selected"}
+        state, detail, state_color = self._model_runtime_summary()
+        tuning = ft.Container(
+            ft.Column([
+                ft.Text("INFERENCE BUDGET", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
+                ft.Row([self.context_field, self.max_tokens_field, self.threads_field, self.gpu_layers_field], wrap=True, spacing=10),
+                ft.Row([
+                    ft.TextButton("APPLY BALANCED 3B / Q4 PRESET", on_click=self._apply_balanced_preset, style=ft.ButtonStyle(color=ACCENT)),
+                    ft.Text("4K context · 512 output · 6 CPU threads · 20 GPU layers", color=MUTED, size=9),
+                ], wrap=True),
+            ], spacing=10),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=12, padding=ft.Padding.all(16),
+        )
+        runtime = ft.Container(
+            ft.Column([
+                ft.Row([ft.Text("LOCAL MODEL RUNTIME", color=TEXT, size=15, weight=ft.FontWeight.BOLD), ft.Container(expand=True), ft.Text(state, color=state_color, size=9, weight=ft.FontWeight.BOLD)]),
+                ft.Text(f"{detail}\nMODEL  {config.model_path or 'NOT CONFIGURED'}\nSERVER  {config.server_path or 'NOT SELECTED'}\nCLI  {config.cli_path or 'NOT SELECTED'}\nSERVER STATE  {_upper(server.get('state'))}  ·  PID {server.get('pid') or '—'}  ·  {server.get('url') or 'no loopback endpoint'}", color=SECONDARY, size=10),
+                ft.Text("Persistent mode uses only the selected llama-server. If it fails, the request fails. Chimera will not switch to llama-cli or a hosted model. CLI-only mode is explicit and loads the GGUF per request.", color=MUTED, size=10),
+            ], spacing=9),
+            bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=12, padding=ft.Padding.all(16),
+        )
+        quantization = ft.Container(
+            ft.Column([
+                ft.Text("MODEL / QUANTIZATION NOTES", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
+                ft.Text("For a compact 3B local agent, Q4_K_M is the balanced starting point: good quality per GB, with room for context and KV cache. Q5_K_M can improve fidelity but needs more memory. Quantization is baked into the GGUF; Chimera does not rewrite or fetch model files.", color=SECONDARY, size=10),
+                ft.Text("The preset is a tuning starting point, not a promise of fit. Lower GPU layers first if VRAM is tight; reduce context next if memory pressure persists.", color=MUTED, size=9),
+            ], spacing=7),
+            bgcolor=PANEL_WARM, border=ft.Border.all(1, "#655041"), border_radius=12, padding=ft.Padding.all(15),
+        )
+        self._set([
+            ft.Row([ft.Text("MODEL BAY", size=22, color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(" / LOCAL ONLY", size=10, color=ACCENT)], spacing=8),
+            runtime,
+            ft.Container(ft.Column([
+                ft.Text("MODEL FILE", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
+                ft.Row([self.model_path_field, ft.TextButton("BROWSE GGUF", on_click=lambda e: self.model_picker.pick_files(allowed_extensions=["gguf"]), style=ft.ButtonStyle(color=ACCENT))]),
+                ft.Text("PERSISTENT SERVER", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
+                ft.Row([self.server_path_field, ft.TextButton("BROWSE SERVER", on_click=lambda e: self.server_picker.pick_files(), style=ft.ButtonStyle(color=ACCENT))]),
+                ft.Text("OPTIONAL CLI-ONLY RUNTIME", color=MUTED, size=9, weight=ft.FontWeight.BOLD),
+                ft.Row([self.runtime_path_field, ft.TextButton("BROWSE CLI", on_click=lambda e: self.runtime_picker.pick_files(), style=ft.ButtonStyle(color=SECONDARY))]),
+            ], spacing=9), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=12, padding=ft.Padding.all(16)),
+            tuning, quantization,
+            ft.Row([
+                self._button("SAVE CONFIGURATION", self._save_model_config),
+                ft.TextButton("VERIFY AGENT PROTOCOL", on_click=self._verify_local_agent, style=ft.ButtonStyle(color=ACCENT)),
+                ft.TextButton("LOAD MODEL NOW", on_click=self._start_local_server, style=ft.ButtonStyle(color=TEXT)),
+                ft.TextButton("STOP MODEL", on_click=self._stop_local_server, style=ft.ButtonStyle(color=SECONDARY)),
+            ], wrap=True, spacing=8),
+            ft.Text(f"Configuration source: {config_source()}  ·  Data: {self.registry.data_dir}", color=MUTED, size=9),
+        ])
+
+    async def _start_local_server(self, e=None):
+        if not self.local_provider.server:
+            return self._toast("Select a llama-server executable and save the configuration first.")
+        try:
+            self.model_boot_status = "loading"
+            self._show_overview()
+            await asyncio.to_thread(self.local_provider.server.start)
+            self.model_boot_status = "ready"
+            self._toast("Local model loaded and resident in the llama-server process.")
+        except Exception as exc:
+            self.model_boot_status = "failed"
+            self._toast(f"Model load failed. No alternate runtime was selected: {exc}")
+        self._show_settings()
     def _stop_local_server(self, e=None):
         self.local_provider.stop(); self._toast("Local model server stopped."); self._show_settings()
     def _model_picked(self, e):
         if e.files: self.model_path_field.value = e.files[0].path; self.page.update()
     def _runtime_picked(self, e):
         if e.files: self.runtime_path_field.value = e.files[0].path; self.page.update()
+    def _server_picked(self, e):
+        if e.files: self.server_path_field.value = e.files[0].path; self.page.update()
+    def _apply_balanced_preset(self, e=None):
+        self.context_field.value = "4096"
+        self.max_tokens_field.value = "512"
+        self.threads_field.value = "6"
+        self.gpu_layers_field.value = "20"
+        self._toast("Balanced 3B preset staged. Save it after checking the selected model and GPU headroom.")
+        self.page.update()
+    async def _warm_local_model(self):
+        config = self.local_provider.config
+        if not self.local_provider.server:
+            self.model_boot_status = "cli_only" if config.cli_path else "missing"
+            self._show_overview()
+            return
+        if check_status(config).state != "ready":
+            self.model_boot_status = "missing"
+            self._show_overview()
+            return
+        self.model_boot_status = "loading"
+        self._show_overview()
+        try:
+            await asyncio.to_thread(self.local_provider.server.start)
+            self.model_boot_status = "ready"
+        except Exception as exc:
+            self.model_boot_status = "failed"
+            self.last_turn_notice = f"Local model failed to load. No CLI or hosted fallback was attempted: {exc}"
+        self._show_overview()
     def _save_model_config(self, e=None):
-        model = Path(self.model_path_field.value) if self.model_path_field.value else None; runtime = self.runtime_path_field.value or None
+        model = Path(self.model_path_field.value).expanduser() if self.model_path_field.value else None
+        cli = self.runtime_path_field.value.strip() or None
+        server = self.server_path_field.value.strip() or None
+        try:
+            context = int(self.context_field.value)
+            max_tokens = int(self.max_tokens_field.value)
+            threads = int(self.threads_field.value)
+            gpu_layers = int(self.gpu_layers_field.value)
+        except (TypeError, ValueError):
+            return self._toast("Context, token, thread and GPU-layer settings must be integers.")
+        if context < 512 or max_tokens < 1 or threads < 1 or gpu_layers < 0:
+            return self._toast("Use context ≥ 512, tokens/threads ≥ 1, and GPU layers ≥ 0.")
         if model and model.suffix.lower() != ".gguf": return self._toast("Model must be an existing .gguf file.")
         if model and not model.is_file(): return self._toast("Selected model file does not exist.")
-        if runtime and not Path(runtime).is_file(): return self._toast("Selected llama.cpp executable does not exist.")
-        save_persisted_config(model, runtime)
+        if cli and not Path(cli).is_file(): return self._toast("Selected llama-cli executable does not exist.")
+        if server and not Path(server).is_file(): return self._toast("Selected llama-server executable does not exist.")
+        if server and cli:
+            # Keeping both paths is useful for explicit diagnostics, but server wins
+            # only because the operator explicitly configured it in this field.
+            pass
+        save_persisted_config(
+            model, cli, server_path=server, context=context, max_tokens=max_tokens,
+            threads=threads, gpu_layers=gpu_layers,
+        )
         try:
             self.local_provider.stop()
         except Exception:
@@ -401,8 +526,10 @@ class MainWindow:
         self.local_provider = LocalModelProvider(config_from_env())
         self.agent_runtime.provider = self.local_provider
         self.local_verification = None
-        self._toast(f"Saved. Provider state: {_upper(check_status(config_from_env()).state)}")
+        self.model_boot_status = "checking"
+        self._toast(f"Saved. Provider state: {_upper(check_status(self.local_provider.config).state)}")
         self._show_settings()
+        self.page.run_task(self._warm_local_model)
     async def _test_local_inference(self, e=None):
         self._toast("Running genuine local inference..."); result = await asyncio.to_thread(LocalModelProvider(config_from_env()).plan, "Return a concise JSON TaskSpec for creating a deterministic local text utility.")
         self._toast(f"Inference {result.status}: {result.duration_ms} ms, {result.generated_tokens} generated tokens" if result.status == "ready" else f"Inference failed: {result.error or result.status}")
@@ -763,8 +890,100 @@ class MainWindow:
         self.task_field.focus()
         self.page.update()
 
+    def _active_model_label(self):
+        try:
+            selection = self.agent_store.session_model(self.agent_session_id)
+            profile_id = selection.get("profile_id")
+            if profile_id:
+                profile = next((item for item in self.profile_store.list() if item.profile_id == profile_id), None)
+                if profile:
+                    return profile.display_name or Path(profile.model_path or profile.model_id).name
+            path = self.local_provider.config.model_path
+            return path.name if path else "No local model selected"
+        except Exception:
+            return "Model configuration unavailable"
+
+    def _model_runtime_summary(self):
+        provider = self.local_provider
+        config = provider.config
+        if not config.model_path:
+            return "MODEL NOT SET", "Choose a local GGUF in the Model Bay.", ACCENT
+        base = check_status(config)
+        if base.state != "ready":
+            return "RUNTIME OFFLINE", base.detail, ACCENT
+        if provider.server:
+            try:
+                info = provider.server.status()
+                state = info.get("state", "unknown")
+                if state == "ready":
+                    return "MODEL LOADED", "Persistent llama-server · model resident in memory", FOCUS
+                if state in {"starting", "model_loading"} or self.model_boot_status == "loading":
+                    return "LOADING MODEL", "Loading local GGUF into the persistent server", ACCENT
+                if state == "busy":
+                    return "MODEL WORKING", "Local inference is in progress", FOCUS
+                if state == "failed" or self.model_boot_status == "failed":
+                    return "LOAD FAILED", "Server failed. No alternate model runtime will be selected.", ACCENT
+                return "SERVER READY", "Persistent mode · model loads on first request", SECONDARY
+            except Exception as exc:
+                return "SERVER ERROR", str(exc), ACCENT
+        return "CLI / ONE-SHOT", "Explicit CLI mode · GGUF is loaded for each request", SECONDARY
+
+    def _context_rail(self):
+        workspace = self.workspace_path
+        try:
+            active_goals = self.goal_store.list(status="active", limit=2)
+        except Exception:
+            active_goals = []
+        try:
+            capability_count = len(self.registry.list())
+        except Exception:
+            capability_count = 0
+        model_state, model_detail, model_color = self._model_runtime_summary()
+        goal_cards = [
+            ft.Container(
+                ft.Column([
+                    ft.Text(goal.title, color=TEXT, size=10, weight=ft.FontWeight.BOLD),
+                    ft.Text(f"{goal.priority.upper()}  ·  {goal.project or 'No project'}", color=MUTED, size=8),
+                ], spacing=4),
+                bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(10),
+            )
+            for goal in active_goals
+        ]
+        return ft.Container(
+            ft.Column([
+                ft.Row([ft.Text("SESSION INTEL", color=TEXT, size=10, weight=ft.FontWeight.BOLD), ft.Text("LIVE", color=FOCUS, size=8)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ft.Container(
+                    ft.Column([
+                        ft.Text("MODEL STATE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                        ft.Text(model_state, color=model_color, size=11, weight=ft.FontWeight.BOLD),
+                        ft.Text(model_detail, color=SECONDARY, size=9),
+                        ft.TextButton("OPEN MODEL BAY ↗", on_click=self._show_settings, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.all(0))),
+                    ], spacing=7),
+                    bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(12),
+                ),
+                ft.Divider(height=1, color=BORDER),
+                ft.Text("WORKSPACE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                ft.Text(workspace.name if workspace else "No project attached", color=TEXT, size=12, weight=ft.FontWeight.BOLD),
+                ft.Text(str(workspace) if workspace else "Attach a folder to unlock project inspection and file tools.", color=SECONDARY, size=9),
+                ft.TextButton("ATTACH FOLDER ↗", on_click=self._pick_workspace, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.all(0))),
+                ft.Divider(height=1, color=BORDER),
+                ft.Row([ft.Text("ACTIVE GOALS", color=MUTED, size=8, weight=ft.FontWeight.BOLD), ft.Text(str(len(active_goals)), color=FOCUS, size=9)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                *(goal_cards or [ft.Text("No active goals recorded.", color=MUTED, size=9)]),
+                ft.TextButton("OPEN GOAL LEDGER ↗", on_click=self._show_goals, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.all(0))),
+                ft.Divider(height=1, color=BORDER),
+                ft.Text("CAPABILITY INVENTORY", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                ft.Text(f"{capability_count} registered capabilities", color=TEXT, size=10),
+                ft.Text("Plan mode is read-only. Build mode still asks before protected changes.", color=SECONDARY, size=9),
+                ft.Container(expand=True),
+                ft.Text("OXIDE / LOCAL-FIRST", color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
+                ft.Text("No silent provider changes. No automatic model downloads.", color=MUTED, size=8),
+            ], spacing=10, expand=True, scroll=ft.ScrollMode.AUTO),
+            width=232, bgcolor="#1B201A", padding=ft.Padding.all(14),
+            border=ft.Border.only(left=ft.BorderSide(1, BORDER)),
+        )
+
     def _chat_sidebar(self):
-        sessions = self.agent_store.list_sessions(limit=12)
+        sessions = self.agent_store.list_sessions(limit=16)
         recent = []
         for item in sessions:
             sid = item["session_id"]
@@ -773,57 +992,53 @@ class MainWindow:
             recent.append(
                 ft.Container(
                     ft.Row([
-                        ft.Text("●", color=ACCENT if is_current else MUTED, size=8),
-                        ft.Text(label, color=TEXT if is_current else SECONDARY, size=10),
-                    ], spacing=9),
+                        ft.Text("▸", color=FOCUS if is_current else MUTED, size=11),
+                        ft.Text(label, color=TEXT if is_current else SECONDARY, size=10, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ], spacing=8),
                     bgcolor=ELEVATED if is_current else None,
-                    border=ft.Border.all(1, BORDER) if is_current else None,
+                    border=ft.Border.all(1, "#596347") if is_current else None,
                     border_radius=7,
                     padding=ft.Padding.symmetric(horizontal=9, vertical=9),
                     on_click=lambda e, session_id=sid: self._resume_agent_session(session_id),
                 )
             )
-
-        try:
-            config = config_from_env()
-            model_name = Path(config.model_path).name if config.model_path else "No GGUF selected"
-        except Exception:
-            model_name = "Model configuration unavailable"
-
-        verify_label = "NOT VERIFIED"
-        verify_color = MUTED
-        if self.local_verification:
-            verify_label = "AGENT TEST PASSED"
-            verify_color = "#8EAD98"
-
+        model_state, model_detail, model_color = self._model_runtime_summary()
+        model_label = self._active_model_label()
         return ft.Container(
             ft.Column([
-                ft.Row([ft.Text("◈", color=ACCENT, size=20), ft.Text("CHIMERA", color=TEXT, size=13, weight=ft.FontWeight.BOLD)], spacing=9),
-                ft.Container(
-                    self._button("＋   NEW CHAT", lambda e: self._new_agent_session()),
-                    width=220,
-                ),
-                ft.Text("WORKSPACE", color=MUTED, size=9, weight=ft.FontWeight.BOLD),
-                self._nav_item("⌂", "Chat", self._show_overview, True),
-                self._nav_item("▤", "Model hub", self._show_model_hub),
-                self._nav_item("▣", "Applications", self._show_computer_apps),
-                self._nav_item("◇", "Workflow studio", self._show_workflow_studio),
+                ft.Row([
+                    ft.Container(ft.Text("✳", color=FOCUS, size=19, weight=ft.FontWeight.BOLD), bgcolor="#303A27", border_radius=8, padding=ft.Padding.all(8)),
+                    ft.Column([
+                        ft.Text("CHIMERA", color=TEXT, size=14, weight=ft.FontWeight.BOLD),
+                        ft.Text("FIELD CONSOLE  /  01", color=MUTED, size=8),
+                    ], spacing=2),
+                ], spacing=10),
+                ft.Container(self._button("＋   NEW TASK", lambda e: self._new_agent_session()), width=208),
+                ft.Text("WORKSPACE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                self._nav_item("◉", "Chat workbench", self._show_overview, True),
+                self._nav_item("⌘", "Model bay", self._show_model_hub),
+                self._nav_item("▧", "Applications", self._show_computer_apps),
+                self._nav_item("⌁", "Workflow studio", self._show_workflow_studio),
                 self._nav_item("⬡", "Capabilities", self._show_capabilities),
+                self._nav_item("◎", "Goal ledger", self._show_goals),
                 self._nav_item("◷", "Run history", self._show_runs),
                 ft.Divider(height=1, color=BORDER),
-                ft.Row([ft.Text("RECENT CONVERSATIONS", color=MUTED, size=9, weight=ft.FontWeight.BOLD), ft.TextButton("＋", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=ACCENT))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Column(recent or [ft.Text("Your conversations will appear here.", color=MUTED, size=10)], spacing=3, scroll=ft.ScrollMode.AUTO, expand=True),
+                ft.Row([
+                    ft.Text("RECENT THREADS", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                    ft.TextButton("＋", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=ACCENT)),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ft.Column(recent or [ft.Text("No threads yet. Start with one clear outcome.", color=MUTED, size=9)], spacing=3, scroll=ft.ScrollMode.AUTO, expand=True),
                 ft.Container(
                     ft.Column([
-                        ft.Text("LOCAL MODEL", color=MUTED, size=9, weight=ft.FontWeight.BOLD),
-                        ft.Text(model_name, color=TEXT, size=10),
-                        ft.Row([ft.Container(width=6, height=6, bgcolor=verify_color, border_radius=6), ft.Text(verify_label, color=verify_color, size=8)], spacing=7),
-                        ft.TextButton("Configure runtime  ↗", on_click=self._show_settings, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.all(0))),
+                        ft.Row([ft.Text("LOCAL MODEL", color=MUTED, size=8, weight=ft.FontWeight.BOLD), ft.Container(expand=True), ft.Text(model_state, color=model_color, size=7, weight=ft.FontWeight.BOLD)]),
+                        ft.Text(model_label, color=TEXT, size=9, max_lines=2),
+                        ft.Text(model_detail, color=SECONDARY, size=8, max_lines=3),
+                        ft.TextButton("Configure / load model ↗", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS, padding=ft.Padding.all(0))),
                     ], spacing=6),
-                    bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9, padding=ft.Padding.all(12),
+                    bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9, padding=ft.Padding.all(11),
                 ),
-            ], spacing=10, expand=True),
-            width=246, bgcolor="#0E1210", padding=ft.Padding.all(14),
+            ], spacing=9, expand=True),
+            width=238, bgcolor="#1A1F19", padding=ft.Padding.all(14),
             border=ft.Border.only(right=ft.BorderSide(1, BORDER)),
         )
 
@@ -831,25 +1046,33 @@ class MainWindow:
         if role == "user":
             bubble = ft.Container(
                 ft.Column([
-                    ft.Text("YOU", color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
+                    ft.Row([
+                        ft.Text("YOU", color=FOCUS, size=8, weight=ft.FontWeight.BOLD),
+                        ft.Container(expand=True),
+                        ft.Text("REQUEST", color=MUTED, size=8),
+                    ]),
                     ft.Text(content, color=TEXT, size=13),
-                ], spacing=7),
-                bgcolor="#202722", border=ft.Border.all(1, "#344139"),
-                border_radius=12, padding=ft.Padding.all(15), width=720,
+                ], spacing=8),
+                bgcolor="#292F25", border=ft.Border.all(1, "#596347"),
+                border_radius=ft.BorderRadius.only(top_left=14, top_right=14, bottom_left=14, bottom_right=3),
+                padding=ft.Padding.all(16), width=690,
             )
             return ft.Row([bubble], alignment=ft.MainAxisAlignment.END)
 
         bubble = ft.Container(
             ft.Column([
                 ft.Row([
-                    ft.Text("◈", color=ACCENT, size=15),
+                    ft.Container(ft.Text("✳", color=FOCUS, size=13), bgcolor="#303A27", border_radius=6, padding=ft.Padding.all(5)),
                     ft.Text("CHIMERA", color=TEXT, size=9, weight=ft.FontWeight.BOLD),
-                    ft.Text("LOCAL AGENT", color=MUTED, size=8),
+                    ft.Text("LOCAL REASONER", color=MUTED, size=8),
+                    ft.Container(expand=True),
+                    ft.Text("RESPONSE", color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
                 ], spacing=7),
                 ft.Text(content, color=SECONDARY, size=13),
-            ], spacing=9),
-            bgcolor=SURFACE, border=ft.Border.all(1, BORDER),
-            border_radius=12, padding=ft.Padding.all(16), width=760,
+            ], spacing=10),
+            bgcolor=SURFACE, border=ft.Border.only(left=ft.BorderSide(2, FOCUS)),
+            border_radius=ft.BorderRadius.only(top_left=3, top_right=12, bottom_left=12, bottom_right=12),
+            padding=ft.Padding.all(17), width=760,
         )
         return ft.Row([bubble], alignment=ft.MainAxisAlignment.START)
 
@@ -981,61 +1204,101 @@ class MainWindow:
         session = self.agent_store.session(self.agent_session_id) or {}
         session_mode = session.get("mode", "plan")
         session_title = self._session_title(self.agent_session_id)
-        model_info = self.agent_store.session_model(self.agent_session_id)
-        selected_model = model_info.get("profile_id") or (Path(session.get("model")).name if session.get("model") else "Default local GGUF")
+        model_label = self._active_model_label()
+        model_state, model_detail, model_color = self._model_runtime_summary()
         workspace_label = str(self.workspace_path) if self.workspace_path else "No workspace attached"
 
         if not hasattr(self, "task_field") or self.task_field is None:
-            self.task_field = ft.TextField(multiline=True, min_lines=2, max_lines=5, hint_text="Message Chimera…  (describe the outcome, not just the steps)", hint_style=ft.TextStyle(color=MUTED), bgcolor="#0D110F", color=TEXT, border_color=BORDER, focused_border_color=ACCENT, border_radius=8, expand=True)
+            self.task_field = ft.TextField(
+                multiline=True, min_lines=3, max_lines=8,
+                hint_text="Describe the outcome. Chimera will work through it with you...",
+                hint_style=ft.TextStyle(color=MUTED), bgcolor="#252B23", color=TEXT,
+                border_color=BORDER, focused_border_color=FOCUS, border_radius=11,
+                expand=True, text_size=14,
+            )
         self.task_field.disabled = self.task_busy
 
+        mode_badge = ft.Container(
+            ft.Text(f"{session_mode.upper()} MODE", color=FOCUS if session_mode == "build" else SECONDARY, size=8, weight=ft.FontWeight.BOLD),
+            bgcolor="#30382A" if session_mode == "build" else ELEVATED,
+            border=ft.Border.all(1, "#65734C" if session_mode == "build" else BORDER),
+            border_radius=20, padding=ft.Padding.symmetric(horizontal=11, vertical=7),
+        )
         header = ft.Container(
             ft.Row([
                 ft.Column([
-                    ft.Text("CONVERSATION", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
-                    ft.Text(session_title, color=TEXT, size=17, weight=ft.FontWeight.BOLD),
-                    ft.Text(workspace_label, color=MUTED, size=9),
-                ], spacing=4, expand=True),
-                ft.Row([
-                    ft.Container(ft.Text(f"{session_mode.upper()} MODE", color=ACCENT, size=8, weight=ft.FontWeight.BOLD), bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=20, padding=ft.Padding.symmetric(horizontal=11, vertical=7)),
-                    ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=ACCENT)),
-                ], spacing=6),
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            height=82, padding=ft.Padding.symmetric(horizontal=28, vertical=14),
+                    ft.Row([
+                        ft.Text("WORKSPACE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                        ft.Text(" / ", color=ACCENT, size=8),
+                        ft.Text(self.workspace_path.name if self.workspace_path else "PERSONAL THREAD", color=SECONDARY, size=8, weight=ft.FontWeight.BOLD),
+                    ], spacing=4),
+                    ft.Text(session_title, color=TEXT, size=19, weight=ft.FontWeight.BOLD, max_lines=1),
+                    ft.Text(workspace_label, color=MUTED, size=9, max_lines=1),
+                ], spacing=5, expand=True),
+                ft.Container(
+                    ft.Column([
+                        ft.Row([
+                            ft.Container(width=7, height=7, bgcolor=model_color, border_radius=8),
+                            ft.Text(model_state, color=model_color, size=8, weight=ft.FontWeight.BOLD),
+                        ], spacing=6),
+                        ft.Text(model_label, color=TEXT, size=9, max_lines=1),
+                    ], spacing=4),
+                    bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9,
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                ),
+                ft.Column([
+                    ft.Row([
+                        mode_badge,
+                        ft.TextButton(
+                            "SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN",
+                            on_click=self._toggle_agent_mode, disabled=self.task_busy,
+                            style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.symmetric(horizontal=8, vertical=6)),
+                        ),
+                    ], spacing=4),
+                    ft.Text("READ-ONLY" if session_mode == "plan" else "APPROVAL-GATED", color=MUTED, size=8, text_align=ft.TextAlign.RIGHT),
+                ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.END),
+            ], spacing=14, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            height=92, padding=ft.Padding.symmetric(horizontal=24, vertical=13),
             border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)), bgcolor=BG,
         )
 
         composer = ft.Container(
             ft.Column([
                 ft.Row([
-                    ft.Text("MESSAGE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                    ft.Text("NEW MESSAGE", color=FOCUS, size=8, weight=ft.FontWeight.BOLD),
+                    ft.Text("CONTINUOUS THREAD", color=MUTED, size=8),
                     ft.Container(expand=True),
-                    ft.Text("LOCAL ONLY  ·  PERMISSION-GATED TOOLS", color="#8EAD98", size=8),
-                    ft.TextButton("ATTACH WORKSPACE", on_click=self._pick_workspace, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.symmetric(horizontal=7, vertical=6))),
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Text("LOCAL-FIRST  /  NO SILENT FALLBACK", color=FOCUS, size=8),
+                ], spacing=10),
                 self.task_field,
                 ft.Row([
-                    ft.Text("Enter a goal. Chimera will inspect, plan and ask before protected changes.", color=MUTED, size=9),
+                    ft.TextButton("＋  ATTACH PROJECT", on_click=self._pick_workspace, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.symmetric(horizontal=8, vertical=7))),
+                    ft.TextButton("RUN WORKFLOW", on_click=self._run_multi_capability_workflow, disabled=self.task_busy, style=ft.ButtonStyle(color=SECONDARY, padding=ft.Padding.symmetric(horizontal=8, vertical=7))),
                     ft.Container(expand=True),
-                    ft.TextButton("RUN WORKFLOW", on_click=self._run_multi_capability_workflow, disabled=self.task_busy, style=ft.ButtonStyle(color=SECONDARY)),
-                    self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND  ↑", self._send_conversation),
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            ], spacing=9),
-            bgcolor="#141A16", border=ft.Border.all(1, BORDER), border_radius=12,
-            padding=ft.Padding.all(14), margin=ft.Margin.symmetric(horizontal=22, vertical=14),
+                    ft.Text("ENTER A GOAL  ·  KEEP THE THREAD GOING", color=MUTED, size=8),
+                    self._button("STOP  ■", self._cancel_conversation) if self.task_busy else self._button("SEND  ↑", self._send_conversation),
+                ], spacing=6, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ], spacing=10),
+            bgcolor="#20271F", border=ft.Border.all(1, "#4A5541"), border_radius=13,
+            padding=ft.Padding.all(14), margin=ft.Margin.symmetric(horizontal=22, vertical=13),
         )
 
-        center = ft.Column([
-            header,
-            ft.Container(
-                ft.Column(self._conversation_content(), expand=True, scroll=ft.ScrollMode.AUTO, spacing=16),
-                expand=True, padding=ft.Padding.symmetric(horizontal=24, vertical=18),
+        feed = ft.Container(
+            ft.Column(
+                self._conversation_content(), expand=True,
+                scroll=ft.ScrollMode.AUTO, spacing=17,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            composer,
-        ], expand=True, spacing=0)
-
+            expand=True, padding=ft.Padding.symmetric(horizontal=22, vertical=20),
+            bgcolor=BG,
+        )
+        center = ft.Column([header, feed, composer], expand=True, spacing=0)
         self.body.padding = ft.Padding.all(0)
-        self.body.content = ft.Row([self._chat_sidebar(), ft.Container(center, expand=True, bgcolor=BG)], expand=True, spacing=0)
+        self.body.content = ft.Row([
+            self._chat_sidebar(),
+            ft.Container(center, expand=True, bgcolor=BG),
+            self._context_rail(),
+        ], expand=True, spacing=0)
         self.page.update()
 
     def _toggle_agent_mode(self, e=None):
