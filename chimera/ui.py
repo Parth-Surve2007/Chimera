@@ -697,9 +697,13 @@ class MainWindow:
                         line.strip() for line in (evidence_field.value or "").splitlines()
                         if line.strip()
                     ] if needs_evidence else None
-                    reason = (note_field.value or "").strip() if needs_evidence else (evidence_field.value or "").strip()
-                    if needs_evidence and not reason:
-                        reason = None
+                    if needs_evidence:
+                        reason = (note_field.value or "").strip() or None
+                    else:
+                        reason = (evidence_field.value or "").strip()
+                        additional = (note_field.value or "").strip()
+                        if additional:
+                            reason += "\\n\\nAdditional context: " + additional
                     self.goal_store.transition(
                         goal_id, status, reason=reason, evidence=evidence,
                     )
