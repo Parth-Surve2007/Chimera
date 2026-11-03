@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 block_cipher = None
 
@@ -20,12 +20,23 @@ if not client_archive.is_file():
 
 flet_datas, flet_binaries, flet_hiddenimports = collect_all("flet_desktop")
 
+# Flet resolves icon names lazily from package JSON at runtime. These are not
+# included by collect_all("flet_desktop"), so mirror Flet's own PyInstaller
+# hook and explicitly preserve both resource files in their package locations.
+flet_icon_datas = collect_data_files(
+    "flet.controls.material", includes=["icons.json"]
+)
+flet_icon_datas += collect_data_files(
+    "flet.controls.cupertino", includes=["cupertino_icons.json"]
+)
+
 datas = [
     ("fonts", "fonts"),
     ("chimera", "chimera"),
     (str(client_archive), "flet_desktop/app"),
 ]
 datas.extend(flet_datas)
+datas.extend(flet_icon_datas)
 
 hiddenimports = [
     "flet",
