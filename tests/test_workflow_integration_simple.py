@@ -43,7 +43,7 @@ def test_workflow_orchestration_simple():
     session_id = runtime.create_session(workspace=workspace, mode="plan")
 
     # Execute objective
-    objective = "Inspect the workspace and list files"
+    objective = "List files in this workspace"
     result = orchestrator.execute_objective(
         session_id=session_id,
         objective=objective,
@@ -51,8 +51,9 @@ def test_workflow_orchestration_simple():
     )
 
     # Verify result
-    assert result["status"] in ("completed", "failed")
+    assert result["status"] == "completed"
     assert "plan_id" in result
+    assert result["steps_executed"] == 1
 
     print(f"\nWorkflow orchestration test passed")
     print(f"Status: {result['status']}")
