@@ -277,7 +277,11 @@ class AgentRuntime:
         try:
             from .applications.registry import get_application_registry
             from .applications.dispatch import application_tool_catalog
-            catalog_tools.extend(application_tool_catalog(get_application_registry()))
+            application_registry = get_application_registry()
+            # Discover local connectors before advertising their installed-only actions.
+            # Discovery is read-only; execution remains behind the runtime policy gate.
+            application_registry.discover_all()
+            catalog_tools.extend(application_tool_catalog(application_registry))
         except Exception:
             pass
         return {"version": 1, "tools": catalog_tools, "authorized_applications": authorized_applications, "interaction_inventory": self.computer.interaction_inventory()}
