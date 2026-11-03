@@ -339,7 +339,12 @@ class GoalStore:
 
         now = _now()
         completed_at = now if status == "completed" else None if status == "active" else current.completed_at
-        stored_evidence = normalized_evidence if status == "completed" else current.evidence
+        reopening = status == "active" and current.status in _TERMINAL
+        stored_evidence = (
+            normalized_evidence if status == "completed"
+            else [] if reopening
+            else current.evidence
+        )
         completion_note = note or None if status == "completed" else None if status == "active" else current.completion_note
         with self._connect() as db:
             db.execute(
@@ -360,6 +365,10 @@ class GoalStore:
                 payload["reason"] = note
             if status == "completed":
                 payload["evidence"] = normalized_evidence
+            if reopening:
+                payload["previous_completion_evidence"] = current.evidence
+                if current.completion_note:
+                    payload["previous_completion_note"] = current.completion_note
             self._event(db, goal_id, "goal.status_changed", payload)
         updated = self.get(goal_id)
         assert updated is not None
