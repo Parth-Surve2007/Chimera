@@ -383,11 +383,14 @@ class AgentRuntime:
                 for goal in selected
             ],
         }
-        messages.insert(0, {
-            "role": "system",
-            "content": "Private local goal context (not persisted in this conversation):\n"
+        messages.insert(0, AgentMessage(
+            message_id="goal-context-" + session_id,
+            session_id=session_id,
+            role="system",
+            content="Private local goal context (not persisted in this conversation):\n"
             + json.dumps(context, ensure_ascii=False, separators=(",", ":")),
-        })
+            created_at=_now(),
+        ))
         return messages
 
     def _decide(self, messages, session, cancel_event=None, turn_id=None):
