@@ -44,6 +44,7 @@ a = Analysis(
         'chimera.applications.connectors',
         'chimera.applications.connectors.ghidra_connector',
         'chimera.applications.connectors.rea_connector',
+        'chimera.applications.connectors.blender_connector',
         'chimera.reverse_engineering',
         'chimera.reverse_engineering.engine',
         'chimera.reverse_engineering.artifact',
