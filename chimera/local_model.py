@@ -276,11 +276,13 @@ def _plain_completion(raw: str) -> str:
         if marker in text: text = text.split(marker, 1)[0]
     return text.strip()
 
-AGENT_DECISION_GRAMMAR = r'''root ::= object
-object ::= "{" ws (pair ("," ws pair)*)? "}" ws
+AGENT_DECISION_GRAMMAR = r'''root ::= message | tool_call
+message ::= "{" ws "\"type\"" ws ":" ws "\"message\"" ws "," ws "\"content\"" ws ":" ws string ws "}" ws
+tool_call ::= "{" ws "\"type\"" ws ":" ws "\"tool_call\"" ws "," ws "\"tool\"" ws ":" ws string ws "," ws "\"arguments\"" ws ":" ws object ws ("," ws "\"invocation_id\"" ws ":" ws string)? ws "}" ws
+object ::= "{" ws (pair ("," ws pair)*)? "}"
 pair ::= string ws ":" ws value
 value ::= object | array | string | number | "true" | "false" | "null"
-array ::= "[" ws (value ("," ws value)*)? "]" ws
+array ::= "[" ws (value ("," ws value)*)? "]"
 string ::= "\"" ([^"\\] | "\\" escape)* "\""
 escape ::= "\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t"
 number ::= "-"? ([0-9] | [1-9] [0-9]+) ("." [0-9]+)?
@@ -379,16 +381,68 @@ class LocalModelProvider:
 
     def decide(self, messages, catalog, session=None, cancel_event=None, on_delta=None):
         """Return one strictly structured next action for the agent runtime."""
-        transcript = "\n".join(f"{getattr(item, 'role', 'user').upper()}: {getattr(item, 'content', '')[:3000]}" for item in list(messages)[-10:])
-        prompt = ("Return exactly one JSON object. For a normal answer use {\"type\":\"message\",\"content\":\"...\"}. "
-                  "For workspace inspection use {\"type\":\"tool_call\",\"tool\":\"workspace.list_files\",\"arguments\":{\"relative\":\".\",\"recursive\":true}}. "
-                  "Choose only a tool listed below. For every tool call, copy every required argument exactly from the tool contract and never omit required arguments. "
-                  "For computer tools, session_id and reference_id must be copied from computer_observation; do not invent or omit them. "
-                  "Do not include markdown, explanations, version fields, or invocation IDs. "
-                  "After a tool result, use its actual contents before answering.\nTOOLS: " + json.dumps(catalog, separators=(",", ":")) + "\nCONVERSATION:\n" + transcript)
-        parsed, metrics = self.structured_with_metrics(prompt, grammar=AGENT_DECISION_GRAMMAR, cancel_event=cancel_event, on_delta=on_delta)
-        metrics["grammar_provenance"] = "chimera.agent_decision.v1"
-        if not isinstance(parsed, dict): raise ValueError("agent decision must be an object")
+        transcript = "\n".join(
+            f"{getattr(item, 'role', 'user').upper()}: {getattr(item, 'content', '')[:3000]}"
+            for item in list(messages)[-10:]
+        )
+        session_state = {
+            "mode": (session or {}).get("mode", "plan"),
+            "workspace_attached": bool((session or {}).get("workspace")),
+        }
+        prompt = (
+            "You are Chimera's local agent decision engine. Return exactly ONE JSON object. " 
+            "Treat the most recent USER message as the current task; earlier turns are context only. "
+            "Do not resurrect an unrelated earlier topic or invent a different user request. "
+            'using exactly one supported envelope. A normal answer MUST be '
+            '{"type":"message","content":"..."}. '
+            'A tool action MUST be '
+            '{"type":"tool_call","tool":"<exact tool id>","arguments":{...}} '
+            "with an optional final invocation_id string. "
+            "The first key must be type. For tool calls, keys must appear in the order type, tool, "
+            "arguments, invocation_id. Do not return role/content chat messages, function_call "
+            "objects, arrays, markdown, prose outside JSON, version fields, or any other envelope. "
+            "Choose only an exact tool id listed below and copy every required argument from its "
+            "tool contract. Never invent missing IDs or arguments. "
+            "SESSION RULES: If mode is plan, do not request a write or other protected action. "
+            "Explain that the operator must switch to Build Mode first. If workspace_attached is false, "
+            "do not call workspace tools; ask the operator to attach the target folder first. "
+            "In particular, do not claim you can write to Desktop until Desktop is attached as the "
+            "workspace and Build Mode is active. After a tool result, use its actual contents before answering.\n"
+            "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
+            "\nTOOLS: " + json.dumps(catalog, separators=(",", ":")) +
+            "\nCONVERSATION:\n" + transcript
+        )
+        parsed, metrics = self.structured_with_metrics(
+            prompt,
+            grammar=AGENT_DECISION_GRAMMAR,
+            cancel_event=cancel_event,
+            on_delta=on_delta,
+        )
+        metrics["grammar_provenance"] = "chimera.agent_decision.v2"
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"local model returned {type(parsed).__name__}; expected a message or tool_call object"
+            )
+        decision_type = parsed.get("type")
+        if decision_type == "message":
+            if not isinstance(parsed.get("content"), str) or not parsed["content"].strip():
+                raise ValueError("local model returned a message decision without non-empty content")
+        elif decision_type == "tool_call":
+            if not isinstance(parsed.get("tool"), str) or not parsed["tool"].strip():
+                raise ValueError("local model returned a tool_call without a tool id")
+            if not isinstance(parsed.get("arguments"), dict):
+                raise ValueError("local model returned a tool_call without an arguments object")
+            invocation_id = parsed.get("invocation_id")
+            if invocation_id is not None and (
+                not isinstance(invocation_id, str) or not invocation_id.strip()
+            ):
+                raise ValueError("local model returned an invalid invocation_id")
+        else:
+            fields = ", ".join(sorted(str(key) for key in parsed)) or "none"
+            raise ValueError(
+                "local model returned an unsupported decision envelope "
+                f"(type={decision_type!r}; fields={fields}); expected type='message' or type='tool_call'"
+            )
         parsed["_metrics"] = metrics
         return parsed
     def plan(self, request: str) -> InferenceResult:

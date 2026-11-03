@@ -5,10 +5,10 @@ from chimera.local_model import LocalModelConfig
 from chimera.ui import ACCENT, BG, FOCUS, MainWindow
 
 
-def test_oxide_palette_avoids_default_blue_violet():
-    assert BG == "#171B16"
-    assert FOCUS == "#D7F16B"
-    assert ACCENT == "#E98564"
+def test_dark_emperor_palette_uses_full_black_and_warm_accents():
+    assert BG == "#000000"
+    assert FOCUS == "#E5B35A"
+    assert ACCENT == "#F17857"
     assert not any(token in (BG + FOCUS + ACCENT).lower() for token in ("#00f", "#0000ff", "#7c3aed", "#6366f1"))
 
 

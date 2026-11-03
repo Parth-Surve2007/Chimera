@@ -159,3 +159,63 @@ def test_persisted_runtime_and_inference_tuning_round_trip(tmp_path, monkeypatch
     assert loaded.max_tokens == 512
     assert loaded.threads == 6
     assert loaded.gpu_layers == 20
+
+
+def test_agent_decision_envelope_is_strict_and_includes_session_state(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    prompts = []
+
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda prompt, config: (
+            prompts.append(prompt)
+            or '{"type":"message","content":"Attach Desktop and switch to Build Mode first."}'
+        ),
+    )
+    from types import SimpleNamespace
+
+    decision = provider.decide(
+        [SimpleNamespace(role="user", content="make a file on desktop")],
+        {"version": 1, "tools": []},
+        session={"mode": "plan", "workspace": None},
+    )
+
+    assert decision["type"] == "message"
+    assert "SESSION: {\"mode\":\"plan\",\"workspace_attached\":false}" in prompts[0]
+    assert "do not call workspace tools" in prompts[0]
+    assert "root ::= message | tool_call" in __import__(
+        "chimera.local_model", fromlist=["AGENT_DECISION_GRAMMAR"]
+    ).AGENT_DECISION_GRAMMAR
+
+
+def test_local_agent_decision_rejects_unsupported_envelopes(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: '{"type":"text","text":"This is not a Chimera decision."}',
+    )
+
+    with pytest.raises(ValueError, match="unsupported decision envelope"):
+        provider.decide([], {"version": 1, "tools": []})
+
+
+def test_local_agent_tool_call_requires_tool_and_arguments(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: '{"type":"tool_call","tool":"workspace.create_artifact","arguments":{"name":"note.txt","content":"hello"}}',
+    )
+
+    decision = provider.decide([], {"version": 1, "tools": []})
+
+    assert decision["type"] == "tool_call"
+    assert decision["arguments"]["name"] == "note.txt"

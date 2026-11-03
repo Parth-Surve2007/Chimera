@@ -25,7 +25,7 @@ def test_first_run_chat_renders_persisted_user_assistant_and_tool_messages():
 
 def test_chat_ui_exposes_local_protocol_verification_and_no_blue_theme():
     from chimera import ui
-    assert ui.ACCENT == "#E98564" and ui.FOCUS == "#D7F16B"
+    assert ui.BG == "#000000" and ui.ACCENT == "#F17857" and ui.FOCUS == "#E5B35A"
     assert hasattr(ui.MainWindow, "_verify_local_agent")
     assert hasattr(ui.MainWindow, "_chat_sidebar")
 

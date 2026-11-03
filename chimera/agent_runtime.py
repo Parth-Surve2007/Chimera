@@ -290,8 +290,17 @@ class AgentRuntime:
 
     @staticmethod
     def _decision(value):
-        if not isinstance(value, dict) or value.get("type") not in {"message", "tool_call"}:
-            raise ValueError("agent response must be a message or tool_call object")
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"agent provider returned {type(value).__name__}; expected a JSON message or tool_call object"
+            )
+        decision_type = value.get("type")
+        if decision_type not in {"message", "tool_call"}:
+            fields = ", ".join(sorted(str(key) for key in value)) or "none"
+            raise ValueError(
+                "agent provider returned an unsupported decision envelope "
+                f"(type={decision_type!r}; fields={fields}); expected type='message' or type='tool_call'"
+            )
         if value["type"] == "message":
             if not isinstance(value.get("content"), str) or not value["content"].strip(): raise ValueError("message content must be non-empty")
             return value
