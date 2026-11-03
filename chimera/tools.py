@@ -5,6 +5,8 @@ import hashlib, json, os
 
 MAX_FILE = 2_000_000
 MAX_RESULTS = 200
+MAX_SCAN_FILES = 2000
+MAX_SCAN_BYTES = 50_000_000
 
 @dataclass(frozen=True)
 class OperationResult:
@@ -46,7 +48,10 @@ CAPABILITY = {"capability_id": "builtin.workspace", "version": "1.0.0", "descrip
 
 class WorkspaceTools:
     def __init__(self, workspace: Path, output: Path):
-        self.workspace = Path(workspace).resolve(); self.output = Path(output).resolve(); self.output.mkdir(parents=True, exist_ok=True)
+        self.workspace = Path(workspace).resolve(); self.output = Path(output).resolve()
+        if not self.workspace.is_dir(): raise ValueError("workspace must be an existing directory")
+        if self.output != self.workspace and self.workspace not in self.output.parents:
+            raise ValueError("artifact output directory must remain inside the selected workspace")
     def _path(self, value, root=None):
         if not isinstance(value, str) or not value.strip(): raise ValueError("path must be a non-empty string")
         base = root or self.workspace; target = (base / value).resolve()
@@ -58,28 +63,57 @@ class WorkspaceTools:
         try:
             if operation_id == "list_files":
                 root = self._path(arguments.get("relative", ".")); items = sorted(root.rglob("*") if arguments.get("recursive", True) else root.glob("*"))
-                return OperationResult(operation_id, "completed", {"files": [str(p.relative_to(self.workspace)) for p in items if p.is_file()][:MAX_RESULTS]})
+                return OperationResult(operation_id, "completed", {"files": [str(p.relative_to(self.workspace)) for p in items if p.is_file() and not p.is_symlink()][:MAX_RESULTS]})
             if operation_id == "inspect_file":
-                path = self._path(arguments.get("path")); stat = path.stat(); return OperationResult(operation_id, "completed", {"path": str(path.relative_to(self.workspace)), "bytes": stat.st_size, "sha256": hashlib.sha256(path.read_bytes()[:MAX_FILE]).hexdigest(), "is_text_candidate": path.suffix.casefold() in {".py", ".js", ".ts", ".json", ".md", ".txt", ".toml", ".yaml", ".yml"}})
+                path = self._path(arguments.get("path")); stat = path.stat()
+                if stat.st_size > MAX_FILE: raise ValueError("file exceeds the inspect limit")
+                return OperationResult(operation_id, "completed", {"path": str(path.relative_to(self.workspace)), "bytes": stat.st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "is_text_candidate": path.suffix.casefold() in {".py", ".js", ".ts", ".json", ".md", ".txt", ".toml", ".yaml", ".yml"}})
             if operation_id == "search_files":
                 pattern = arguments.get("pattern");
                 if not isinstance(pattern, str): raise ValueError("pattern must be a string")
-                return OperationResult(operation_id, "completed", {"files": [str(p.relative_to(self.workspace)) for p in self.workspace.rglob(pattern) if p.is_file()][:MAX_RESULTS]})
+                return OperationResult(operation_id, "completed", {"files": [str(p.relative_to(self.workspace)) for p in self.workspace.rglob(pattern) if p.is_file() and not p.is_symlink()][:MAX_RESULTS]})
             if operation_id == "read_text":
                 path = self._path(arguments.get("path")); data = path.read_bytes()
                 if len(data) > MAX_FILE: raise ValueError("file exceeds the read limit")
                 return OperationResult(operation_id, "completed", {"path": str(path.relative_to(self.workspace)), "content": data.decode("utf-8")})
             if operation_id == "search_text":
-                query = arguments.get("query");
-                if not isinstance(query, str) or not query: raise ValueError("query must be non-empty")
+                query = arguments.get("query")
+                if not isinstance(query, str) or not query or len(query) > 1000:
+                    raise ValueError("query must be a non-empty string of at most 1000 characters")
                 hits = []
-                for path in self.workspace.rglob("*"):
-                    if len(hits) >= MAX_RESULTS or not path.is_file() or path.suffix.casefold() not in {".py", ".js", ".ts", ".json", ".md", ".txt", ".toml", ".yaml", ".yml"}: continue
+                scanned_files = 0
+                scanned_bytes = 0
+                text_suffixes = {".py", ".js", ".ts", ".json", ".md", ".txt", ".toml", ".yaml", ".yml"}
+                for candidate in self.workspace.rglob("*"):
+                    if len(hits) >= MAX_RESULTS or scanned_files >= MAX_SCAN_FILES or scanned_bytes >= MAX_SCAN_BYTES:
+                        break
+                    if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.casefold() not in text_suffixes:
+                        continue
                     try:
-                        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                            if query.casefold() in line.casefold(): hits.append({"path": str(path.relative_to(self.workspace)), "line": number, "text": line[:500]})
-                    except (OSError, UnicodeError): continue
-                return OperationResult(operation_id, "completed", {"matches": hits})
+                        path = self._path(str(candidate.relative_to(self.workspace)))
+                        size = path.stat().st_size
+                        if size > MAX_FILE or scanned_bytes + size > MAX_SCAN_BYTES:
+                            continue
+                        scanned_files += 1
+                        scanned_bytes += size
+                        with path.open("r", encoding="utf-8") as stream:
+                            for number, line in enumerate(stream, 1):
+                                if query.casefold() in line.casefold():
+                                    hits.append({
+                                        "path": str(path.relative_to(self.workspace)),
+                                        "line": number,
+                                        "text": line.rstrip()[:500],
+                                    })
+                                    if len(hits) >= MAX_RESULTS:
+                                        break
+                    except (OSError, UnicodeError, ValueError):
+                        continue
+                return OperationResult(operation_id, "completed", {
+                    "matches": hits,
+                    "scanned_files": scanned_files,
+                    "scanned_bytes": scanned_bytes,
+                    "truncated": scanned_files >= MAX_SCAN_FILES or scanned_bytes >= MAX_SCAN_BYTES or len(hits) >= MAX_RESULTS,
+                })
             if operation_id == "create_artifact":
                 if not approved: return OperationResult(operation_id, "awaiting_approval", {}, "explicit write approval is required")
                 name, content = arguments.get("name"), arguments.get("content")
@@ -87,7 +121,9 @@ class WorkspaceTools:
                 if not isinstance(content, str) or len(content) > MAX_FILE: raise ValueError("artifact content exceeds the limit")
                 target = self._path(name, self.output)
                 if target.exists(): raise ValueError("artifact already exists; refusing to overwrite")
-                target.write_text(content, encoding="utf-8"); return OperationResult(operation_id, "completed", {"artifact": str(target), "bytes": len(content.encode("utf-8"))})
+                self.output.mkdir(parents=True, exist_ok=True)
+                with target.open("x", encoding="utf-8") as stream: stream.write(content)
+                return OperationResult(operation_id, "completed", {"artifact": str(target), "bytes": len(content.encode("utf-8"))})
         except (OSError, UnicodeError, ValueError) as exc: return OperationResult(operation_id, "failed", {}, str(exc))
 
 def tool_catalog() -> dict: return {"capability": CAPABILITY, "operations": OPERATIONS}
