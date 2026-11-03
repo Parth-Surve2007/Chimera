@@ -10,8 +10,20 @@ if (-not $SkipTests) { & $Python -m pytest -q; if ($LASTEXITCODE) { exit $LASTEX
 & $Python -c "import PyInstaller" 2>$null
 if ($LASTEXITCODE) { throw "PyInstaller is not installed. Install it with: $Python -m pip install pyinstaller" }
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-& $Python -m PyInstaller --noconfirm --clean --distpath $Stage --workpath (Join-Path $Root ".build\work") (Join-Path $Root "chimera.spec")
-if ($LASTEXITCODE) { throw "PyInstaller failed" }
+$FletArchive = Join-Path $Root ".build\flet-desktop\flet-windows.zip"
+New-Item -ItemType Directory -Force -Path (Split-Path $FletArchive) | Out-Null
+& $Python (Join-Path $Root "scripts\prepare_flet_client.py") --output $FletArchive
+if ($LASTEXITCODE) { throw "Flet desktop client preparation failed" }
+if (-not (Test-Path $FletArchive)) { throw "Flet desktop client archive was not produced" }
+
+$env:CHIMERA_FLET_CLIENT_ARCHIVE = $FletArchive
+try {
+    & $Python -m PyInstaller --noconfirm --clean --distpath $Stage --workpath (Join-Path $Root ".build\work") (Join-Path $Root "chimera.spec")
+    if ($LASTEXITCODE) { throw "PyInstaller failed" }
+}
+finally {
+    Remove-Item Env:CHIMERA_FLET_CLIENT_ARCHIVE -ErrorAction SilentlyContinue
+}
 $Exe = Join-Path $Stage "Chimera\Chimera.exe"
 if (-not (Test-Path $Exe)) { throw "Expected executable missing: $Exe" }
 if ((Get-Item $Exe).Length -le 0) { throw "Packaged executable is empty" }
