@@ -23,9 +23,28 @@ def main():
     # proves the frozen package and all startup imports were resolved.
     if os.environ.get("CHIMERA_PACKAGED_SMOKE") == "1":
         import flet
+        import flet_desktop
         from .local_model import LocalModelProvider, config_from_env
+
         if flet is None:
             raise RuntimeError("Flet is unavailable in the packaged application")
+
+        # Require the embedded archive explicitly before extraction. This keeps
+        # CI honest: the packaged app cannot pass by silently downloading the
+        # native window client from GitHub on first launch.
+        client_archive = (
+            Path(flet_desktop.get_package_bin_dir())
+            / flet_desktop.get_artifact_filename()
+        )
+        if not client_archive.is_file():
+            raise RuntimeError(
+                f"Bundled Flet desktop client archive is missing: {client_archive}"
+            )
+
+        client_dir = Path(flet_desktop.ensure_client_cached())
+        if not (client_dir / "flet" / "flet.exe").is_file():
+            raise RuntimeError("Bundled Flet desktop client did not extract flet.exe")
+
         LocalModelProvider(config_from_env()).stop()
         print("CHIMERA_PACKAGED_SMOKE_OK")
         return 0
