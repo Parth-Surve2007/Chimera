@@ -145,3 +145,13 @@ def test_cancellation_is_persisted_and_prevents_next_decision(tmp_path):
     assert runtime.cancel(sid) is True
     assert store.session(sid)["state"] == "cancelled"
     assert store.events(sid)[-1].event_type == "turn.cancelled"
+
+
+def test_invalid_agent_envelope_reports_received_shape():
+    try:
+        AgentRuntime._decision({"type": "text", "text": "hello"})
+    except ValueError as exc:
+        assert "type='text'" in str(exc)
+        assert "fields=text, type" in str(exc)
+    else:
+        raise AssertionError("unsupported provider envelope was accepted")
