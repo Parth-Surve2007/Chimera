@@ -61,6 +61,15 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 - Synthetic workflow-executor success removed; no automatic approval
 - Model-driven planning, general-purpose replanning and parallel execution remain planned
 
+### Phase 5.3.1 — First-Run Agent Workspace & Local Runtime Verification
+- Persistent chat workspace with conversation history, resumable sessions, and first-run prompt suggestions
+- Inline user/assistant timeline, visible tool-result cards, active-task indicator, stop control, and exact-action approval cards
+- Graphite / greige / bronze UI; chat opens directly by default, with the intro animation opt-in
+- Local-model status distinguishes configured assets from a verified inference path
+- A local-only self-test exercises the active conversation model's structured AgentRuntime decision protocol; hosted profiles are rejected by this check
+- Linux and Windows CI matrix for the automated test suite
+- Desktop control remains deliberately bounded to operator-authorized processes and supported UI Automation patterns; unsupported interactions require manual operator input
+
 ## Near-Term (Phase 5.4)
 
 **Theme: Workspace Agent Maturity**
