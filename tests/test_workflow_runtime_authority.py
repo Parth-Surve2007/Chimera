@@ -42,7 +42,7 @@ def test_workflow_runs_real_workspace_and_rea_steps_then_pauses_for_write_approv
         env["session_id"],
         "Analyze the executable in this workspace, identify its format, architecture, sections, imports, exports and interesting strings, then generate a report.",
     )
-    assert result["status"] == "awaiting_approval", result.get("step_results", result)
+    assert result["status"] == "awaiting_approval", result.get("step_summary", result)
     plan = env["orchestrator"].plan_store.get_plan(result["plan_id"])
     completed = [step for step in plan.steps if step.execution_state.value == "completed"]
     assert {"list_files", "detect_format", "extract_strings", "analyze_artifact"} <= {step.tool for step in completed}
@@ -64,7 +64,7 @@ def test_rejecting_workflow_write_prevents_artifact_creation(workflow_env):
     result = env["orchestrator"].execute_objective(
         env["session_id"], "Analyze the executable and produce a technical report."
     )
-    assert result["status"] == "awaiting_approval", result.get("step_results", result)
+    assert result["status"] == "awaiting_approval", result.get("step_summary", result)
     assert env["store"].pending_tool(env["session_id"])["tool"] == "workspace.create_artifact"
     rejected = env["orchestrator"].approve_pending(env["session_id"], False)
     assert rejected["status"] == "blocked"
