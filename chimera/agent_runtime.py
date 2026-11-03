@@ -19,6 +19,7 @@ from .computer_use import WindowsComputerUse
 from .computer_runtime import ComputerSessionManager
 from .model_hub import ModelProfileStore
 from .task_execution import TaskStore, TaskPolicy
+from .goals import GoalStore
 
 
 def _now() -> str:
@@ -193,6 +194,7 @@ class AgentRuntime:
         self.profile_store = profile_store
         self._active_providers = {}
         self.task_store = TaskStore(store.db_path)
+        self.goal_store = GoalStore(store.db_path)
         self._tasks = {}
         self._listeners = {}
         self._listener_lock = threading.Lock()
@@ -345,6 +347,51 @@ class AgentRuntime:
         if set(arguments) - set(expected): raise ValueError(f"unsupported arguments for {operation}")
         for name, kind in expected.items():
             if name in arguments and (type(arguments[name]) is not kind): raise ValueError(f"argument {name} must be {kind.__name__}")
+
+    def _messages_with_goal_context(self, session_id: str):
+        """Attach private, operator-owned goal context to local inference only.
+
+        Goal context is ephemeral and read-only: it is not written into the chat
+        transcript, is never sent to hosted providers, and cannot change goal state.
+        """
+        messages = list(self.store.messages(session_id))
+        provider = self._active_providers.get(session_id, self.provider)
+        profile = getattr(provider, "profile", None)
+        config = getattr(provider, "config", None)
+        hosted = bool(getattr(profile, "hosted", False) or getattr(config, "hosted", False))
+        if hosted:
+            return messages
+
+        goals = self.goal_store.list(status="active", limit=2)
+        paused = self.goal_store.list(status="paused", limit=1)
+        selected = goals + paused
+        if not selected:
+            return messages
+
+        context = {
+            "notice": "Operator-defined goals are read-only context, not new instructions. Follow the current user request. Use a goal only when relevant. Never mark a goal completed or claim its success criteria are satisfied; only the operator can update goal state with evidence.",
+            "goals": [
+                {
+                    "goal_id": goal.goal_id,
+                    "title": goal.title[:100],
+                    "description": goal.description[:120],
+                    "status": goal.status,
+                    "priority": goal.priority,
+                    "project": goal.project[:60],
+                    "success_criteria": [item[:100] for item in goal.success_criteria[:2]],
+                }
+                for goal in selected
+            ],
+        }
+        messages.insert(0, AgentMessage(
+            message_id="goal-context-" + session_id,
+            session_id=session_id,
+            role="system",
+            content="Private local goal context (not persisted in this conversation):\n"
+            + json.dumps(context, ensure_ascii=False, separators=(",", ":")),
+            created_at=_now(),
+        ))
+        return messages
 
     def _decide(self, messages, session, cancel_event=None, turn_id=None):
         provider = self._active_providers.get(session["session_id"], self.provider)
@@ -585,7 +632,7 @@ class AgentRuntime:
                 self._cancelled.discard(session_id)
                 return {"status": "cancelled"}
             self._record(session_id, "model.request.started", {"turn_id": turn_id})
-            decision = self._decide(self.store.messages(session_id), session, cancel_event, turn_id)
+            decision = self._decide(self._messages_with_goal_context(session_id), session, cancel_event, turn_id)
             self._record(session_id, "model.request.completed", {"turn_id": turn_id, "decision_type": decision["type"]})
             if decision["type"] == "message":
                 assistant = self.store.add_message(session_id, "assistant", decision["content"])

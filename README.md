@@ -28,6 +28,7 @@ Chimera does not claim to be a completed AGI or frontier model equivalent. It is
 | **Multi-provider inference** | ✅ Implemented — 8 provider adapters (OpenAI, Anthropic, Gemini, Meta, llama.cpp, Custom) |
 | **Local GGUF inference** | ✅ Implemented — llama.cpp integration with explicit model configuration |
 | **AgentRuntime & session persistence** | ✅ Implemented — SQLite-backed sessions, messages, and events |
+| **Persistent goals & ambitions** | 🟡 Initial implementation — local SQLite ledger, operator-controlled lifecycle, success criteria, priorities, evidence references and local-only reasoning context |
 | **Workspace tools (read/write)** | ✅ Implemented — Governed file operations with approval gates |
 | **Computer use (Windows)** | 🟡 Partial — operator-authorized process sessions, fresh UIA references and exact semantic patterns; global keyboard/mouse injection is disabled |
 | **Application SDK** | ✅ Implemented — Universal connector framework with risk levels |
@@ -162,6 +163,23 @@ The Application SDK provides a universal framework for connecting Chimera to ext
 - Implement `BaseApplicationConnector` with `discover()` and `execute_action()`
 - Register via `ApplicationRegistry.register(MyConnector())`
 - Actions exposed to agents through normalized tool catalog
+
+---
+
+## Goals & Ambitions
+
+Chimera separates long-term operator goals from session-scoped AgentRuntime tasks.
+
+- Goals are stored in the same local SQLite database as agent sessions.
+- Each goal has a title, description, project, priority, success criteria, tags and an explicit lifecycle state.
+- Active, paused, completed and archived states are operator-controlled.
+- Completion requires at least one evidence reference; an assistant response or task status never completes a goal automatically.
+- Every creation, edit and state transition is recorded in the goal event history.
+- Bounded active/paused goal summaries are injected into local-model reasoning as read-only context. Persistent goals are not sent to hosted providers by default.
+
+Open **GOALS** from the desktop navigation to capture ambitions, review priorities, pause/resume work, record completion evidence or reopen a goal with a reason.
+
+The ledger records evidence references supplied by the operator. It does not independently prove that a referenced file, URL or real-world result is valid.
 
 ---
 
@@ -469,7 +487,7 @@ Chimera: Lists visible applications (read-only). The operator explicitly authori
 **Architecture**
 - Multi-step planning is foundational, not yet dependency-graph complete
 - Parallel task execution is not implemented
-- TaskStore records session-scoped tasks and events; a separate persistent cross-session goals/ambitions ledger is not yet implemented
+- TaskStore records session-scoped tasks and events; GoalStore separately persists operator-owned goals and evidence in the same local SQLite database
 - Skill library versioning, isolated regression testing and governed replay are planned
 
 **Application Ecosystem**
