@@ -12,6 +12,7 @@ from .local_model import config_from_env, check_status, save_persisted_config, L
 from .agent_loop import execute_objective
 from .tools import CAPABILITY
 from .agent_runtime import AgentRuntime, AgentSessionStore
+from .goals import GoalStore
 from .workflow_integration import AgenticWorkflowOrchestrator
 try: import flet as ft
 except ImportError: ft = None
@@ -101,6 +102,7 @@ class MainWindow:
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
         self.task_busy = False; self.model_verifying = False; self.local_verification = None; self.last_turn_notice = None; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""; self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.task_field = ft.TextField(multiline=True, min_lines=2, max_lines=5, hint_text="Message Chimera…  Describe the outcome you want...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=6, expand=True); self.workspace_path_field = ft.TextField(label="WORKSPACE DIRECTORY", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, value="", expand=True)
         self.agent_store = AgentSessionStore(registry.data_dir / "chimera.db")
+        self.goal_store = GoalStore(registry.data_dir / "chimera.db")
         self.profile_store = ModelProfileStore(registry.data_dir / "model_profiles.json")
         self.local_provider = LocalModelProvider(config_from_env())
         self.agent_runtime = AgentRuntime(self.agent_store, self.local_provider, self.profile_store)
@@ -158,7 +160,7 @@ class MainWindow:
         buttons.append(ft.TextButton("NEW CONVERSATION", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=FOCUS, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         for item in self.agent_store.list_sessions()[:8]:
             buttons.append(ft.TextButton(f"↳ {item['title'][:24]}", on_click=lambda e, sid=item["session_id"]: self._resume_agent_session(sid), style=ft.ButtonStyle(color=SECONDARY, padding=ft.Padding.symmetric(horizontal=18, vertical=8))))
-        for label, handler in [("OVERVIEW", self._show_overview), ("MODEL HUB", self._show_model_hub), ("APPLICATIONS", self._show_computer_apps), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
+        for label, handler in [("OVERVIEW", self._show_overview), ("MODEL HUB", self._show_model_hub), ("APPLICATIONS", self._show_computer_apps), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("GOALS", self._show_goals), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
             buttons.append(ft.TextButton(label, on_click=lambda e, h=handler: self._navigate(h), style=ft.ButtonStyle(color=TEXT, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         return ft.Container(ft.Column([ft.Text("NAVIGATION", color=MUTED, size=10), *buttons], spacing=3), width=210, right=18, top=10, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), padding=ft.Padding.all(14), visible=False, shadow=ft.BoxShadow(blur_radius=18, color="#000000"))
     def _toggle_drawer(self, e=None): self.drawer.visible = not self.drawer.visible; self.page.update()
@@ -424,6 +426,237 @@ class MainWindow:
             status = _upper(item.get("status")); artifact = item.get("artifact") or "none"; error = item.get("error") or "none"
             cards.append(ft.Container(ft.Column([ft.Row([ft.Text(str(item.get("task_id", "execution"))[:12], color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(status, color=FOCUS if status == "COMPLETED" else SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(f"{item.get('objective', 'Unknown objective')}\nARTIFACT  {artifact}\nERROR  {error}", color=SECONDARY, size=11)]), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=7, padding=ft.Padding.all(16), width=780))
         self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text("Persisted workflow events. This view never fabricates activity.", color=MUTED, size=11), *cards])
+
+    def _show_goals(self, e=None):
+        """Render the operator-owned goal ledger, separate from individual task runs."""
+        try:
+            stats = self.goal_store.stats()
+            goals = self.goal_store.list(limit=200)
+        except Exception as exc:
+            return self._set([
+                ft.Text("GOALS & AMBITIONS", size=22, color=TEXT),
+                ft.Text(f"Goal history unavailable: {exc}", color=SECONDARY),
+            ])
+
+        self.goal_title_field = ft.TextField(
+            label="GOAL / DESIRED OUTCOME", color=TEXT, border_color=BORDER,
+            focused_border_color=FOCUS, hint_text="What do you ultimately want to achieve?",
+        )
+        self.goal_description_field = ft.TextField(
+            label="DESCRIPTION / CONTEXT", color=TEXT, border_color=BORDER,
+            focused_border_color=FOCUS, multiline=True, min_lines=2, max_lines=4,
+            hint_text="Why does this matter? What constraints should Chimera remember?",
+        )
+        self.goal_criteria_field = ft.TextField(
+            label="SUCCESS CRITERIA (ONE PER LINE)", color=TEXT, border_color=BORDER,
+            focused_border_color=FOCUS, multiline=True, min_lines=2, max_lines=4,
+            hint_text="What evidence would demonstrate progress or completion?",
+        )
+        self.goal_project_field = ft.TextField(
+            label="PROJECT / AREA (OPTIONAL)", color=TEXT, border_color=BORDER,
+            focused_border_color=FOCUS, hint_text="e.g. Chimera",
+        )
+        self.goal_priority_field = ft.TextField(
+            label="PRIORITY", value="normal", color=TEXT, border_color=BORDER,
+            focused_border_color=FOCUS, hint_text="low / normal / high / critical",
+        )
+
+        summary = ft.Row([
+            self._goal_stat("ACTIVE", stats.get("active", 0)),
+            self._goal_stat("PAUSED", stats.get("paused", 0)),
+            self._goal_stat("COMPLETED", stats.get("completed", 0)),
+            self._goal_stat("ARCHIVED", stats.get("archived", 0)),
+        ], wrap=True, spacing=10)
+
+        form = ft.Container(
+            ft.Column([
+                ft.Text("CAPTURE AN AMBITION", color=ACCENT, size=10, weight=ft.FontWeight.BOLD),
+                self.goal_title_field,
+                self.goal_description_field,
+                self.goal_criteria_field,
+                ft.Row([self.goal_project_field, self.goal_priority_field], wrap=True),
+                ft.Row([
+                    self._button("SAVE GOAL", self._create_goal),
+                    ft.Text("Goals remain active until the operator changes their state.", color=MUTED, size=10),
+                ], wrap=True, spacing=12),
+            ], spacing=10),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9,
+            padding=ft.Padding.all(18), width=820,
+        )
+
+        cards = [self._goal_card(goal) for goal in goals]
+        if not cards:
+            cards = [ft.Container(
+                ft.Text("No goals recorded yet. Add an outcome above; Chimera will keep it separate from chat sessions and task runs.", color=MUTED),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8,
+                padding=ft.Padding.all(18), width=820,
+            )]
+
+        self._set([
+            ft.Row([
+                ft.Column([
+                    ft.Text("GOALS & AMBITIONS", size=22, color=TEXT),
+                    ft.Text("Long-term outcomes, project milestones and completion evidence.", color=MUTED, size=11),
+                ], spacing=4),
+                ft.Text(f"{stats.get('total', 0)} RECORDED", size=10, color=ACCENT),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            summary,
+            form,
+            ft.Text("YOUR GOALS", color=SECONDARY, size=11, weight=ft.FontWeight.BOLD),
+            *cards,
+        ])
+
+    def _goal_stat(self, label, value):
+        return ft.Container(
+            ft.Column([
+                ft.Text(str(value), size=20, color=TEXT, weight=ft.FontWeight.BOLD),
+                ft.Text(label, size=9, color=MUTED),
+            ], spacing=2),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8,
+            padding=ft.Padding.symmetric(horizontal=18, vertical=10),
+        )
+
+    def _create_goal(self, e=None):
+        try:
+            criteria = [
+                item.strip() for item in (self.goal_criteria_field.value or "").splitlines()
+                if item.strip()
+            ]
+            tags = []
+            goal = self.goal_store.create(
+                self.goal_title_field.value or "",
+                self.goal_description_field.value or "",
+                priority=(self.goal_priority_field.value or "normal").strip().lower(),
+                project=self.goal_project_field.value or "",
+                success_criteria=criteria,
+                tags=tags,
+            )
+            self._toast(f"Goal saved: {goal.title}")
+            self._show_goals()
+        except Exception as exc:
+            self._toast(f"Goal could not be saved: {exc}")
+
+    def _goal_card(self, goal):
+        state_color = {
+            "active": "#8EAD98",
+            "paused": "#C49A6C",
+            "completed": "#8EAD98",
+            "archived": MUTED,
+        }.get(goal.status, SECONDARY)
+        detail = goal.description or "No additional context recorded."
+        if goal.project:
+            detail += f"\nPROJECT  {goal.project}"
+        if goal.success_criteria:
+            detail += "\nSUCCESS CRITERIA\n" + "\n".join(f"• {item}" for item in goal.success_criteria)
+        if goal.evidence:
+            detail += "\nCOMPLETION EVIDENCE\n" + "\n".join(f"• {item}" for item in goal.evidence)
+        if goal.completion_note:
+            detail += f"\nCOMPLETION NOTE  {goal.completion_note}"
+
+        actions = []
+        if goal.status == "active":
+            actions.extend([
+                ft.TextButton("PAUSE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "paused"), style=ft.ButtonStyle(color=SECONDARY)),
+                ft.TextButton("COMPLETE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "completed"), style=ft.ButtonStyle(color=ACCENT)),
+                ft.TextButton("ARCHIVE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "archived"), style=ft.ButtonStyle(color=MUTED)),
+            ])
+        elif goal.status == "paused":
+            actions.extend([
+                ft.TextButton("RESUME", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "active"), style=ft.ButtonStyle(color=SECONDARY)),
+                ft.TextButton("COMPLETE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "completed"), style=ft.ButtonStyle(color=ACCENT)),
+                ft.TextButton("ARCHIVE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "archived"), style=ft.ButtonStyle(color=MUTED)),
+            ])
+        elif goal.status == "completed":
+            actions.extend([
+                ft.TextButton("REOPEN", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "active"), style=ft.ButtonStyle(color=SECONDARY)),
+                ft.TextButton("ARCHIVE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "archived"), style=ft.ButtonStyle(color=MUTED)),
+            ])
+        else:
+            actions.append(ft.TextButton(
+                "RESTORE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "active"),
+                style=ft.ButtonStyle(color=SECONDARY),
+            ))
+
+        return ft.Container(
+            ft.Column([
+                ft.Row([
+                    ft.Column([
+                        ft.Text(goal.title, color=TEXT, size=14, weight=ft.FontWeight.BOLD),
+                        ft.Text(f"{goal.priority.upper()} PRIORITY  ·  {goal.status.upper()}", color=state_color, size=9),
+                    ], spacing=4, expand=True),
+                    ft.Text(goal.goal_id[:10], color=MUTED, size=9),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ft.Text(detail, color=SECONDARY, size=11),
+                ft.Row(actions, wrap=True, spacing=4),
+                ft.Text(f"UPDATED  {goal.updated_at[:19].replace('T', ' ')} UTC", color=MUTED, size=8),
+            ], spacing=9),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8,
+            padding=ft.Padding.all(16), width=820,
+        )
+
+    def _goal_action(self, goal_id, status):
+        goal = self.goal_store.get(goal_id)
+        if goal is None:
+            self._toast("Goal no longer exists.")
+            self._show_goals()
+            return
+
+        needs_evidence = status == "completed"
+        needs_reason = status == "active" and goal.status in {"completed", "archived"}
+        if needs_evidence or needs_reason:
+            evidence_field = ft.TextField(
+                label="COMPLETION EVIDENCE (ONE REFERENCE PER LINE)" if needs_evidence else "WHY IS THIS GOAL BEING REOPENED?",
+                multiline=True, min_lines=2, max_lines=5, color=TEXT,
+                border_color=BORDER, focused_border_color=FOCUS,
+                hint_text="Artifact paths, run IDs, test results or URLs" if needs_evidence else "Describe what changed or why the goal is active again.",
+            )
+            note_field = ft.TextField(
+                label="COMPLETION NOTE (OPTIONAL)" if needs_evidence else "ADDITIONAL CONTEXT (OPTIONAL)",
+                multiline=True, min_lines=1, max_lines=3, color=TEXT,
+                border_color=BORDER, focused_border_color=FOCUS,
+            )
+
+            def confirm(_=None):
+                try:
+                    evidence = [
+                        line.strip() for line in (evidence_field.value or "").splitlines()
+                        if line.strip()
+                    ] if needs_evidence else None
+                    reason = (note_field.value or "").strip() if needs_evidence else (evidence_field.value or "").strip()
+                    if needs_evidence and not reason:
+                        reason = None
+                    self.goal_store.transition(
+                        goal_id, status, reason=reason, evidence=evidence,
+                    )
+                    dialog.open = False
+                    self.page.update()
+                    self._toast("Goal state and evidence saved.")
+                    self._show_goals()
+                except Exception as exc:
+                    self._toast(f"Goal update failed: {exc}")
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("RECORD GOAL COMPLETION" if needs_evidence else "REOPEN GOAL"),
+                content=ft.Column([evidence_field, note_field], tight=True, spacing=10),
+                actions=[
+                    ft.TextButton("CANCEL", on_click=lambda e: (setattr(dialog, "open", False), self.page.update())),
+                    ft.TextButton("CONFIRM", on_click=confirm, style=ft.ButtonStyle(color=ACCENT)),
+                ],
+            )
+            self.page.show_dialog(dialog)
+            return
+
+        try:
+            self.goal_store.transition(
+                goal_id, status,
+                reason=f"Operator changed goal state from {goal.status} to {status}.",
+            )
+            self._toast(f"Goal moved to {status}.")
+            self._show_goals()
+        except Exception as exc:
+            self._toast(f"Goal update failed: {exc}")
+
     def _nav_item(self, glyph, label, handler, active=False):
         return ft.Container(
             ft.Row([
