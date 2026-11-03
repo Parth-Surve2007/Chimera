@@ -2,7 +2,7 @@ import json
 import pytest
 def test_flet_ui_uses_warm_design_tokens_and_persistent_service():
     from chimera import ui
-    assert ui.BG == "#0A0D0B" and ui.ACCENT == "#C49A6C" and not any("blue" in value.lower() for value in (ui.BG, ui.SURFACE, ui.ACCENT))
+    assert ui.BG == "#171B16" and ui.ACCENT == "#E98564" and ui.FOCUS == "#D7F16B" and not any("blue" in value.lower() for value in (ui.BG, ui.SURFACE, ui.ACCENT, ui.FOCUS))
 
 def test_workspace_path_validation_accepts_real_directory_and_rejects_invalid(tmp_path):
     from chimera.ui import validate_workspace_path
