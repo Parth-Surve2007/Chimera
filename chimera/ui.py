@@ -137,7 +137,7 @@ class MainWindow:
         buttons.append(ft.TextButton("NEW CONVERSATION", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=FOCUS, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         for item in self.agent_store.list_sessions()[:8]:
             buttons.append(ft.TextButton(f"↳ {item['title'][:24]}", on_click=lambda e, sid=item["session_id"]: self._resume_agent_session(sid), style=ft.ButtonStyle(color=SECONDARY, padding=ft.Padding.symmetric(horizontal=18, vertical=8))))
-        for label, handler in [("OVERVIEW", self._show_overview), ("MODEL HUB", self._show_model_hub), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
+        for label, handler in [("OVERVIEW", self._show_overview), ("MODEL HUB", self._show_model_hub), ("APPLICATIONS", self._show_computer_apps), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
             buttons.append(ft.TextButton(label, on_click=lambda e, h=handler: self._navigate(h), style=ft.ButtonStyle(color=TEXT, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         return ft.Container(ft.Column([ft.Text("NAVIGATION", color=MUTED, size=10), *buttons], spacing=3), width=210, right=18, top=10, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), padding=ft.Padding.all(14), visible=False, shadow=ft.BoxShadow(blur_radius=18, color="#000000"))
     def _toggle_drawer(self, e=None): self.drawer.visible = not self.drawer.visible; self.page.update()
@@ -281,6 +281,76 @@ class MainWindow:
     def _action(self, action, refresh=False):
         try: action(); self._toast("Completed through ReviewService."); self._show_capabilities() if refresh else None
         except Exception as exc: self._toast(f"Action failed: {exc}")
+    def _show_computer_apps(self, e=None):
+        """Operator-controlled process authorization for the active conversation."""
+        try:
+            applications = self.agent_runtime.computer.backend.list_applications()
+        except Exception as exc:
+            return self._set([
+                ft.Text("APPLICATION AUTHORIZATION", size=22, color=TEXT),
+                ft.Text(f"Application inventory unavailable: {exc}", color=SECONDARY),
+            ])
+
+        cards = []
+        for application in applications[:80]:
+            pid = application.get("pid")
+            executable = application.get("executable")
+            titles = ", ".join(
+                window.get("title") or window.get("class_name") or "Untitled window"
+                for window in application.get("windows", [])[:3]
+            )
+            authorized = any(
+                identity.owner_session_id == self.agent_session_id
+                and identity.pid == pid
+                and (identity.executable or "").casefold() == (executable or "").casefold()
+                and self.agent_runtime.computer._identity_is_current(identity)
+                for identity in self.agent_runtime.computer.sessions.values()
+            )
+            action = (
+                ft.Text("AUTHORIZED FOR THIS CONVERSATION", color=FOCUS, size=10)
+                if authorized
+                else self._button(
+                    "AUTHORIZE THIS APPLICATION",
+                    lambda e, process_id=pid, image=executable: self._authorize_computer_application(process_id, image),
+                )
+            )
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Text(str(executable or "Executable path unavailable"), color=TEXT, weight=ft.FontWeight.BOLD, size=12),
+                    ft.Text(f"PID {pid} · {titles or 'No visible title'}", color=SECONDARY, size=10),
+                    action,
+                ], spacing=8),
+                bgcolor=SURFACE,
+                border=ft.Border.all(1, BORDER),
+                border_radius=7,
+                padding=ft.Padding.all(14),
+                width=760,
+            ))
+
+        self._set([
+            ft.Text("APPLICATION AUTHORIZATION", size=22, color=TEXT),
+            ft.Text(
+                "Choose each application explicitly before Chimera can inspect its controls. "
+                "Authorization is scoped to this conversation. Global keyboard input, blind focus changes "
+                "and remote window closing are disabled.",
+                color=SECONDARY,
+                size=11,
+            ),
+            *(cards or [ft.Text("No visible applications were found.", color=MUTED)]),
+        ])
+
+    def _authorize_computer_application(self, pid, executable):
+        try:
+            identity = self.agent_runtime.computer.create(
+                pid,
+                executable,
+                owner_session_id=self.agent_session_id,
+            )
+            self._toast(f"Authorized {Path(identity.executable).name} for this conversation.")
+            self._show_computer_apps()
+        except Exception as exc:
+            self._toast(f"Application authorization failed: {exc}")
+
     def _show_runs(self, e=None): self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
     def _show_settings(self, e=None):
         c = config_from_env(); s = check_status(c); source = config_source(); policy = load_policy(self.registry.data_dir); server = self.local_provider.server.status() if self.local_provider.server else {"state": "unavailable"}
