@@ -29,7 +29,7 @@ Chimera does not claim to be a completed AGI or frontier model equivalent. It is
 | **Local GGUF inference** | ✅ Implemented — llama.cpp integration with explicit model configuration |
 | **AgentRuntime & session persistence** | ✅ Implemented — SQLite-backed sessions, messages, and events |
 | **Workspace tools (read/write)** | ✅ Implemented — Governed file operations with approval gates |
-| **Computer use (Windows)** | 🟡 Partial — UI automation via pywinauto, governed approval required |
+| **Computer use (Windows)** | 🟡 Partial — operator-authorized process sessions, fresh UIA references and exact semantic patterns; global keyboard/mouse injection is disabled |
 | **Application SDK** | ✅ Implemented — Universal connector framework with risk levels |
 | **REA: Reverse Engineer Anything** | ✅ Implemented — Artifact detection, static analysis, Ghidra integration |
 | **Ghidra integration** | 🟡 Partial — Installation discovery and bounded static parsing; automated headless analysis actions remain unavailable |
@@ -413,7 +413,7 @@ Chimera: [Invokes REA] Extracted 24 strings (min length 4): "version", "copyrigh
 
 ```
 User: Open Notepad and type "Hello"
-Chimera: [Approval required] Open Notepad? [User approves] [Invokes pywinauto] Notepad opened. Typing...
+Chimera: Lists visible applications (read-only). The operator selects and authorizes one process in APPLICATIONS. Chimera inspects its UI Automation tree. Protected Invoke/Value/Toggle/Selection/Expand actions require approval and target the exact observed control. If the required semantic pattern is unavailable, Chimera stops for manual operator input.
 ```
 
 ---
@@ -455,7 +455,8 @@ Chimera: [Approval required] Open Notepad? [User approves] [Invokes pywinauto] N
 - Only Ghidra and REA connectors are implemented; broader ecosystem is planned
 
 **Computer Use**
-- Windows pywinauto automation is partial
+- Windows UI Automation is partial and requires explicit per-conversation application authorization
+- Only exact UIA semantic patterns are supported for mutations; global keyboard/mouse injection, foreground stealing and remote window closing are disabled
 - No Linux/macOS computer use implementation
 - No global input injection (intentional security choice)
 
