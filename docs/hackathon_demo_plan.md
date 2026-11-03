@@ -49,6 +49,7 @@ Optional Meta perception/generation APIs should be added only after their live r
 - **Other applications:** Ghidra and REA connectors exist. Word, Excel, PowerPoint, Paint, PCB/CAD and broad browser/desktop automation are future connectors, not current completed capabilities.
 - **Computer use:** Windows UI Automation is partial and process-authorized. Global keyboard/mouse injection is intentionally disabled. Linux/macOS computer control is not implemented.
 - **Learning:** Chimera captures traces, redacts secrets and can propose reusable skills/workflows for operator review. Automatic skill replay, versioned promotion, regression testing and model self-training are not current capabilities.
+- **Persistent goals:** TaskStore records session-scoped tasks and events. A separate operator-owned cross-session goals/ambitions ledger with active, paused and completed states is a roadmap item, not a current feature.
 - **Local models:** GGUF inference is supported through llama.cpp. The model file must be supplied/configured by the operator; Chimera does not silently download models or fall back to hosted inference.
 - **Meta:** CI protocol coverage is not proof of a live API request. Verify the live credential path on the target machine before describing Meta as live-tested.
 
