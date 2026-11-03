@@ -139,13 +139,15 @@ The Application SDK provides a universal framework for connecting Chimera to ext
 - `ApplicationRegistry` — Central discovery and execution dispatcher
 
 **Current Connectors**
-- **GhidraConnector** — Headless binary analysis, PE/ELF string extraction, function enumeration
+- **GhidraConnector** — Ghidra discovery, bounded binary inspection, PE/ELF string extraction and function enumeration
 - **ReaConnector** — REA reverse-engineering intelligence through Application SDK
+- **BlenderConnector** — Local Blender discovery and approval-gated creation of primitive-based .blend scenes plus PNG render previews from bounded JSON recipes
 
 **Governance**
 - Plan Mode blocks Level 2+ actions (read-only execution)
 - Build Mode requires approval for Level 3+ actions
-- Read-only permissions (`ghidra.read`, `rea.read`) do not require approval in Build Mode
+- Read-only permissions (`ghidra.read`, `rea.read`, `blender.read`) do not require approval in Build Mode
+- Blender project creation uses `blender.project.write` and requires exact operator approval before files are written
 - All actions are logged with full provenance
 
 **Extensibility**
@@ -464,7 +466,8 @@ Chimera: Lists visible applications (read-only). The operator explicitly authori
 **Application Ecosystem**
 - Ghidra connector requires native Ghidra and JDK 17+ for headless execution
 - radare2 and Rizin backends are discovered but not auto-executed (governed mode)
-- Only Ghidra and REA connectors are implemented; broader ecosystem is planned
+- Ghidra, REA and an initial bounded Blender connector are implemented; Office, PCB/CAD, browser and broad desktop workflows are not yet implemented
+- The Blender connector creates primitive-based scenes and PNG previews; it does not yet provide arbitrary mesh modelling, materials/node editing, animation, or full Blender UI control
 
 **Computer Use**
 - Windows UI Automation is partial and requires explicit per-conversation application authorization
