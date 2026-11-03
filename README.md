@@ -108,9 +108,17 @@ Chimera's provider registry supports 8 adapter types through a unified interface
 - Anthropic Messages API
 - Gemini Content API
 - Gemini Interactions API
-- Meta Model API (requires credentials)
+- Meta Model API (Muse Spark; requires credentials)
 - llama.cpp (local GGUF models)
 - Custom adapters via SDK
+
+**Meta Model API Tool Integration**
+- Muse Spark is an optional, explicitly selected hosted provider; it is not a local model and is never a silent fallback.
+- Tool schemas include eligible workspace, computer and discovered application-connector actions.
+- Meta returns a proposed tool call; AgentRuntime still validates the registered action, risk, mode, permission and approval before execution.
+- Tool-call arguments and their actual results are preserved as a valid provider conversation history for subsequent reasoning turns.
+- Usage accounting and the Standard data-use header are applied by the Meta provider.
+- CI tests use a local mock API server to verify the protocol and AgentRuntime dispatch. A live Meta request still requires a valid API credential and network access.
 
 **Features**
 - SSRF protection: DNS rebinding protection, 0.0.0.0 rejection, IPv4-mapped IPv6 blocking
