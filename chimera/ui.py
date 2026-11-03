@@ -17,8 +17,8 @@ from .workflow_integration import AgenticWorkflowOrchestrator
 try: import flet as ft
 except ImportError: ft = None
 
-# Oxide / Fieldwork visual system: warm graphite, parchment, signal-lime and kiln coral.
-# Deliberately avoids the default blue-violet "AI dashboard" palette.
+# Xerxes-inspired Dark Emperor system: true-black canvas, graphite surfaces,
+# warm metal focus states and restrained ember feedback.
 BG, SURFACE, ELEVATED, BORDER = "#000000", "#0B0B0B", "#141414", "#2B2B2B"
 TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F3F3F3", "#C5C5C5", "#858585", "#4C4C4C", "#E5B35A"
 ACCENT = "#F17857"
@@ -110,7 +110,7 @@ class MainWindow:
         self.max_tokens_field = ft.TextField(label="MAX TOKENS", color=TEXT, border_color=BORDER, value=str(initial_config.max_tokens), width=120)
         self.threads_field = ft.TextField(label="CPU THREADS", color=TEXT, border_color=BORDER, value=str(initial_config.threads), width=120)
         self.gpu_layers_field = ft.TextField(label="GPU LAYERS", color=TEXT, border_color=BORDER, value=str(initial_config.gpu_layers), width=120)
-        page.title = "Chimera"; page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
+        page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
         self.task_busy = False; self.model_verifying = False; self.local_verification = None; self.model_boot_status = "checking"; self.last_turn_notice = None; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""
