@@ -127,6 +127,8 @@ class InteractionStrategyEngine:
             item for item in self.inventory()
             if item.available and operation in item.operations and application_type in item.application_types
         ]
+        if not (evidence.get("fresh_window") and evidence.get("geometry")):
+            available = [item for item in available if item.name != "grounded_input"]
         if not available:
             return StrategyDecision(None, "no available backend has the requested operation and evidence", (), tuple(self.inventory()))
         available.sort(key=lambda item: {"uia": 0 if evidence.get("semantic_control") else 1, "browser": 0, "win32": 2}.get(item.name, 9))
