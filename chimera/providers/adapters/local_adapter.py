@@ -82,6 +82,13 @@ class LocalModelAdapter(ModelProvider):
             provider_id=self.config.provider_id,
         )
 
+    def verify_agent_protocol(self) -> dict[str, Any]:
+        """Verify the active local GGUF using the same structured agent protocol as chat."""
+        verifier = getattr(self.local_provider, "verify_agent_protocol", None)
+        if not callable(verifier):
+            raise RuntimeError("the selected local provider does not expose the Chimera agent protocol self-test")
+        return verifier()
+
     def decide(
         self,
         messages: list[Any],
