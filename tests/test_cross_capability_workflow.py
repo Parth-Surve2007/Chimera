@@ -5,6 +5,7 @@ workspace-to-REA execution, result verification, failure recovery, and
 governed learning integration.
 """
 import json
+import struct
 import tempfile
 import uuid
 from pathlib import Path
@@ -510,9 +511,16 @@ def test_synthetic_binary_analysis_scenario(test_env):
     assert exe_path.exists()
     assert exe_path.stat().st_size > 0
 
-    # Verify it's a valid PE (has MZ header)
+    # Verify DOS/PE linkage and section bounds, not just the MZ magic.
     content = exe_path.read_bytes()
     assert content[:2] == b"MZ"
+    pe_offset = struct.unpack_from("<I", content, 0x3C)[0]
+    assert content[pe_offset:pe_offset + 4] == b"PE\x00\x00"
+    section_table = pe_offset + 24 + struct.unpack_from("<H", content, pe_offset + 20)[0]
+    for index in range(struct.unpack_from("<H", content, pe_offset + 6)[0]):
+        section = section_table + index * 40
+        raw_size, raw_offset = struct.unpack_from("<II", content, section + 16)
+        assert raw_offset + raw_size <= len(content)
 
     # Create orchestrator
     orchestrator = AgenticWorkflowOrchestrator(
@@ -534,7 +542,8 @@ def test_synthetic_binary_analysis_scenario(test_env):
         mode="plan",
     )
 
-    assert result["status"] in ("completed", "failed")
-    if result["status"] == "completed":
-        assert "plan_id" in result
-        assert result["steps_executed"] > 0
+    # Plan Mode is read-only: the static-analysis steps complete, then report creation is blocked.
+    assert result["status"] == "blocked"
+    assert "plan_id" in result
+    assert result["steps_executed"] >= 3
+    assert test_env["store"].pending_tool(session_id) is None

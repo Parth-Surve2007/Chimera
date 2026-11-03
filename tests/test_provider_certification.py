@@ -205,7 +205,11 @@ def test_compatibility_lab_certification_tiers(tmp_path, failure_server):
 
 
 def test_genuine_local_model_acceptance_sanity():
-    """Mission Item 3: Smoke check for genuine local model presence on filesystem."""
+    """Optional operator-machine acceptance check; never assume a local model exists in CI."""
+    import os
+    import pytest
+    if os.environ.get("CHIMERA_RUN_LOCAL_ACCEPTANCE") != "1":
+        pytest.skip("set CHIMERA_RUN_LOCAL_ACCEPTANCE=1 on the configured operator machine")
     model_path = Path(r"C:\ChimeraModels\Llama-3.2-3B-Instruct-Q4_K_M.gguf")
     ws_path = Path(r"C:\Users\Parth\AppData\Local\Temp\ChimeraAcceptanceWorkspace")
 

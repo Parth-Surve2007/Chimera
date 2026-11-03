@@ -14,7 +14,9 @@ from .interaction import (BrowserBackendDescriptor, GroundedInputBackend,
 @dataclass(frozen=True)
 class ApplicationIdentity:
     pid: int
-    executable: str | None
+    executable: str
+    process_create_time: float
+    owner_session_id: str | None
     session_id: str
 
 @dataclass(frozen=True)
@@ -108,26 +110,54 @@ class WindowsUIABackend:
                 try: pending.extend((child, level+1) for child in item.children()[:250])
                 except Exception: pass
         return None
-    def action(self, hwnd: int, runtime_id: str, operation: str, value=None):
+    def action(self, hwnd: int, runtime_id: str, operation: str, value=None, expected_pid: int | None = None):
         item = self._find(hwnd, runtime_id)
-        if item is None: return {"status": "failed", "verified": False, "reason": "element reference is stale or inaccessible", "backend": "uia"}
-        before = self._info(item, hwnd); method = {"invoke_element": "invoke", "set_value": "set_edit_text", "toggle": "toggle", "select_item": "select", "expand": "expand", "collapse": "collapse", "focus_element": "set_focus"}.get(operation)
-        if method is None and operation in {"read_text", "get_value"}:
-            return {"status": "completed", "verified": True, "backend": "uia", "operation": operation, "before": before, "value": item.window_text()}
-        if method is None: return {"status": "failed", "verified": False, "backend": "uia", "reason": f"unsupported semantic operation: {operation}"}
-        if not hasattr(item, method): return {"status": "failed", "verified": False, "backend": "uia", "reason": f"required UIA pattern is unavailable: {operation}", "before": before}
+        if item is None:
+            return {"status": "failed", "verified": False, "reason": "element reference is stale or inaccessible", "backend": "uia"}
+        before = self._info(item, hwnd)
         try:
-            getattr(item, method)(value) if operation == "set_value" else getattr(item, method)()
-            after = self._info(item, hwnd)
-            observed_value = item.window_text()
-            verified = (
-                observed_value == value if operation == "set_value"
-                else after.get("focused", False) if operation == "focus_element"
-                else False if operation == "invoke_element"
-                else True
-            )
-            return {"status": "completed" if verified else "uncertain", "verified": verified, "backend": "uia", "operation": operation, "before": before, "after": after, "value": observed_value}
-        except Exception as exc: return {"status": "failed", "verified": False, "backend": "uia", "reason": str(exc), "before": before}
+            element_pid = int(getattr(item.element_info, "process_id", 0) or 0)
+            if expected_pid is not None and element_pid != int(expected_pid):
+                return {"status": "blocked", "verified": False, "reason": "UI Automation element belongs to a different process", "backend": "uia", "before": before}
+            if operation in {"read_text", "get_value"}:
+                observed = item.window_text()
+                if not observed:
+                    try: observed = item.iface_value.CurrentValue
+                    except Exception: observed = ""
+                return {"status": "completed", "verified": True, "backend": "uia", "operation": operation, "before": before, "value": observed}
+            if operation == "invoke_element":
+                item.iface_invoke.Invoke()
+                return {"status": "completed", "verified": False, "verification": "InvokePattern accepted; inspect the resulting UI state", "backend": "uia", "operation": operation, "before": before}
+            if operation == "set_value":
+                pattern = item.iface_value
+                if bool(pattern.CurrentIsReadOnly):
+                    return {"status": "blocked", "verified": False, "reason": "selected UI Automation control is read-only", "backend": "uia", "before": before}
+                pattern.SetValue(value)
+                observed = pattern.CurrentValue
+                verified = observed == value
+            elif operation == "toggle":
+                pattern = item.iface_toggle
+                before_state = pattern.CurrentToggleState
+                pattern.Toggle()
+                observed = None
+                verified = pattern.CurrentToggleState != before_state
+            elif operation == "select_item":
+                pattern = item.iface_selection_item
+                pattern.Select()
+                observed = None
+                verified = bool(pattern.CurrentIsSelected)
+            elif operation in {"expand", "collapse"}:
+                pattern = item.iface_expand_collapse
+                (pattern.Expand if operation == "expand" else pattern.Collapse)()
+                observed = None
+                verified = int(pattern.CurrentExpandCollapseState) == (1 if operation == "expand" else 0)
+            else:
+                return {"status": "blocked", "verified": False, "reason": f"unsupported UI Automation pattern: {operation}", "backend": "uia", "before": before}
+            return {"status": "completed" if verified else "uncertain", "verified": verified, "backend": "uia", "operation": operation, "before": before, "after": self._info(item, hwnd), "value": observed}
+        except Exception as exc:
+            return {"status": "failed", "verified": False, "backend": "uia", "reason": str(exc), "before": before}
+
+
 
 class ComputerSessionManager:
     def __init__(self, workspace: Path | None = None, observation_ttl: float = 30.0):
@@ -149,13 +179,53 @@ class ComputerSessionManager:
     def choose_interaction(self, operation: str, application_type: str = "native_windows", evidence: dict | None = None) -> dict:
         from dataclasses import asdict
         return asdict(self.strategy.choose(operation, application_type, evidence))
-    def create(self, pid: int, executable: str | None = None) -> ApplicationIdentity:
-        identity = ApplicationIdentity(pid, executable or self.backend.process_path(pid), uuid.uuid4().hex); self.sessions[identity.session_id] = identity; return identity
+    def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None) -> ApplicationIdentity:
+        """Authorize one exact live process selected by the operator."""
+        try:
+            import psutil
+            process = psutil.Process(int(pid))
+            created = float(process.create_time())
+            actual = str(Path(process.exe()).resolve())
+        except Exception as exc:
+            raise RuntimeError(f"application process identity could not be verified: {exc}") from exc
+        if not actual:
+            raise RuntimeError("application executable path is unavailable")
+        if executable and str(Path(executable).resolve()).casefold() != actual.casefold():
+            raise RuntimeError("application executable changed before authorization")
+        identity = ApplicationIdentity(int(pid), actual, created, owner_session_id, uuid.uuid4().hex)
+        self.sessions[identity.session_id] = identity
+        return identity
+
+    @staticmethod
+    def _identity_is_current(identity: ApplicationIdentity) -> bool:
+        try:
+            import psutil
+            process = psutil.Process(identity.pid)
+            if abs(float(process.create_time()) - identity.process_create_time) > 0.01:
+                return False
+            return str(Path(process.exe()).resolve()).casefold() == identity.executable.casefold()
+        except Exception:
+            return False
+
+    def validate_window(self, session_id: str, hwnd: int) -> ApplicationIdentity:
+        identity = self.sessions.get(session_id)
+        if identity is None or not self._identity_is_current(identity):
+            raise ValueError("authorized process identity is missing or has changed")
+        _generation, observation = self.observations.get(session_id, (0, None))
+        if observation is None or time.time() - observation.created_at > self.observation_ttl:
+            raise ValueError("fresh authorized window observation required")
+        if not any(int(window.get("hwnd", 0)) == int(hwnd) and int(window.get("pid", 0)) == identity.pid for window in observation.windows):
+            raise ValueError("window does not belong to the exact authorized process")
+        if self.backend.window_process_id(int(hwnd)) != identity.pid:
+            raise ValueError("current HWND owner does not match the authorized process")
+        return identity
+
     def observe(self, session_id: str) -> ComputerObservation:
         identity = self.sessions.get(session_id)
         if not identity: raise KeyError("computer session not found")
-        windows = [item for item in self.backend.list_applications() if item["pid"] == identity.pid]
-        if not windows: raise RuntimeError("authorized application is no longer running")
+        if not self._identity_is_current(identity): raise RuntimeError("authorized process identity is no longer valid")
+        windows = [item for item in self.backend.list_applications() if item["pid"] == identity.pid and (item.get("executable") or "").casefold() == identity.executable.casefold()]
+        if not windows: raise RuntimeError("authorized application window is no longer available")
         generation = self.observations.get(session_id, (0, None))[0] + 1; app = windows[0]; elements = []
         if self.uia:
             try: elements = self.uia.elements(app["windows"][0]["hwnd"])
@@ -186,7 +256,7 @@ class ComputerSessionManager:
     @staticmethod
     def _available_actions(element):
         patterns = " ".join(element.get("patterns", [])).lower()
-        actions = ["read_text", "focus_element"]
+        actions = ["read_text"]
         if "invoke" in patterns: actions.append("invoke_element")
         if "value" in patterns: actions.append("set_value")
         if "toggle" in patterns: actions.append("toggle_element")
@@ -196,19 +266,25 @@ class ComputerSessionManager:
 
     def act_reference(self, session_id: str, reference_id: str, operation: str, value=None, approved=False):
         reference = self.references.get(reference_id)
-        if not reference or reference.session_id != session_id: return {"status": "failed", "verified": False, "reason": "unknown or cross-session reference"}
-        return self.act(reference, operation, value, approved)
+        if not reference or reference.session_id != session_id:
+            return {"status": "failed", "verified": False, "reason": "unknown or cross-session reference"}
+        aliases = {
+            "toggle_element": "toggle",
+            "select_element": "select_item",
+            "expand_element": "expand",
+            "collapse_element": "collapse",
+        }
+        return self.act(reference, aliases.get(operation, operation), value, approved)
+
     def validate_reference(self, reference: ElementReference) -> None:
         generation, observation = self.observations.get(reference.session_id, (0, None))
-        if observation is None or generation != reference.generation or time.time() > reference.expires_at: raise ValueError("stale or expired computer element reference")
-        if not any(window.get("hwnd") == reference.hwnd for window in observation.windows): raise ValueError("target window identity changed")
-    def act(self, reference: ElementReference, operation: str, value=None, approved: bool = False) -> dict:
-        self.validate_reference(reference)
-        if operation in {"set_value", "toggle", "select_item", "expand", "collapse", "invoke_element"} and not approved:
-            return {"status": "awaiting_approval", "operation": operation, "reference_id": reference.reference_id}
-        if not self.uia: return {"status": "blocked", "verified": False, "reason": "UI Automation backend is unavailable"}
-        result = self.uia.action(reference.hwnd, reference.runtime_id, operation, value)
-        try: self.observe(reference.session_id)
-        except Exception: pass
-        result["reference_id"] = reference.reference_id; result["observation_generation"] = self.observations.get(reference.session_id, (0,))[0]
-        return result
+        if observation is None or generation != reference.generation or time.time() > reference.expires_at:
+            raise ValueError("stale or expired computer element reference")
+        if not any(int(window.get("hwnd", 0)) == int(reference.hwnd) for window in observation.windows):
+            raise ValueError("target window is no longer in the authorized observation")
+        identity = self.sessions.get(reference.session_id)
+        if identity is None or not self._identity_is_current(identity):
+            raise ValueError("authorized process identity changed")
+        if self.backend.window_process_id(reference.hwnd) != identity.pid:
+            raise ValueError("target HWND no longer belongs to the authorized process")
+

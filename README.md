@@ -29,12 +29,12 @@ Chimera does not claim to be a completed AGI or frontier model equivalent. It is
 | **Local GGUF inference** | ✅ Implemented — llama.cpp integration with explicit model configuration |
 | **AgentRuntime & session persistence** | ✅ Implemented — SQLite-backed sessions, messages, and events |
 | **Workspace tools (read/write)** | ✅ Implemented — Governed file operations with approval gates |
-| **Computer use (Windows)** | 🟡 Partial — UI automation via pywinauto, governed approval required |
+| **Computer use (Windows)** | 🟡 Partial — operator-authorized process sessions, fresh UIA references and exact semantic patterns; global keyboard/mouse injection is disabled |
 | **Application SDK** | ✅ Implemented — Universal connector framework with risk levels |
 | **REA: Reverse Engineer Anything** | ✅ Implemented — Artifact detection, static analysis, Ghidra integration |
-| **Ghidra integration** | 🟡 Partial — Headless execution (requires Ghidra + JDK 17+) |
-| **Experience learning** | 🟡 Partial — Trace capture, skill extraction, approval lifecycle |
-| **Task planning** | 🟡 Foundation — Single-step planning, multi-step planned |
+| **Ghidra integration** | 🟡 Partial — Installation discovery and bounded static parsing; automated headless analysis actions remain unavailable |
+| **Experience learning** | 🟡 Partial — Trace capture, secret redaction, stored skill proposals and approval status updates; replay and promotion remain planned |
+| **Task planning** | 🟡 Implemented foundation — dependency-aware sequential templates, AgentRuntime-governed execution, permission checks and approval pause/resume; model-driven planning and parallel execution remain planned |
 | **Application connectors** | 🟡 Foundation — Ghidra and REA connectors, ecosystem extensible |
 
 ---
@@ -212,16 +212,16 @@ Persistent Memory & Audit Trail
 - Extracts reusable workflows as `ProposedSkill` objects
 
 **Skill Lifecycle**
-1. **Proposed** — Extracted from trace, stored in skill store
-2. **Approved** — Operator reviews and approves the skill
-3. **Installed** — Skill becomes available for future sessions
-4. **Rejected** — Skill discarded if not useful
+1. **Proposed** — Extracted from a trace and stored for operator review
+2. **Approved** — Operator approval is recorded in the skill store
+
+Approved proposals are not yet installed or automatically replayed as executable skills. Rejection, versioning, regression testing and governed replay remain planned.
 
 **Current State**
 - Trace capture and secret redaction: ✅ Implemented
 - Skill extraction and storage: ✅ Implemented
-- Approval lifecycle: ✅ Implemented
-- Skill library versioning: 🟡 Planned
+- Approval status update: ✅ Implemented
+- Rejection, versioning, regression testing and executable replay: 🟡 Planned
 - Automated regression testing: 🟡 Planned
 
 ---
@@ -413,7 +413,7 @@ Chimera: [Invokes REA] Extracted 24 strings (min length 4): "version", "copyrigh
 
 ```
 User: Open Notepad and type "Hello"
-Chimera: [Approval required] Open Notepad? [User approves] [Invokes pywinauto] Notepad opened. Typing...
+Chimera: Lists visible applications (read-only). The operator selects and authorizes one process in APPLICATIONS. Chimera inspects its UI Automation tree. Protected Invoke/Value/Toggle/Selection/Expand actions require approval and target the exact observed control. If the required semantic pattern is unavailable, Chimera stops for manual operator input.
 ```
 
 ---
@@ -455,7 +455,8 @@ Chimera: [Approval required] Open Notepad? [User approves] [Invokes pywinauto] N
 - Only Ghidra and REA connectors are implemented; broader ecosystem is planned
 
 **Computer Use**
-- Windows pywinauto automation is partial
+- Windows UI Automation is partial and requires explicit per-conversation application authorization
+- Only exact UIA semantic patterns are supported for mutations; global keyboard/mouse injection, foreground stealing and remote window closing are disabled
 - No Linux/macOS computer use implementation
 - No global input injection (intentional security choice)
 
@@ -472,23 +473,30 @@ Chimera: [Approval required] Open Notepad? [User approves] [Invokes pywinauto] N
 
 See [ROADMAP.md](ROADMAP.md) for detailed phase planning.
 
-**Current Phase: 5.2 — Reverse Engineer Anything (REA)**
+**Current Phase: 5.3 — Cross-Capability Agentic Workflows**
 
-**Near-Term (Phase 5.1)**
-- Persistent task context across sessions
-- Multi-step plan visualization
-- Parallel task execution with safety barriers
-- Agent-generated sub-task delegation
-- Token-budget awareness
+**Implemented foundation (Phase 5.3)**
+- Dependency-aware sequential workflow templates for workspace and REA tasks
+- Runtime-owned dispatch for every workflow step
+- Per-step permission validation and protected-action approval pause/resume
+- Persisted step results and verification states
+- Fail-closed handling for unresolved dependencies and ambiguous artifact discovery
 
-**Medium-Term (Phase 5.3)**
+**Next (Phase 5.4)**
+- Model-driven plan generation and replanning
+- Safe resume of interrupted workflow runs
+- Dependency graph visualization
+- Bounded parallel execution for read-only steps
+- Token-budget awareness and sub-task delegation
+
+**Medium-Term (Phase 5.5)**
 - Git connector (status, diff, stage, commit)
 - Shell/terminal connector with sandboxed isolation
 - Python/Node REPL connector
 - File-watcher integration
 - Dependency vulnerability scanning
 
-**Medium-Term (Phase 5.4)**
+**Medium-Term (Phase 5.6)**
 - VS Code connector
 - Browser connector (headless Chrome)
 - Obsidian connector

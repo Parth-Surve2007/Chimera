@@ -15,8 +15,6 @@ from ctypes import wintypes
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-MAX_TEXT = 100_000
-
 @dataclass(frozen=True)
 class WindowObservation:
     hwnd: int
@@ -95,6 +93,14 @@ class WindowsComputerUse:
             time.sleep(.05)
         return {"status": "failed", "pid": process.pid, "reason": "application window did not appear within timeout", "executable": str(path.resolve())}
 
+    def window_process_id(self, hwnd: int) -> int | None:
+        """Read the current owner PID for one HWND without interacting with it."""
+        if os.name != "nt" or not self.user32.IsWindow(hwnd):
+            return None
+        pid = wintypes.DWORD()
+        self.user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+        return int(pid.value) if pid.value else None
+
     def controls(self, hwnd: int) -> list[dict]:
         if os.name != "nt" or not self.user32.IsWindow(hwnd): return []
         result = []; enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -109,20 +115,12 @@ class WindowsComputerUse:
         return {"status": "completed", "accessibility": "win32_fallback", "uia_available": False, "limitation": "No UI Automation binding is installed; controls are Win32 child-window observations only.", "elements": controls}
 
     def focus(self, hwnd: int) -> dict:
-        if os.name != "nt" or not self.user32.IsWindow(hwnd): return {"status": "failed", "reason": "window is not observed"}
-        self.user32.SetForegroundWindow(hwnd); return {"status": "completed", "hwnd": hwnd}
+        return {"status": "blocked", "reason": "foreground focus changes are disabled", "manual_handoff_required": True}
+
 
     def type_text(self, hwnd: int, text: str, approved: bool = False) -> dict:
-        if not approved: return {"status": "awaiting_approval", "hwnd": hwnd, "permission": "computer.input"}
-        if not isinstance(text, str) or not text or len(text) > MAX_TEXT: return {"status": "failed", "reason": "text is empty or exceeds limit"}
-        if os.name != "nt" or not self.user32.IsWindow(hwnd): return {"status": "failed", "reason": "control is not observed"}
-        self.user32.SetForegroundWindow(hwnd); inputs = []
-        class KEYBDINPUT(ctypes.Structure): _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
-        class INPUT(ctypes.Structure): _fields_ = [("type", wintypes.DWORD), ("ki", KEYBDINPUT)]
-        for char in text:
-            inputs.extend([INPUT(1, KEYBDINPUT(0, ord(char), 0x0004, 0, None)), INPUT(1, KEYBDINPUT(0, ord(char), 0x0004 | 0x0002, 0, None))])
-        sent = self.user32.SendInput(len(inputs), (INPUT * len(inputs))(*inputs), ctypes.sizeof(INPUT))
-        return {"status": "completed" if sent == len(inputs) else "failed", "hwnd": hwnd, "characters": len(text)}
+        return {"status": "blocked", "reason": "global keyboard injection is disabled; use exact UI Automation ValuePattern or manual operator entry", "manual_handoff_required": True}
+
 
     def screenshot(self, hwnd: int, output: Path, approved: bool = False) -> dict:
         if not approved: return {"status": "awaiting_approval", "hwnd": hwnd, "permission": "computer.screenshot"}
@@ -136,6 +134,5 @@ class WindowsComputerUse:
         except Exception as exc: return {"status": "failed", "reason": str(exc)}
 
     def close(self, hwnd: int, approved: bool = False) -> dict:
-        if not approved: return {"status": "awaiting_approval", "hwnd": hwnd, "permission": "computer.close"}
-        if os.name != "nt" or not self.user32.IsWindow(hwnd): return {"status": "failed", "reason": "window is not observed"}
-        self.user32.PostMessageW(hwnd, 0x0010, 0, 0); return {"status": "completed", "hwnd": hwnd}
+        return {"status": "blocked", "reason": "remote window closing is disabled; close the application directly", "manual_handoff_required": True}
+

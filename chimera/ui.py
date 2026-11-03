@@ -12,6 +12,7 @@ from .local_model import config_from_env, check_status, save_persisted_config, L
 from .agent_loop import execute_objective
 from .tools import CAPABILITY
 from .agent_runtime import AgentRuntime, AgentSessionStore
+from .workflow_integration import AgenticWorkflowOrchestrator
 try: import flet as ft
 except ImportError: ft = None
 
@@ -136,7 +137,7 @@ class MainWindow:
         buttons.append(ft.TextButton("NEW CONVERSATION", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=FOCUS, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         for item in self.agent_store.list_sessions()[:8]:
             buttons.append(ft.TextButton(f"↳ {item['title'][:24]}", on_click=lambda e, sid=item["session_id"]: self._resume_agent_session(sid), style=ft.ButtonStyle(color=SECONDARY, padding=ft.Padding.symmetric(horizontal=18, vertical=8))))
-        for label, handler in [("OVERVIEW", self._show_overview), ("MODEL HUB", self._show_model_hub), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
+        for label, handler in [("OVERVIEW", self._show_overview), ("MODEL HUB", self._show_model_hub), ("APPLICATIONS", self._show_computer_apps), ("WORKFLOW STUDIO", self._show_workflow_studio), ("CAPABILITIES", self._show_capabilities), ("RUNS", self._show_runs), ("SETTINGS", self._show_settings)]:
             buttons.append(ft.TextButton(label, on_click=lambda e, h=handler: self._navigate(h), style=ft.ButtonStyle(color=TEXT, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
         return ft.Container(ft.Column([ft.Text("NAVIGATION", color=MUTED, size=10), *buttons], spacing=3), width=210, right=18, top=10, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), padding=ft.Padding.all(14), visible=False, shadow=ft.BoxShadow(blur_radius=18, color="#000000"))
     def _toggle_drawer(self, e=None): self.drawer.visible = not self.drawer.visible; self.page.update()
@@ -280,6 +281,76 @@ class MainWindow:
     def _action(self, action, refresh=False):
         try: action(); self._toast("Completed through ReviewService."); self._show_capabilities() if refresh else None
         except Exception as exc: self._toast(f"Action failed: {exc}")
+    def _show_computer_apps(self, e=None):
+        """Operator-controlled process authorization for the active conversation."""
+        try:
+            applications = self.agent_runtime.computer.backend.list_applications()
+        except Exception as exc:
+            return self._set([
+                ft.Text("APPLICATION AUTHORIZATION", size=22, color=TEXT),
+                ft.Text(f"Application inventory unavailable: {exc}", color=SECONDARY),
+            ])
+
+        cards = []
+        for application in applications[:80]:
+            pid = application.get("pid")
+            executable = application.get("executable")
+            titles = ", ".join(
+                window.get("title") or window.get("class_name") or "Untitled window"
+                for window in application.get("windows", [])[:3]
+            )
+            authorized = any(
+                identity.owner_session_id == self.agent_session_id
+                and identity.pid == pid
+                and (identity.executable or "").casefold() == (executable or "").casefold()
+                and self.agent_runtime.computer._identity_is_current(identity)
+                for identity in self.agent_runtime.computer.sessions.values()
+            )
+            action = (
+                ft.Text("AUTHORIZED FOR THIS CONVERSATION", color=FOCUS, size=10)
+                if authorized
+                else self._button(
+                    "AUTHORIZE THIS APPLICATION",
+                    lambda e, process_id=pid, image=executable: self._authorize_computer_application(process_id, image),
+                )
+            )
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Text(str(executable or "Executable path unavailable"), color=TEXT, weight=ft.FontWeight.BOLD, size=12),
+                    ft.Text(f"PID {pid} · {titles or 'No visible title'}", color=SECONDARY, size=10),
+                    action,
+                ], spacing=8),
+                bgcolor=SURFACE,
+                border=ft.Border.all(1, BORDER),
+                border_radius=7,
+                padding=ft.Padding.all(14),
+                width=760,
+            ))
+
+        self._set([
+            ft.Text("APPLICATION AUTHORIZATION", size=22, color=TEXT),
+            ft.Text(
+                "Choose each application explicitly before Chimera can inspect its controls. "
+                "Authorization is scoped to this conversation. Global keyboard input, blind focus changes "
+                "and remote window closing are disabled.",
+                color=SECONDARY,
+                size=11,
+            ),
+            *(cards or [ft.Text("No visible applications were found.", color=MUTED)]),
+        ])
+
+    def _authorize_computer_application(self, pid, executable):
+        try:
+            identity = self.agent_runtime.computer.create(
+                pid,
+                executable,
+                owner_session_id=self.agent_session_id,
+            )
+            self._toast(f"Authorized {Path(identity.executable).name} for this conversation.")
+            self._show_computer_apps()
+        except Exception as exc:
+            self._toast(f"Application authorization failed: {exc}")
+
     def _show_runs(self, e=None): self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
     def _show_settings(self, e=None):
         c = config_from_env(); s = check_status(c); source = config_source(); policy = load_policy(self.registry.data_dir); server = self.local_provider.server.status() if self.local_provider.server else {"state": "unavailable"}
@@ -353,7 +424,7 @@ class MainWindow:
         session_model_info = self.agent_store.session_model(self.agent_session_id)
         selected_pid = session_model_info.get("profile_id")
         provider_badge = "LOCAL (GGUF DEFAULT)" if not selected_pid else f"PROVIDER: {selected_pid} ({'API / CLOUD' if not session_model_info.get('local_only') else 'LOCAL'})"
-        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), ft.Row([ft.Text(f"MODE / {session_mode.upper()}", color=FOCUS, size=10), ft.Text(provider_badge, color=SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=FOCUS)), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
+        composer = ft.Container(ft.Column([ft.Text("CONVERSATION", color=MUTED, size=10), ft.Row([ft.Text(f"MODE / {session_mode.upper()}", color=FOCUS, size=10), ft.Text(provider_badge, color=SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.TextButton("SWITCH TO BUILD" if session_mode == "plan" else "SWITCH TO PLAN", on_click=self._toggle_agent_mode, disabled=self.task_busy, style=ft.ButtonStyle(color=FOCUS)), *[ft.Text(f"{role.upper()}: {text}", color=TEXT if role == "user" else SECONDARY, size=12) for role, text in self.conversation_messages[-8:]], *activity, *approval, self.task_field, ft.Row([ft.Text("Local reasoning · persistent session", color=MUTED, size=10), self._button("STOP", self._cancel_conversation) if self.task_busy else self._button("SEND", self._send_conversation) if ready else ft.TextButton("CONFIGURE RUNTIME", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS)), self._button("RUN WORKFLOW", self._run_multi_capability_workflow)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], spacing=14), width=760, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(24))
         clarification = [ft.Row([self.workspace_path_field, self._button("USE DIRECTORY", self._use_workspace_path), ft.TextButton("BROWSE", on_click=self._pick_workspace, style=ft.ButtonStyle(color=FOCUS))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(f"SELECTED: {self.workspace_path or 'NOT SELECTED'}", color=MUTED, size=10)]
         if self.pending_questions:
             if self.pending_state == "pending":
@@ -382,6 +453,39 @@ class MainWindow:
             else: self.conversation_messages.append(("assistant", f"I could not complete that locally: {result.get('error', 'unknown error')}"))
         finally:
             self.task_busy = False; self._show_overview()
+    async def _run_multi_capability_workflow(self, e=None):
+        if self.task_busy:
+            return self._toast("A request is already running.")
+        if not self.workspace_path:
+            return self._toast("Select a workspace before running a multi-step workflow.")
+        objective = (self.task_field.value or "").strip()
+        if not objective:
+            return self._toast("Describe the workflow objective first.")
+        self.task_busy = True
+        self.conversation_messages.append(("user", f"[MULTI-STEP WORKFLOW] {objective}"))
+        self.task_field.value = ""
+        self._show_overview()
+        try:
+            orchestrator = AgenticWorkflowOrchestrator(
+                self.agent_runtime, self.agent_runtime.task_store, self.workspace_path
+            )
+            result = await asyncio.to_thread(
+                orchestrator.execute_objective, self.agent_session_id, objective
+            )
+            if result.get("status") == "awaiting_approval":
+                self.pending_agent_approval = self.agent_store.pending_tool(self.agent_session_id)
+                self.conversation_messages.append(("assistant", f"Workflow paused for approval after {result.get('steps_executed', 0)} steps. Plan {result.get('plan_id')}"))
+            elif result.get("status") == "completed":
+                self.conversation_messages.append(("assistant", f"Workflow completed: {result.get('steps_executed', 0)}/{result.get('steps_total', 0)} steps. Plan {result.get('plan_id')}"))
+            else:
+                self.conversation_messages.append(("assistant", f"Workflow {result.get('status')}: {result.get('steps_executed', 0)}/{result.get('steps_total', 0)} steps. Plan {result.get('plan_id')}"))
+        except Exception as exc:
+            self.conversation_messages.append(("assistant", f"Workflow could not run: {exc}"))
+            self._toast(f"Workflow failed: {exc}")
+        finally:
+            self.task_busy = False
+            self._show_overview()
+
     async def _pick_workspace(self, e=None):
         try:
             selected = await self.workspace_picker.get_directory_path()
@@ -417,10 +521,26 @@ class MainWindow:
         if self.task_busy: return
         self.task_busy = True
         try:
-            result = await asyncio.to_thread(self.agent_runtime.approve_pending, self.agent_session_id, approved)
-            self.pending_agent_approval = None
-            if result.get("status") == "completed": self.conversation_messages.append(("assistant", result["message"].content))
-            elif result.get("status") not in {"denied"}: self.conversation_messages.append(("assistant", f"The approved operation did not complete: {result.get('error', 'unknown error')}"))
+            pending = self.agent_store.pending_tool(self.agent_session_id)
+            if pending and str(pending.get("invocation_id", "")).startswith("wf:"):
+                orchestrator = AgenticWorkflowOrchestrator(
+                    self.agent_runtime, self.agent_runtime.task_store, self.workspace_path
+                )
+                result = await asyncio.to_thread(
+                    orchestrator.approve_pending, self.agent_session_id, approved
+                )
+                self.pending_agent_approval = self.agent_store.pending_tool(self.agent_session_id)
+                if result.get("status") == "completed":
+                    self.conversation_messages.append(("assistant", f"Workflow completed: {result.get('steps_executed', 0)}/{result.get('steps_total', 0)} steps. Plan {result.get('plan_id')}"))
+                elif result.get("status") == "awaiting_approval":
+                    self.conversation_messages.append(("assistant", "The workflow reached another protected action and is awaiting your approval."))
+                elif result.get("status") != "denied":
+                    self.conversation_messages.append(("assistant", f"Workflow {result.get('status')}: inspect the persisted workflow timeline for details."))
+            else:
+                result = await asyncio.to_thread(self.agent_runtime.approve_pending, self.agent_session_id, approved)
+                self.pending_agent_approval = None
+                if result.get("status") == "completed": self.conversation_messages.append(("assistant", result["message"].content))
+                elif result.get("status") not in {"denied"}: self.conversation_messages.append(("assistant", f"The approved operation did not complete: {result.get('error', 'unknown error')}"))
         except Exception as exc: self._toast(f"Approval handling failed: {exc}")
         finally:
             self.task_busy = False; self._show_overview()

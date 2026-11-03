@@ -206,7 +206,7 @@ class WorkflowPlanner:
                 expected_output="Markdown report file",
                 risk_level=RiskLevel.LOW,
                 required_permissions=["execution.write"],
-                approval_required=(mode == "build"),  # Requires approval in build mode
+                approval_required=True,  # AgentRuntime enforces Plan Mode and explicit Build approval
                 execution_state=StepState.PENDING,
             )
         )
