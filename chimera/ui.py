@@ -460,6 +460,10 @@ class MainWindow:
             label="PRIORITY", value="normal", color=TEXT, border_color=BORDER,
             focused_border_color=FOCUS, hint_text="low / normal / high / critical",
         )
+        self.goal_tags_field = ft.TextField(
+            label="TAGS (COMMA-SEPARATED)", color=TEXT, border_color=BORDER,
+            focused_border_color=FOCUS, hint_text="e.g. engineering, research",
+        )
 
         summary = ft.Row([
             self._goal_stat("ACTIVE", stats.get("active", 0)),
@@ -475,6 +479,7 @@ class MainWindow:
                 self.goal_description_field,
                 self.goal_criteria_field,
                 ft.Row([self.goal_project_field, self.goal_priority_field], wrap=True),
+                self.goal_tags_field,
                 ft.Row([
                     self._button("SAVE GOAL", self._create_goal),
                     ft.Text("Goals remain active until the operator changes their state.", color=MUTED, size=10),
@@ -522,7 +527,10 @@ class MainWindow:
                 item.strip() for item in (self.goal_criteria_field.value or "").splitlines()
                 if item.strip()
             ]
-            tags = []
+            tags = [
+                item.strip() for item in (self.goal_tags_field.value or "").split(",")
+                if item.strip()
+            ]
             goal = self.goal_store.create(
                 self.goal_title_field.value or "",
                 self.goal_description_field.value or "",
@@ -556,12 +564,14 @@ class MainWindow:
         actions = []
         if goal.status == "active":
             actions.extend([
+                ft.TextButton("EDIT", on_click=lambda e, gid=goal.goal_id: self._edit_goal(gid), style=ft.ButtonStyle(color=SECONDARY)),
                 ft.TextButton("PAUSE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "paused"), style=ft.ButtonStyle(color=SECONDARY)),
                 ft.TextButton("COMPLETE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "completed"), style=ft.ButtonStyle(color=ACCENT)),
                 ft.TextButton("ARCHIVE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "archived"), style=ft.ButtonStyle(color=MUTED)),
             ])
         elif goal.status == "paused":
             actions.extend([
+                ft.TextButton("EDIT", on_click=lambda e, gid=goal.goal_id: self._edit_goal(gid), style=ft.ButtonStyle(color=SECONDARY)),
                 ft.TextButton("RESUME", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "active"), style=ft.ButtonStyle(color=SECONDARY)),
                 ft.TextButton("COMPLETE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "completed"), style=ft.ButtonStyle(color=ACCENT)),
                 ft.TextButton("ARCHIVE", on_click=lambda e, gid=goal.goal_id: self._goal_action(gid, "archived"), style=ft.ButtonStyle(color=MUTED)),
@@ -593,6 +603,71 @@ class MainWindow:
             bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=8,
             padding=ft.Padding.all(16), width=820,
         )
+
+    def _edit_goal(self, goal_id):
+        goal = self.goal_store.get(goal_id)
+        if goal is None:
+            self._toast("Goal no longer exists.")
+            self._show_goals()
+            return
+        if goal.status in {"completed", "archived"}:
+            self._toast("Reopen this goal before editing it.")
+            return
+
+        title_field = ft.TextField(label="GOAL / OUTCOME", value=goal.title, color=TEXT, border_color=BORDER)
+        description_field = ft.TextField(
+            label="DESCRIPTION / CONTEXT", value=goal.description, multiline=True,
+            min_lines=2, max_lines=4, color=TEXT, border_color=BORDER,
+        )
+        priority_field = ft.TextField(label="PRIORITY", value=goal.priority, color=TEXT, border_color=BORDER)
+        project_field = ft.TextField(label="PROJECT", value=goal.project, color=TEXT, border_color=BORDER)
+        criteria_field = ft.TextField(
+            label="SUCCESS CRITERIA (ONE PER LINE)",
+            value="\n".join(goal.success_criteria), multiline=True,
+            min_lines=2, max_lines=4, color=TEXT, border_color=BORDER,
+        )
+        tags_field = ft.TextField(
+            label="TAGS (COMMA-SEPARATED)", value=", ".join(goal.tags),
+            color=TEXT, border_color=BORDER,
+        )
+
+        def save(_=None):
+            try:
+                self.goal_store.update(
+                    goal_id,
+                    title=title_field.value or "",
+                    description=description_field.value or "",
+                    priority=(priority_field.value or "").strip().lower(),
+                    project=project_field.value or "",
+                    success_criteria=[
+                        item.strip() for item in (criteria_field.value or "").splitlines()
+                        if item.strip()
+                    ],
+                    tags=[
+                        item.strip() for item in (tags_field.value or "").split(",")
+                        if item.strip()
+                    ],
+                )
+                dialog.open = False
+                self.page.update()
+                self._toast("Goal updated.")
+                self._show_goals()
+            except Exception as exc:
+                self._toast(f"Goal update failed: {exc}")
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("EDIT OPERATOR GOAL"),
+            content=ft.Column([
+                title_field, description_field, priority_field,
+                project_field, criteria_field, tags_field,
+            ], tight=True, spacing=9, scroll=ft.ScrollMode.AUTO),
+            actions=[
+                ft.TextButton("CANCEL", on_click=lambda e: (setattr(dialog, "open", False), self.page.update())),
+                ft.TextButton("SAVE CHANGES", on_click=save, style=ft.ButtonStyle(color=ACCENT)),
+            ],
+        )
+        self.page.show_dialog(dialog)
 
     def _goal_action(self, goal_id, status):
         goal = self.goal_store.get(goal_id)
