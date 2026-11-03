@@ -54,6 +54,15 @@ jobs:
       - name: Build portable Windows desktop application
         shell: pwsh
         run: ./scripts/build_windows.ps1 -SkipTests
+      - name: Smoke-test the packaged executable
+        shell: pwsh
+        run: |
+          $env:CHIMERA_PACKAGED_SMOKE = "1"
+          & "dist/Chimera/Chimera.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged startup smoke test failed with exit code $LASTEXITCODE"
+          }
+          Remove-Item Env:CHIMERA_PACKAGED_SMOKE
       - name: Upload portable application
         uses: actions/upload-artifact@v4
         with:
