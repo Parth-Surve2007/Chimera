@@ -272,6 +272,7 @@ class MetaModelProvider:
                     "parameters": {
                         "type": "object",
                         "properties": properties,
+                        "required": list(properties.keys()),
                         "additionalProperties": False,
                     },
                 },
