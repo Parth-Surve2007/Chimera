@@ -362,7 +362,7 @@ class AgentRuntime:
         if hosted:
             return messages
 
-        goals = self.goal_store.list(status="active", limit=3)
+        goals = self.goal_store.list(status="active", limit=2)
         paused = self.goal_store.list(status="paused", limit=1)
         selected = goals + paused
         if not selected:
@@ -373,12 +373,12 @@ class AgentRuntime:
             "goals": [
                 {
                     "goal_id": goal.goal_id,
-                    "title": goal.title[:120],
-                    "description": goal.description[:160],
+                    "title": goal.title[:100],
+                    "description": goal.description[:120],
                     "status": goal.status,
                     "priority": goal.priority,
-                    "project": goal.project[:80],
-                    "success_criteria": [item[:120] for item in goal.success_criteria[:3]],
+                    "project": goal.project[:60],
+                    "success_criteria": [item[:100] for item in goal.success_criteria[:2]],
                 }
                 for goal in selected
             ],
