@@ -991,3 +991,119 @@ def test_invalid_launch_arguments_get_one_safe_correction_before_approval(tmp_pa
         and event.payload.get("arguments", {}).get("browser_name")
         for event in store.events(session_id)
     )
+
+
+
+def test_launch_for_an_already_authorized_app_reuses_session_without_approval(tmp_path, monkeypatch):
+    import json
+
+    packaged_application = "appsfolder:Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+    launch_target = {
+        "kind": "appsfolder",
+        "application": packaged_application,
+        "aumid": "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App",
+        "display_name": "Notepad",
+        "expected_process_names": ["notepad.exe"],
+    }
+
+    class Provider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+            self.reused = None
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.launch",
+                    "arguments": {"executable": packaged_application},
+                    "invocation_id": "duplicate-notepad-launch",
+                }
+            payloads = [
+                json.loads(item.content)
+                for item in messages
+                if getattr(item, "role", None) == "tool"
+                and "computer.launch" in item.content
+            ]
+            assert payloads
+            self.reused = payloads[-1]["result"]
+            assert self.reused["already_authorized"] is True
+            assert self.reused["control_authorized"] is True
+            assert self.reused["computer_session_id"] == "existing-notepad-session"
+            assert self.reused["initial_observation"]["elements"][0]["reference_id"] == "editor-ref"
+            return {
+                "type": "message",
+                "content": "Notepad was already open and authorized; no second launch was needed.",
+            }
+
+    provider = Provider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    identity = SimpleNamespace(
+        session_id="existing-notepad-session",
+        owner_session_id=session_id,
+        pid=4242,
+        executable=r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad\Notepad.exe",
+        process_create_time=1.0,
+        authorized_hwnds=(77,),
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    monkeypatch.setattr(
+        runtime.computer, "_identity_is_current",
+        lambda current: current is identity,
+    )
+    monkeypatch.setattr(
+        WindowsComputerUse, "_resolve_launch_target",
+        lambda self, requested: launch_target if requested == packaged_application else None,
+    )
+    monkeypatch.setattr(
+        runtime.computer.backend, "list_applications",
+        lambda: [{
+            "pid": 4242,
+            "executable": identity.executable,
+            "windows": [{
+                "hwnd": 77, "pid": 4242, "title": "Untitled - Notepad",
+            }],
+        }],
+    )
+    monkeypatch.setattr(
+        runtime.computer, "observe",
+        lambda app_session_id, depth=3, limit=250: SimpleNamespace(
+            session_id=app_session_id,
+            observation_id="fresh-observation",
+            generation=2,
+            windows=[{"hwnd": 77, "pid": 4242, "title": "Untitled - Notepad"}],
+            backend="uia",
+            application={"profile": None},
+            elements=[{
+                "reference_id": "editor-ref",
+                "session_id": app_session_id,
+                "name": "Text Editor",
+                "control_type": "Document",
+                "patterns": ["Text"],
+                "available_actions": ["read_text", "visual_action"],
+                "enabled": True,
+                "offscreen": False,
+                "rectangle": {"left": 10, "top": 40, "right": 900, "bottom": 650},
+            }],
+            limitation=None,
+        ),
+    )
+
+    result = runtime.send(
+        session_id,
+        "Open Notepad and type Hello World.",
+    )
+
+    assert result["status"] == "completed"
+    assert "no second launch was needed" in result["message"].content
+    assert provider.calls == 2
+    assert provider.reused["already_authorized"] is True
+    assert not any(
+        event.event_type == "tool.permission.required"
+        and event.payload.get("tool") == "computer.launch"
+        for event in runtime.store.events(session_id)
+    )
