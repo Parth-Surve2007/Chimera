@@ -692,13 +692,11 @@ class LocalModelProvider:
                 '{"type":"message","content":"..."} OR '
                 '{"type":"tool_call","tool":"<exact tool id>","arguments":{...},"invocation_id":"optional"}. '
                 "Use only exact tool IDs and valid arguments from TOOLS. Never invent IDs or results. "
-                "Never echo the latest USER message or repeat a previous ASSISTANT answer. "
-                "A message decision must address the newest request and add useful information or one necessary clarification. "
-                "Before deciding, internally check the user's intent, required preconditions, the best available registered capability, "
-                "the actual evidence from the latest tool result, and whether the next step advances the requested outcome. "
-                "Keep internal reasoning private; return only the required JSON decision. "
-                "If a tool failed or was blocked, read its exact error, do not claim success, and do not repeat the same tool call with identical arguments. "
-                "Use a different registered route only when evidence supports it; otherwise explain the precise blocker. "
+                "Never echo the latest USER message or repeat an earlier ASSISTANT answer. "
+                "Address the newest request with a useful answer or one necessary clarification. "
+                "Check intent, preconditions, the best registered capability, latest tool evidence and the next useful step. "
+                "Keep reasoning private. Respect tool failures: never claim success or repeat identical arguments. "
+                "Choose an alternate registered route only when evidence supports it; otherwise explain the blocker. "
                 "When the user asks for code or an explanation in chat, answer directly as a message containing the code; "
                 "do not invent a python, code, shell, or execution tool. Only call an external action tool when the user explicitly asks "
                 "you to create/edit a file, run something, or interact with an application. You may use agent.todo_write and agent.todo_read "
