@@ -110,52 +110,240 @@ class WindowsUIABackend:
                 try: pending.extend((child, level+1) for child in item.children()[:250])
                 except Exception: pass
         return None
-    def action(self, hwnd: int, runtime_id: str, operation: str, value=None, expected_pid: int | None = None):
+    def action(
+        self,
+        hwnd: int,
+        runtime_id: str,
+        operation: str,
+        value=None,
+        expected_pid: int | None = None,
+        options: dict | None = None,
+    ):
+        """Execute one operation through a freshly resolved UI Automation pattern."""
         item = self._find(hwnd, runtime_id)
         if item is None:
-            return {"status": "failed", "verified": False, "reason": "element reference is stale or inaccessible", "backend": "uia"}
+            return {
+                "status": "failed", "verified": False,
+                "reason": "element reference is stale or inaccessible", "backend": "uia",
+            }
         before = self._info(item, hwnd)
+        options = options or {}
         try:
             element_pid = int(getattr(item.element_info, "process_id", 0) or 0)
             if expected_pid is not None and element_pid != int(expected_pid):
-                return {"status": "blocked", "verified": False, "reason": "UI Automation element belongs to a different process", "backend": "uia", "before": before}
-            if operation in {"read_text", "get_value"}:
-                observed = item.window_text()
+                return {
+                    "status": "blocked", "verified": False,
+                    "reason": "UI Automation element belongs to a different process",
+                    "backend": "uia", "before": before,
+                }
+
+            if operation == "read_text":
+                observed = ""
+                source = "Name"
+                try:
+                    text_range = item.iface_text.DocumentRange
+                    observed = str(text_range.GetText(12000) or "")
+                    source = "TextPattern"
+                except Exception:
+                    pass
                 if not observed:
-                    try: observed = item.iface_value.CurrentValue
-                    except Exception: observed = ""
-                return {"status": "completed", "verified": True, "backend": "uia", "operation": operation, "before": before, "value": observed}
+                    try:
+                        observed = str(item.window_text() or "")
+                        source = "WindowText"
+                    except Exception:
+                        pass
+                if not observed:
+                    try:
+                        observed = str(item.iface_value.CurrentValue or "")
+                        source = "ValuePattern"
+                    except Exception:
+                        pass
+                if not observed:
+                    observed = str(before.get("name") or "")
+                return {
+                    "status": "completed", "verified": True, "backend": "uia",
+                    "operation": operation, "before": before, "value": observed[:12000],
+                    "source": source, "truncated": len(observed) > 12000,
+                }
+
+            if operation == "get_range_value":
+                pattern = item.iface_range_value
+                return {
+                    "status": "completed", "verified": True, "backend": "uia",
+                    "operation": operation, "before": before,
+                    "value": float(pattern.CurrentValue),
+                    "minimum": float(pattern.CurrentMinimum),
+                    "maximum": float(pattern.CurrentMaximum),
+                    "small_change": float(pattern.CurrentSmallChange),
+                    "large_change": float(pattern.CurrentLargeChange),
+                    "read_only": bool(pattern.CurrentIsReadOnly),
+                }
+
+            if operation == "set_range_value":
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "range value must be a finite number", "backend": "uia", "before": before,
+                    }
+                import math
+                numeric = float(value)
+                if not math.isfinite(numeric):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "range value must be a finite number", "backend": "uia", "before": before,
+                    }
+                pattern = item.iface_range_value
+                minimum, maximum = float(pattern.CurrentMinimum), float(pattern.CurrentMaximum)
+                if bool(pattern.CurrentIsReadOnly):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "selected range control is read-only", "backend": "uia", "before": before,
+                    }
+                if numeric < minimum or numeric > maximum:
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": f"range value must be between {minimum} and {maximum}",
+                        "backend": "uia", "before": before,
+                    }
+                pattern.SetValue(numeric)
+                observed = float(pattern.CurrentValue)
+                verified = abs(observed - numeric) <= max(1e-9, abs(numeric) * 1e-9)
+                return {
+                    "status": "completed" if verified else "uncertain",
+                    "verified": verified, "backend": "uia", "operation": operation,
+                    "before": before, "after": self._info(item, hwnd), "value": observed,
+                    "minimum": minimum, "maximum": maximum,
+                }
+
+            if operation == "read_grid":
+                grid = item.iface_grid
+                row_count, column_count = int(grid.CurrentRowCount), int(grid.CurrentColumnCount)
+                max_rows, max_columns = 20, 10
+                rows = []
+                for row_index in range(min(row_count, max_rows)):
+                    row = []
+                    for column_index in range(min(column_count, max_columns)):
+                        cell = grid.GetItem(row_index, column_index)
+                        cell_text = ""
+                        try:
+                            cell_text = str(cell.CurrentName or "")
+                        except Exception:
+                            try:
+                                cell_text = str(cell.CurrentValue or "")
+                            except Exception:
+                                cell_text = ""
+                        row.append(cell_text[:500])
+                    rows.append(row)
+                return {
+                    "status": "completed", "verified": True, "backend": "uia",
+                    "operation": operation, "before": before, "rows": rows,
+                    "row_count": row_count, "column_count": column_count,
+                    "truncated": row_count > max_rows or column_count > max_columns,
+                }
+
             if operation == "invoke_element":
                 item.iface_invoke.Invoke()
-                return {"status": "completed", "verified": False, "verification": "InvokePattern accepted; inspect the resulting UI state", "backend": "uia", "operation": operation, "before": before}
+                return {
+                    "status": "completed", "verified": False,
+                    "verification": "InvokePattern was accepted; inspect a fresh observation to verify the resulting UI state",
+                    "backend": "uia", "operation": operation, "before": before,
+                }
+
             if operation == "set_value":
                 pattern = item.iface_value
                 if bool(pattern.CurrentIsReadOnly):
-                    return {"status": "blocked", "verified": False, "reason": "selected UI Automation control is read-only", "backend": "uia", "before": before}
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "selected UI Automation control is read-only", "backend": "uia", "before": before,
+                    }
                 pattern.SetValue(value)
-                observed = pattern.CurrentValue
+                observed = str(pattern.CurrentValue)
                 verified = observed == value
             elif operation == "toggle":
                 pattern = item.iface_toggle
                 before_state = pattern.CurrentToggleState
                 pattern.Toggle()
-                observed = None
-                verified = pattern.CurrentToggleState != before_state
+                observed = int(pattern.CurrentToggleState)
+                verified = observed != int(before_state)
             elif operation == "select_item":
                 pattern = item.iface_selection_item
                 pattern.Select()
-                observed = None
-                verified = bool(pattern.CurrentIsSelected)
+                observed = bool(pattern.CurrentIsSelected)
+                verified = observed
             elif operation in {"expand", "collapse"}:
                 pattern = item.iface_expand_collapse
                 (pattern.Expand if operation == "expand" else pattern.Collapse)()
-                observed = None
-                verified = int(pattern.CurrentExpandCollapseState) == (1 if operation == "expand" else 0)
+                observed = int(pattern.CurrentExpandCollapseState)
+                verified = observed == (1 if operation == "expand" else 0)
+            elif operation == "scroll":
+                direction = options.get("direction")
+                amount = options.get("amount", "line")
+                count = options.get("count", 1)
+                if direction not in {"up", "down", "left", "right"} or amount not in {"line", "page"}:
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "scroll direction must be up/down/left/right and amount must be line/page",
+                        "backend": "uia", "before": before,
+                    }
+                if type(count) is not int or not 1 <= count <= 5:
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "scroll count must be an integer from 1 to 5",
+                        "backend": "uia", "before": before,
+                    }
+                pattern = item.iface_scroll
+                if direction in {"up", "down"} and not bool(pattern.CurrentVerticallyScrollable):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "element is not vertically scrollable", "backend": "uia", "before": before,
+                    }
+                if direction in {"left", "right"} and not bool(pattern.CurrentHorizontallyScrollable):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "element is not horizontally scrollable", "backend": "uia", "before": before,
+                    }
+                before_position = {
+                    "horizontal": float(pattern.CurrentHorizontalScrollPercent),
+                    "vertical": float(pattern.CurrentVerticalScrollPercent),
+                }
+                item.scroll(direction, amount, count=count, retry_interval=0)
+                after_position = {
+                    "horizontal": float(pattern.CurrentHorizontalScrollPercent),
+                    "vertical": float(pattern.CurrentVerticalScrollPercent),
+                }
+                verified = before_position != after_position
+                return {
+                    "status": "completed", "verified": verified, "backend": "uia",
+                    "operation": operation, "before": before, "after": self._info(item, hwnd),
+                    "scroll_before": before_position, "scroll_after": after_position,
+                    "note": None if verified else "ScrollPattern accepted the request but the reported position did not change; the control may be at a boundary",
+                }
+            elif operation == "scroll_into_view":
+                item.iface_scroll_item.ScrollIntoView()
+                after = self._info(item, hwnd)
+                verified = not bool(after.get("offscreen"))
+                return {
+                    "status": "completed", "verified": verified, "backend": "uia",
+                    "operation": operation, "before": before, "after": after,
+                    "note": None if verified else "ScrollIntoView was accepted; a fresh observation is required to confirm visibility",
+                }
             else:
-                return {"status": "blocked", "verified": False, "reason": f"unsupported UI Automation pattern: {operation}", "backend": "uia", "before": before}
-            return {"status": "completed" if verified else "uncertain", "verified": verified, "backend": "uia", "operation": operation, "before": before, "after": self._info(item, hwnd), "value": observed}
+                return {
+                    "status": "blocked", "verified": False,
+                    "reason": f"unsupported UI Automation pattern: {operation}",
+                    "backend": "uia", "before": before,
+                }
+
+            return {
+                "status": "completed" if verified else "uncertain",
+                "verified": verified, "backend": "uia", "operation": operation,
+                "before": before, "after": self._info(item, hwnd), "value": observed,
+            }
         except Exception as exc:
-            return {"status": "failed", "verified": False, "backend": "uia", "reason": str(exc), "before": before}
+            return {
+                "status": "failed", "verified": False, "backend": "uia",
+                "reason": str(exc), "before": before,
+            }
 
 
 
@@ -255,16 +443,32 @@ class ComputerSessionManager:
 
     @staticmethod
     def _available_actions(element):
-        patterns = " ".join(element.get("patterns", [])).lower()
+        patterns = " ".join(str(value) for value in element.get("patterns", [])).casefold()
         actions = ["read_text"]
-        if "invoke" in patterns: actions.append("invoke_element")
-        if "value" in patterns: actions.append("set_value")
-        if "toggle" in patterns: actions.append("toggle_element")
-        if "selection" in patterns: actions.append("select_element")
-        if "expand" in patterns: actions.extend(["expand_element", "collapse_element"])
+        if "invoke" in patterns:
+            actions.append("invoke_element")
+        if "value" in patterns:
+            actions.append("set_value")
+        if "rangevalue" in patterns:
+            actions.extend(["get_range_value", "set_range_value"])
+        if "toggle" in patterns:
+            actions.append("toggle_element")
+        if "selectionitem" in patterns:
+            actions.append("select_element")
+        if "expandcollapse" in patterns:
+            actions.extend(["expand_element", "collapse_element"])
+        if "grid" in patterns:
+            actions.append("read_grid")
+        if "scrollitem" in patterns:
+            actions.append("scroll_into_view")
+        if "scroll" in patterns:
+            actions.append("scroll_element")
         return actions
 
-    def act_reference(self, session_id: str, reference_id: str, operation: str, value=None, approved=False):
+    def act_reference(
+        self, session_id: str, reference_id: str, operation: str,
+        value=None, approved=False, options: dict | None = None,
+    ):
         reference = self.references.get(reference_id)
         if not reference or reference.session_id != session_id:
             return {"status": "failed", "verified": False, "reason": "unknown or cross-session reference"}
@@ -273,8 +477,58 @@ class ComputerSessionManager:
             "select_element": "select_item",
             "expand_element": "expand",
             "collapse_element": "collapse",
+            "scroll_element": "scroll",
         }
-        return self.act(reference, aliases.get(operation, operation), value, approved)
+        return self.act(reference, aliases.get(operation, operation), value, approved, options)
+
+    def act(
+        self,
+        reference: ElementReference,
+        operation: str,
+        value=None,
+        approved: bool = False,
+        options: dict | None = None,
+    ) -> dict:
+        """Validate exact process/window/reference and govern UIA side effects."""
+        read_only = {"read_text", "get_range_value", "read_grid"}
+        state_changing = {
+            "invoke_element", "set_value", "set_range_value", "toggle",
+            "select_item", "expand", "collapse", "scroll", "scroll_into_view",
+        }
+        if operation not in read_only | state_changing:
+            return {"status": "blocked", "verified": False, "reason": f"unsupported desktop action: {operation}"}
+        try:
+            self.validate_reference(reference)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            return {"status": "blocked", "verified": False, "reason": str(exc), "backend": "uia"}
+        if operation in state_changing and not approved:
+            return {
+                "status": "awaiting_approval", "verified": False, "backend": "uia",
+                "permission": "computer.input", "operation": operation,
+                "reference_id": reference.reference_id,
+                "reason": "operator approval is required before changing application state",
+            }
+        if self.uia is None:
+            return {
+                "status": "blocked", "verified": False, "backend": "uia",
+                "reason": "UI Automation is unavailable; no input or Win32 mutation fallback is enabled",
+            }
+        identity = self.sessions.get(reference.session_id)
+        if identity is None:
+            return {"status": "blocked", "verified": False, "reason": "authorized application session no longer exists"}
+        try:
+            result = self.uia.action(
+                reference.hwnd, reference.runtime_id, operation, value,
+                expected_pid=identity.pid, options=options or {},
+            )
+        except Exception as exc:
+            return {"status": "failed", "verified": False, "backend": "uia", "reason": str(exc)}
+        return {
+            **result,
+            "session_id": reference.session_id,
+            "reference_id": reference.reference_id,
+            "hwnd": reference.hwnd,
+        }
 
     def validate_reference(self, reference: ElementReference) -> None:
         generation, observation = self.observations.get(reference.session_id, (0, None))
