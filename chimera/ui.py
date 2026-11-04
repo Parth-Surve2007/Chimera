@@ -1851,7 +1851,8 @@ class MainWindow:
         self.workspace_path = validate_workspace_path(default_workspace_root())
         # The folder-picker workflow has been retired. Migrate older threads
         # from their former project subfolder to the default system-drive scope.
-        if Path(session["workspace"]).expanduser().resolve() != self.workspace_path if session.get("workspace") else True:
+        previous_workspace = session.get("workspace")
+        if not previous_workspace or Path(previous_workspace).expanduser().resolve() != self.workspace_path:
             self.agent_store.set_workspace(session_id, self.workspace_path)
         self.conversation_messages = [(m.role, m.content) for m in self.agent_store.messages(session_id) if m.role in {"user", "assistant"}]
         self.pending_agent_approval = self.agent_store.pending_tool(session_id)
