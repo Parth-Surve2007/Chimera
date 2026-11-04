@@ -60,9 +60,10 @@ class Win32BackendDescriptor:
         self.manager = manager
 
     def describe(self):
+        available = os.name == "nt" and self.manager is not None
         return InteractionBackendInfo(
-            "win32", True,
-            ("inspect_controls", "screenshot"),
+            "win32", available,
+            ("inspect_controls", "screenshot") if available else (),
             ("window_identity", "window_geometry"),
             ("native_windows",),
             ("read-only observation fallback; no keyboard or mouse injection",),
@@ -77,13 +78,18 @@ class GroundedInputBackend:
         self.manager = manager
 
     def describe(self):
-        available = os.name == "nt"
+        available = bool(
+            os.name == "nt"
+            and self.manager is not None
+            and getattr(self.manager, "uia", None) is not None
+            and getattr(self.manager, "visual_input", None) is not None
+        )
         return InteractionBackendInfo(
             "grounded_input", available,
             ("visual_action",) if available else (),
-            ("fresh_uia_element_rectangle", "exact_process_identity", "foreground_pid_guard", "post_action_pixel_diff") if available else (),
+            ("fresh_uia_element_rectangle", "exact_process_identity", "foreground_hwnd_pid_guard", "post_action_pixel_diff") if available else (),
             ("native_windows",),
-            () if available else ("Windows desktop input is unavailable on this platform",),
+            () if available else ("a live Windows UIA provider and scoped input backend are required",),
             ("computer.observe", "computer.input"),
             ("foreground_process_match", "input_packet_guard", "before_after_screenshot_hash"),
         )
