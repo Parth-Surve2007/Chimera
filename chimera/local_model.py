@@ -279,7 +279,7 @@ def _plain_completion(raw: str) -> str:
 
 def _normalized_agent_text(value: str) -> str:
     """Normalize a short text response for exact/near-exact prompt comparison."""
-    return " ".join(re.sub(r"[^\\w\\s]", " ", str(value).casefold()).split())
+    return " ".join(re.sub(r"[^\w\s]", " ", str(value).casefold()).split())
 
 
 def _is_unhelpful_prompt_echo(response: str, messages) -> bool:
@@ -297,7 +297,7 @@ def _is_unhelpful_prompt_echo(response: str, messages) -> bool:
     answer_norm = _normalized_agent_text(answer)
     if len(request_norm) < 24 or not answer_norm:
         return False
-    if re.match(r"^(?:repeat|quote|echo|copy|transcribe)\\b", request.casefold()):
+    if re.match(r"^(?:repeat|quote|echo|copy|transcribe)\b", request.casefold()):
         return False
     if request_norm == answer_norm:
         return True
@@ -578,12 +578,6 @@ class LocalModelProvider:
             cancel_event=cancel_event,
             on_delta=on_delta,
         )
-        parsed, metrics = self.structured_with_metrics(
-            prompt,
-            json_schema=AGENT_DECISION_SCHEMA,
-            cancel_event=cancel_event,
-            on_delta=on_delta,
-        )
         if (
             isinstance(parsed, dict)
             and parsed.get("type") == "message"
@@ -591,7 +585,7 @@ class LocalModelProvider:
         ):
             retry_prompt = (
                 prompt
-                + "\\n\\nRECOVERY: Your previous candidate only repeated the user's task and is invalid. "
+                + "\n\nRECOVERY: Your previous candidate only repeated the user's task and is invalid. "
                 "Re-evaluate the request from scratch. Use a registered tool when an action is possible. "
                 "For opening an application, use computer.list_applications and computer.launch if present. "
                 "If a capability or permission is missing, state the exact blocker in one helpful sentence. "
