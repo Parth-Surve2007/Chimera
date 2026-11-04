@@ -45,7 +45,15 @@ class FakeLocator:
         return self._editable
 
     def evaluate(self, _script):
-        return {"tag": "input", "type": self._type, "disabled": not self._enabled, "readOnly": False}
+        return {
+            "tag": "input", "type": self._type, "role": "",
+            "disabled": not self._enabled, "readOnly": False,
+            "value": self._value, "isContentEditable": False,
+        }
+
+    def select_option(self, value, **_kwargs):
+        self.selected = [value]
+        return self.selected
 
     def click(self, **_kwargs):
         self.clicked += 1
@@ -392,3 +400,50 @@ def test_browser_discovery_does_not_mark_missing_executable_as_installed(tmp_pat
     assert connector.manifest.is_installed is False
     assert connector.manifest.installation_path is None
     assert connector._browser_paths == {}
+
+
+
+def test_browser_select_option_requires_approval_and_verifies_selected_value(tmp_path):
+    connector, page = make_connector(tmp_path)
+    dropdown = FakeLocator()
+    dropdown.evaluate = lambda _script: {
+        "tag": "select", "type": "", "role": "",
+        "disabled": False, "readOnly": False,
+    }
+    page.locators[("label", "Country")] = dropdown
+    arguments = {
+        "page_index": 0, "expected_url": page.url,
+        "selector_kind": "label", "selector": "Country",
+        "value": "IN",
+    }
+    with connector.execution_context("session-1", tmp_path):
+        pending = connector.execute_action("select_option", arguments, approved=False)
+        assert pending["status"] == "awaiting_approval"
+        assert not hasattr(dropdown, "selected")
+        completed = connector.execute_action("select_option", arguments, approved=True)
+
+    assert completed["status"] == "completed"
+    assert completed["verified"] is True
+    assert dropdown.selected == ["IN"]
+
+
+def test_browser_fill_rejects_file_and_checkbox_controls(tmp_path):
+    connector, page = make_connector(tmp_path)
+    for field_type in ("file", "checkbox", "radio", "hidden"):
+        field = FakeLocator(field_type=field_type)
+        page.locators[("label", field_type)] = field
+        arguments = {
+            "page_index": 0, "expected_url": page.url,
+            "selector_kind": "label", "selector": field_type,
+            "value": "not-an-upload",
+        }
+        with connector.execution_context("session-1", tmp_path):
+            with pytest.raises(ValueError, match="plain-text"):
+                connector.execute_action("fill", arguments, approved=True)
+
+
+def test_browser_manifest_exposes_select_option_as_approved_input():
+    connector = BrowserConnector()
+    action = next(item for item in connector.manifest.actions if item.action_id == "select_option")
+    assert action.permission == "browser.input"
+    assert action.requires_approval is True
