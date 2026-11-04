@@ -1522,6 +1522,8 @@ class MainWindow:
     def _show_overview(self, e=None):
         self.active_page = "chat"
         self.current_view = "chat"
+        if getattr(self, "workspace_path", None) is None:
+            self.workspace_path = validate_workspace_path(default_workspace_root())
         session = self.agent_store.session(self.agent_session_id) or {}
         session_mode = session.get("mode", "plan")
         session_title = self._session_title(self.agent_session_id)
