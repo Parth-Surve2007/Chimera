@@ -681,7 +681,8 @@ class LocalModelProvider:
             "computer.launch": 4,
             "computer.inspect_window": 4,
             "computer.inspect_elements": 5,
-            "computer.read_text": 6,
+            "computer.visual_action": 6,
+            "computer.read_text": 7,
             "computer.read_grid": 7,
             "computer.get_range_value": 8,
             "computer.inspect_pattern_support": 9,
@@ -776,10 +777,15 @@ class LocalModelProvider:
                 "Use computer.list_installed_applications to discover installed Start-menu apps, including packaged apps, "
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
-                "Never guess an application ID. Launch requires approval. After launch, request exact "
-                "app authorization in Applications before interacting with its controls. Use the fresh UI Automation element references and the actions reported for each element. " 
+                "Never guess an application ID. Launch requires approval. After computer.launch, inspect the actual tool result. "
+                "If it returns control_authorized=true and a computer_session_id, the exact launch-observed app windows are already authorized for this conversation: immediately inspect them using computer.inspect_window or computer.inspect_elements. "
+                "Do not ask the operator to authorize again in Applications in that case. If control_authorized is false or absent, do not interact; explain the exact authorization blocker and direct the operator to Applications. Never bypass this boundary. "
+                "Use fresh UI Automation element references and the actions reported for each element. "
                 "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
-                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. " 
+                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. "
+                "For custom-rendered drawing surfaces such as Paint, first call computer.inspect_elements and select a visible, enabled, canvas-like element with a real bounding rectangle (prefer a large Pane, Custom, Document or Canvas surface; never use the title bar or whole application window when a child canvas is exposed). Use its fresh reference_id. "
+                "For one connected pen path use action=stroke with 2-64 normalized [x,y] points. For a drawing with separate lines/shapes use action=multi_stroke with 1-16 separate paths, each 2-64 points and at most 256 points total; coordinates are normalized inside that selected element, from 0.02 to 0.98. Each path lifts the pen before the next, and the whole drawing needs one exact operator approval. "
+                "Keep the picture inside the canvas with reasonable margins. After the action, inspect a fresh observation and require verified=true with a nonzero changed_fraction before reporting that pixels changed; this proves a visual change, not semantic correctness. If target selection or pixel evidence is unavailable, stop honestly rather than claiming the drawing is done. "
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
