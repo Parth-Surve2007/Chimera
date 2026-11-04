@@ -679,6 +679,9 @@ def test_visual_action_manager_requires_fresh_target_and_operator_approval(tmp_p
 
     fake_uia = VisualUIA()
     fake_input = VisualInput()
+    manager.backend.window_rect = lambda _hwnd: {
+        "left": 0, "top": 0, "right": 800, "bottom": 800,
+    }
     manager.uia = fake_uia
     manager.visual_input = fake_input
     options = {
@@ -725,6 +728,9 @@ def test_visual_action_blocks_noneditable_text_targets(tmp_path, monkeypatch):
         def _native(self):
             raise AssertionError("non-editable target must be rejected before focus or input")
 
+    manager.backend.window_rect = lambda _hwnd: {
+        "left": 0, "top": 0, "right": 800, "bottom": 800,
+    }
     manager.uia = VisualUIA()
     manager.visual_input = VisualInput()
     result = manager.act_reference(
