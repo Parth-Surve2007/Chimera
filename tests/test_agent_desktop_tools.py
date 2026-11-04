@@ -1107,3 +1107,252 @@ def test_launch_for_an_already_authorized_app_reuses_session_without_approval(tm
         and event.payload.get("tool") == "computer.launch"
         for event in runtime.store.events(session_id)
     )
+
+
+
+def test_notepad_launch_handoff_types_and_verifies_text_in_observed_editor(tmp_path, monkeypatch):
+    import json
+    import chimera.agent_runtime as agent_runtime_module
+
+    packaged_application = "appsfolder:Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+
+    class TextEntryProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+            self.launch_count = 0
+            self.saw_initial_editor = False
+            self.saw_verified_text = False
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            ids = {item["id"] for item in catalog["tools"]}
+            tool_payloads = [
+                json.loads(item.content)
+                for item in messages
+                if getattr(item, "role", None) == "tool"
+            ]
+            if self.calls == 1:
+                assert "computer.launch" in ids
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.launch",
+                    "arguments": {"executable": "Notepad"},
+                    "invocation_id": "launch-notepad-for-text",
+                }
+            if self.calls == 2:
+                launch = next(item for item in reversed(tool_payloads) if item.get("tool") == "computer.launch")
+                observation = launch["result"]["initial_observation"]
+                self.saw_initial_editor = (
+                    launch["result"]["control_authorized"] is True
+                    and observation["status"] == "completed"
+                    and observation["elements"][0]["reference_id"] == "notepad-editor-initial"
+                )
+                assert self.saw_initial_editor
+                assert "computer.visual_action" in ids
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.visual_action",
+                    "arguments": {
+                        "session_id": "notepad-authorized-session",
+                        "reference_id": "notepad-editor-initial",
+                        "action": "type_text",
+                        "text": "Hello World",
+                    },
+                    "invocation_id": "type-hello-world",
+                }
+            if self.calls == 3:
+                assert any(
+                    item.get("tool") == "computer.visual_action"
+                    and item.get("status") == "completed"
+                    for item in tool_payloads
+                )
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.inspect_elements",
+                    "arguments": {
+                        "session_id": "notepad-authorized-session",
+                        "hwnd": 77,
+                        "depth": 4,
+                        "limit": 100,
+                    },
+                    "invocation_id": "verify-editor-after-type",
+                }
+            if self.calls == 4:
+                observation_result = next(
+                    item for item in reversed(tool_payloads)
+                    if item.get("tool") == "computer.inspect_elements"
+                )
+                elements = observation_result["result"]["items"]["elements"]
+                editor = next(item for item in elements if item["reference_id"] == "notepad-editor-after")
+                assert editor["control_type"] == "Document"
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.read_text",
+                    "arguments": {
+                        "session_id": "notepad-authorized-session",
+                        "reference_id": editor["reference_id"],
+                    },
+                    "invocation_id": "read-back-hello-world",
+                }
+            read_result = next(
+                item for item in reversed(tool_payloads)
+                if item.get("tool") == "computer.read_text"
+            )
+            self.saw_verified_text = (
+                read_result["status"] == "completed"
+                and read_result["result"]["items"]["value"] == "Hello World"
+            )
+            assert self.saw_verified_text
+            return {
+                "type": "message",
+                "content": "Typed Hello World into Notepad and verified the text with a fresh UI Automation read-back.",
+            }
+
+    def fake_launch(self, executable, approved=False):
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "application": packaged_application,
+                "requested_application": executable,
+                "display_name": "Notepad",
+                "launch_kind": "appsfolder",
+                "permission": "computer.launch",
+            }
+        return {
+            "status": "completed",
+            "pid": 456,
+            "spawned_pid": 111,
+            "executable": None,
+            "application": packaged_application,
+            "display_name": "Notepad",
+            "launch_kind": "appsfolder",
+            "verification": "visible_window_process_match",
+            "windows": [{"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"}],
+        }
+
+    monkeypatch.setattr(agent_runtime_module.WindowsComputerUse, "launch", fake_launch)
+    provider = TextEntryProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    identity = SimpleNamespace(
+        session_id="notepad-authorized-session",
+        owner_session_id=session_id,
+        pid=456,
+        executable=r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad\Notepad.exe",
+        process_create_time=1.0,
+        authorized_hwnds=(77,),
+    )
+    monkeypatch.setattr(
+        runtime.computer, "create",
+        lambda pid, executable=None, owner_session_id=None, authorized_windows=None, expected_application_name=None: (
+            runtime.computer.sessions.setdefault(identity.session_id, identity) or identity
+        ),
+    )
+    monkeypatch.setattr(
+        runtime.computer, "_identity_is_current",
+        lambda current: current is identity,
+    )
+
+    observe_calls = []
+
+    def fake_observe(app_session_id, hwnd=None, depth=3, limit=250):
+        observe_calls.append((app_session_id, hwnd, depth, limit))
+        generation = len(observe_calls)
+        reference_id = (
+            "notepad-editor-initial" if generation == 1
+            else "notepad-editor-after"
+        )
+        return SimpleNamespace(
+            session_id=app_session_id,
+            observation_id=f"notepad-observation-{generation}",
+            generation=generation,
+            created_at=1.0,
+            backend="uia",
+            application={"profile": {"display_name": "Windows Notepad"}},
+            windows=[{"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"}],
+            elements=[{
+                "reference_id": reference_id,
+                "session_id": app_session_id,
+                "runtime_id": f"runtime-{generation}",
+                "name": "Text Editor",
+                "automation_id": "TextEditor",
+                "class_name": "RichEditD2DPT",
+                "control_type": "Document",
+                "process_id": 456,
+                "rectangle": {"left": 20, "top": 80, "right": 900, "bottom": 650},
+                "enabled": True,
+                "offscreen": False,
+                "focused": True,
+                "patterns": ["Text"],
+                "available_actions": ["read_text", "visual_action"],
+                "observation_generation": generation,
+            }],
+            limitation=None,
+        )
+
+    monkeypatch.setattr(runtime.computer, "observe", fake_observe)
+
+    action_calls = []
+
+    def fake_act_reference(app_session_id, reference_id, operation, value=None, approved=False, options=None):
+        action_calls.append({
+            "session_id": app_session_id,
+            "reference_id": reference_id,
+            "operation": operation,
+            "value": value,
+            "approved": approved,
+            "options": options or {},
+        })
+        if operation == "visual_action":
+            assert approved is True
+            assert (options or {}).get("action") == "type_text"
+            assert (options or {}).get("text") == "Hello World"
+            return {
+                "status": "completed",
+                "accepted": True,
+                "verified": True,
+                "backend": "scoped_win32_input",
+                "action": "type_text",
+                "events_sent": 22,
+                "target_rect": {"left": 20, "top": 80, "right": 900, "bottom": 650},
+            }
+        if operation == "read_text":
+            assert reference_id == "notepad-editor-after"
+            return {
+                "status": "completed",
+                "verified": True,
+                "backend": "uia",
+                "operation": "read_text",
+                "value": "Hello World",
+                "source": "TextPattern",
+            }
+        raise AssertionError(f"unexpected UIA operation: {operation}")
+
+    monkeypatch.setattr(runtime.computer, "act_reference", fake_act_reference)
+
+    pending_launch = runtime.send(
+        session_id,
+        "Open Notepad and type Hello World into it. Verify the text.",
+    )
+    assert pending_launch["status"] == "awaiting_approval"
+    assert pending_launch["tool"] == "computer.launch"
+
+    pending_typing = runtime.approve_pending(session_id, True)
+    assert pending_typing["status"] == "awaiting_approval"
+    assert pending_typing["tool"] == "computer.visual_action"
+    assert pending_typing["arguments"]["action"] == "type_text"
+
+    completed = runtime.approve_pending(session_id, True)
+
+    assert completed["status"] == "completed"
+    assert "verified the text" in completed["message"].content
+    assert provider.calls == 5
+    assert provider.saw_initial_editor is True
+    assert provider.saw_verified_text is True
+    assert len([call for call in action_calls if call["operation"] == "visual_action"]) == 1
+    assert len([call for call in action_calls if call["operation"] == "read_text"]) == 1
+    assert observe_calls[0][2:] == (4, 160)
+    assert runtime.store.session(session_id)["state"] == "idle"
