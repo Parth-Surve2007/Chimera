@@ -567,11 +567,12 @@ class ComputerSessionManager:
         if type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError("UI Automation element limit must be an integer from 1 to 500")
 
+        expected_executable = str(Path(identity.executable).expanduser().resolve()).casefold()
         applications = [
             item for item in self.backend.list_applications()
             if item["pid"] == identity.pid
             and bool(item.get("executable"))
-            and str(Path(item.get("executable")).resolve()).casefold() == identity.executable.casefold()
+            and str(Path(item.get("executable")).expanduser().resolve()).casefold() == expected_executable
         ]
         if not applications:
             raise RuntimeError("authorized application process is no longer visible")
