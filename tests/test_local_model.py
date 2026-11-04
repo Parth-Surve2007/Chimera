@@ -318,8 +318,9 @@ def test_agent_echo_guard_retries_and_prioritizes_desktop_tools(tmp_path):
     outputs = iter([
         json.dumps({"type": "message", "content": request}),
         json.dumps({
-            "type": "message",
-            "content": "Word needs launch approval first. After it opens, authorize its exact window in Applications before UI interaction.",
+            "type": "tool_call",
+            "tool": "computer.launch",
+            "arguments": {"executable": "Word"},
         }),
     ])
 
@@ -340,15 +341,14 @@ def test_agent_echo_guard_retries_and_prioritizes_desktop_tools(tmp_path):
         session={"mode": "build", "workspace": str(tmp_path)},
     )
 
-    assert decision["type"] == "message"
-    assert "approval" in decision["content"]
+    assert decision["type"] == "tool_call"
+    assert decision["tool"] == "computer.launch"
+    assert decision["arguments"] == {"executable": "Word"}
     assert len(prompts) == 2
-    tool_ids = json.loads(
-        prompts[0].split("TOOLS: ", 1)[1].split("\\nAUTHORIZED_APPLICATIONS:", 1)[0]
-    )["tools"]
-    assert [item["id"] for item in tool_ids[:3]] == [
-        "computer.list_applications", "computer.launch", "workspace.list_files"
-    ]
+    app_list_position = prompts[0].index('"id":"computer.list_applications"')
+    app_launch_position = prompts[0].index('"id":"computer.launch"')
+    workspace_list_position = prompts[0].index('"id":"workspace.list_files"')
+    assert app_list_position < app_launch_position < workspace_list_position
     assert "Never echo" in prompts[0]
     assert "RECOVERY" in prompts[1]
 
