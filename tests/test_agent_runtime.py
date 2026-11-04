@@ -203,3 +203,14 @@ def test_word_launch_is_resolved_before_exact_approval_is_persisted(tmp_path, mo
     assert result["status"] == "awaiting_approval"
     pending = store.pending_tool(session_id)
     assert pending["arguments"]["executable"] == resolved
+
+
+
+def test_invalid_tool_identifier_error_includes_the_returned_value():
+    try:
+        AgentRuntime._decision({"type": "tool_call", "tool": "python", "arguments": {}})
+    except ValueError as exc:
+        assert "'python'" in str(exc)
+        assert "registered workspace.*, computer.*, or application.* ID" in str(exc)
+    else:
+        raise AssertionError("an invalid tool identifier was accepted")
