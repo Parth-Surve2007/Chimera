@@ -288,8 +288,8 @@ The first launch creates the local Chimera data directory. Source runs use .chim
 1. Open **Model Bay**.
 2. Select your GGUF model.
 3. Select the matching llama-server.exe for persistent inference, or explicitly configure llama-cli.exe for one-shot mode.
-4. Use **APPLY HIGH-COMPUTE PRESET** as a starting point: 8K context, 768 output tokens, 8 CPU threads, and adaptive GPU offload. Lower the context or output budget if your machine runs out of memory.
-5. Save the configuration and load the model. The llama-server must restart to apply changed settings.
+4. Start with **APPLY LOW-MEMORY PRESET**: 4K context, 384 output tokens, 4 CPU threads, and adaptive GPU offload. This is the safer starting point for 16 GB RAM systems. Use **APPLY HIGH-COMPUTE PRESET** only when the machine has enough free memory and the larger context materially helps your tasks.
+5. Save the configuration and load the model. The llama-server must restart to apply changed settings. Existing saved user budgets are preserved; changing presets is an explicit operator choice.
 
 Persistent llama-server inference uses the GGUF's native chat template and schema-constrained JSON decisions when supported by the selected model and runtime. Failed actions are fed back as role-separated observations, and exact repeated failed tool calls are stopped. Runtime structure can improve execution discipline, but it cannot make a small model reason beyond its underlying capabilities.
 
