@@ -408,19 +408,18 @@ class WindowsComputerUse:
                     os.path.normcase(os.path.normpath(str(observed_path))).casefold()
                     if observed_path else ""
                 )
-                process_match = bool(
-                    (expected_path and normalized == expected_path)
-                    or (image_name and image_name in expected_process_names)
-                )
+                executable_match = bool(expected_path and normalized == expected_path)
+                process_name_match = bool(image_name and image_name in expected_process_names)
+                process_match = executable_match or process_name_match
                 title_match = bool(
                     normalized_display_name
                     and normalized_display_name in self._normalise_app_name(item.title)
                 )
                 if process_match or title_match:
-                    matched.append((item, process_match))
+                    matched.append((item, executable_match, process_match))
             if matched:
-                matched.sort(key=lambda value: not value[1])
-                first, process_match = matched[0]
+                matched.sort(key=lambda value: not value[2])
+                first, executable_match, process_match = matched[0]
                 return {
                     "status": "completed",
                     "pid": first.pid,
@@ -429,9 +428,10 @@ class WindowsComputerUse:
                     "application": application,
                     "display_name": display_name,
                     "launch_kind": launch_kind,
-                    "windows": [asdict(item) for item, _ in matched[:5]],
+                    "windows": [asdict(item) for item, _, _ in matched[:5]],
                     "verification": (
-                        "visible_window_process_match" if process_match
+                        "visible_window_executable_match" if executable_match
+                        else "visible_window_process_match" if process_match
                         else "visible_window_title_match"
                     ),
                 }
