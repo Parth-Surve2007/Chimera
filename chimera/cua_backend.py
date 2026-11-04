@@ -48,6 +48,29 @@ def _get(value: Any, name: str, default=None):
     return getattr(value, name, default)
 
 
+def _tool_result_text(value: Any) -> str:
+    """Extract readable text from the CUA SDK MCP ToolResult contract."""
+    direct = _get(value, "text")
+    if isinstance(direct, str) and direct:
+        return direct
+    content = _get(value, "content", []) or []
+    pieces = []
+    for item in content:
+        text_value = _get(item, "text")
+        if isinstance(text_value, str) and text_value:
+            pieces.append(text_value)
+        elif isinstance(item, str) and item:
+            pieces.append(item)
+    return "\\n".join(pieces)
+
+
+def _tool_result_structured(value: Any) -> dict:
+    structured = _get(value, "structured_content")
+    if isinstance(structured, dict):
+        return structured
+    return {}
+
+
 def _enum_name(value: Any) -> str | None:
     name = getattr(value, "name", None)
     if isinstance(name, str):
@@ -861,24 +884,49 @@ class CuaDriverBackend:
                             modifier=None,
                         ),
                     )
-                    drag_error = bool(_get(drag_result, "is_error", False))
-                    drag_text = str(_get(drag_result, "text") or "")
+                    drag_error = _get(drag_result, "is_error") is True
+                    drag_text = _tool_result_text(drag_result)
+                    drag_structured = _tool_result_structured(drag_result)
+                    drag_code = _find_code(drag_structured)
+                    drag_effect = str(drag_structured.get("effect") or "").casefold()
+                    background_refusal = drag_code == "background_unavailable"
+                    refused = drag_error or background_refusal or drag_effect == "refused"
                     segment_results.append({
                         "stroke_index": stroke_index,
                         "segment_index": point_index,
                         "is_error": drag_error,
+                        "accepted": not refused,
+                        "error_code": drag_code,
+                        "effect": drag_effect or None,
                         "text": drag_text[:500],
                     })
-                    if drag_error or "background_unavailable" in drag_text.casefold():
+                    if refused:
                         with self._lock:
                             self._snapshots.pop(current_ref, None)
+                        accepted_segments = sum(
+                            1 for item in segment_results if item.get("accepted")
+                        )
+                        reason = (
+                            drag_text
+                            or str(drag_structured.get("detail") or "")
+                            or str(drag_structured.get("message") or "")
+                            or "Cua Driver refused a background drag segment"
+                        )
                         return {
-                            "status": "background_unavailable" if "background_unavailable" in drag_text.casefold() else "partial",
+                            "status": (
+                                "background_unavailable"
+                                if background_refusal and accepted_segments == 0
+                                else "partial" if accepted_segments else "failed"
+                            ),
                             "verified": False,
-                            "segments_sent": len(segment_results),
-                            "reason": drag_text[:1000] or "Cua Driver refused a background drag segment",
+                            "semantic_verified": False,
+                            "accepted_segments": accepted_segments,
+                            "attempted_segments": len(segment_results),
+                            "driver_error_code": drag_code,
+                            "driver_effect": drag_effect or None,
+                            "reason": reason[:1000],
                             "segment_results": segment_results[-12:],
-                            "note": "No foreground drag was attempted. Do not retry blindly; inspect the current window first.",
+                            "note": "The refused segment was not replayed. No foreground drag was attempted; inspect the exact current window before deciding on another action.",
                         }
 
                     # Snapshot after every drag. Tokens are refreshed and the
