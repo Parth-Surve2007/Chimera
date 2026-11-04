@@ -474,3 +474,17 @@ def test_computer_session_manager_loads_operator_profiles_from_configured_store(
     matched = manager.application_profiles.match("C:/Apps/paintlike.exe", [])
     assert matched["profile_id"] == "custom.paintlike"
     assert manager.profile_store_error is None
+
+
+def test_custom_profile_full_executable_path_is_normalized_to_basename(tmp_path):
+    from chimera.computer_runtime import DesktopApplicationProfileRegistry
+
+    registry = DesktopApplicationProfileRegistry([{
+        "profile_id": "custom.fullpath",
+        "version": 1,
+        "display_name": "Full Path Match",
+        "match": {"executable": r"C:\\Program Files\\Studio\\editor.exe"},
+        "target_hints": ["Prefer the editor document."],
+    }])
+    matched = registry.match("C:/Program Files/Studio/editor.exe", [])
+    assert matched["profile_id"] == "custom.fullpath"
