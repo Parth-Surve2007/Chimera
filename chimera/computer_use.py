@@ -224,7 +224,7 @@ class WindowsComputerUse:
                 if not observed_path:
                     continue
                 normalized = os.path.normcase(os.path.normpath(str(observed_path))).casefold()
-                image_name = str(observed_path).replace("\\\\", "/").rsplit("/", 1)[-1].casefold()
+                image_name = str(observed_path).replace("\\", "/").rsplit("/", 1)[-1].casefold()
                 if normalized == expected_path or (
                     expected_name in known_app_images and image_name == expected_name
                 ):
