@@ -78,7 +78,7 @@ class WorkspaceTools:
             child_dirs = []
             for entry in entries:
                 try:
-                    if entry.is_symlink():
+                    if entry.is_symlink() or getattr(os.path, "isjunction", lambda _path: False)(entry.path):
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         if recursive and visited_dirs + len(pending) + len(child_dirs) < MAX_SCAN_DIRS:
