@@ -141,7 +141,7 @@ class WorkspaceTools:
                 with target.open("x", encoding="utf-8", newline="") as stream:
                     stream.write(content)
                 return OperationResult(operation_id, "completed", {
-                    "path": str(target.relative_to(self.workspace)),
+                    "path": target.relative_to(self.workspace).as_posix(),
                     "bytes": len(content.encode("utf-8")),
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                 })
