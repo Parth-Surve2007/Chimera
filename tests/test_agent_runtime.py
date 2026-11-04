@@ -586,3 +586,83 @@ def test_malformed_tool_result_envelope_gets_one_safe_format_repair(tmp_path):
     assert "no action was executed" in provider.repair_prompt
     assert not (tmp_path / "claimed.txt").exists()
     assert not store.pending_tool(session_id)
+
+
+
+def test_approved_skills_are_discovered_and_loaded_on_demand(tmp_path):
+    from chimera.learning import ProposedSkill
+
+    class SkillProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self, skill_id):
+            self.skill_id = skill_id
+            self.calls = 0
+            self.catalogs = []
+
+        def decide(self, messages, catalog, session=None):
+            self.catalogs.append(catalog)
+            self.calls += 1
+            if self.calls == 1:
+                return {"type": "tool_call", "tool": "agent.skill_list", "arguments": {}}
+            if self.calls == 2:
+                return {
+                    "type": "tool_call",
+                    "tool": "agent.skill_read",
+                    "arguments": {"skill_id": self.skill_id},
+                }
+            return {"type": "message", "content": "I loaded the approved procedure and will verify each step."}
+
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    provider = SkillProvider("skill_verified_notepad_export")
+    runtime = AgentRuntime(store, provider)
+    approved = ProposedSkill(
+        skill_id=provider.skill_id,
+        name="Verified Notepad export",
+        description="Read a Notepad document and create a verified PDF.",
+        version="1.0.0",
+        source_session_id="prior-session",
+        required_permissions=["computer.observe", "workspace.write"],
+        parameters_schema={"desktop_relative_path": "string"},
+        reusable_steps=[
+            {
+                "action": "workspace.create_document",
+                "sanitized_arguments": {"path": "Desktop/Report.pdf", "content": "<source_text>"},
+            }
+        ],
+        expected_outputs=["valid PDF", "extracted text matches source"],
+        status="proposed",
+    )
+    proposed = ProposedSkill(
+        skill_id="skill_unapproved",
+        name="Unapproved procedure",
+        description="Must not enter the agent context.",
+        version="1.0.0",
+        source_session_id="prior-session",
+        required_permissions=[],
+        parameters_schema={},
+        reusable_steps=[],
+        expected_outputs=[],
+        status="proposed",
+    )
+    runtime.skill_store.save(approved)
+    runtime.skill_store.save(proposed)
+    assert runtime.skill_store.approve(approved.skill_id)
+
+    session_id = runtime.create_session(tmp_path, mode="build")
+    result = runtime.send(session_id, "Create a PDF from the current Notepad document.")
+    assert result["status"] == "completed"
+
+    first_tool_ids = {item["id"] for item in provider.catalogs[0]["tools"]}
+    assert {"agent.skill_list", "agent.skill_read"} <= first_tool_ids
+    tool_results = [
+        json.loads(item.content)["result"]
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    listing = next(item for item in tool_results if "skills" in item)
+    assert [item["skill_id"] for item in listing["skills"]] == [approved.skill_id]
+    loaded = next(item for item in tool_results if "reusable_steps" in item)
+    assert loaded["reusable_steps"][0]["action"] == "workspace.create_document"
+    assert "Do not" in loaded["notice"] or "Never" in loaded["notice"]
+    assert "Unapproved procedure" not in json.dumps(provider.catalogs[0])
