@@ -29,6 +29,7 @@ class LocalVisionConfig:
     threads: int = 4
     gpu_layers: int | str = "auto"
     timeout: int = 120
+    mmproj_path: Path | None = None
 
 
 class LocalVisionProvider:
@@ -43,6 +44,7 @@ class LocalVisionProvider:
             threads=config.threads,
             gpu_layers=config.gpu_layers,
             timeout=config.timeout,
+            mmproj=config.mmproj_path,
         )
 
     @classmethod
@@ -63,12 +65,14 @@ class LocalVisionProvider:
             timeout = int(values.get("CHIMERA_VISION_TIMEOUT", "120"))
             gpu_raw = values.get("CHIMERA_VISION_GPU_LAYERS", "auto").strip().casefold()
             gpu_layers: int | str = "auto" if gpu_raw == "auto" else int(gpu_raw)
+            mmproj_value = values.get("CHIMERA_VISION_MMPROJ_PATH", "").strip()
+            mmproj_path = Path(mmproj_value).expanduser().resolve() if mmproj_value else None
             if context < 512 or threads < 1 or timeout < 5 or (isinstance(gpu_layers, int) and gpu_layers < 0):
                 return None
             return cls(LocalVisionConfig(
                 Path(model_value).expanduser().resolve(),
                 str(Path(server_value).expanduser().resolve()),
-                context, threads, gpu_layers, timeout,
+                context, threads, gpu_layers, timeout, mmproj_path,
             ))
         except (OSError, TypeError, ValueError):
             return None
@@ -76,14 +80,20 @@ class LocalVisionProvider:
     def status(self) -> dict:
         model_exists = self.config.model_path.is_file()
         server_exists = Path(self.config.server_path).is_file()
+        mmproj_exists = (
+            self.config.mmproj_path.is_file()
+            if self.config.mmproj_path is not None else None
+        )
         return {
             "configured": True,
-            "ready": bool(model_exists and server_exists),
+            "ready": bool(model_exists and server_exists and mmproj_exists is not False),
             "provider": "local_llama_vision",
             "model": str(self.config.model_path),
             "server": str(self.config.server_path),
             "model_exists": model_exists,
             "server_exists": server_exists,
+            "mmproj": str(self.config.mmproj_path) if self.config.mmproj_path else None,
+            "mmproj_exists": mmproj_exists,
             "network_policy": "loopback_only",
             "hosted_fallback": False,
         }
