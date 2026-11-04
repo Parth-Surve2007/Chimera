@@ -218,9 +218,20 @@ def test_local_agent_tool_call_requires_tool_and_arguments(tmp_path):
         lambda *_: '{"type":"tool_call","tool":"workspace.create_artifact","arguments":{"name":"note.txt","content":"hello"}}',
     )
 
-    decision = provider.decide([], {"version": 1, "tools": []})
+    decision = provider.decide(
+        [],
+        {
+            "version": 1,
+            "tools": [{
+                "id": "workspace.create_artifact",
+                "description": "Create a bounded artifact",
+                "arguments": {"name": "string", "content": "string"},
+            }],
+        },
+    )
 
     assert decision["type"] == "tool_call"
+    assert decision["tool"] == "workspace.create_artifact"
     assert decision["arguments"]["name"] == "note.txt"
 
 
