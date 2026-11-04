@@ -45,7 +45,7 @@ And that's still just the warm-up. I'm running out of breath listing the apps. T
 It is not tied to one model, one vendor, one application or one workflow. Run it with local GGUF models, connect an explicitly selected external provider when you choose, and grow its capabilities through an extensible connector system.
 
 <p align="center">
-  <img src="assets/chimera_intro.gif" alt="Chimera project introduction" width="820">
+  <img src="assets/chimera_workbench.jpg" alt="Chimera local agent workbench" width="100%">
 </p>
 
 ---
@@ -398,25 +398,32 @@ scripts/
 
 ### Runtime architecture
 
-```text
-                  Desktop Workbench
-                         |
-                         v
-                    AgentRuntime
-                         |
-                      TaskPolicy
-                         |
-          +--------------+---------------+
-          |              |               |
-          v              v               v
-      Workspace     Authorized       Specialist
-        tools       Windows apps     connectors
-          |              |               |
-          +--------------+---------------+
-                         |
-                         v
-                 Persisted evidence
-                 SQLite · Runs · Goals
+```mermaid
+flowchart TB
+    USER["User goal / natural-language request"]
+    UI["Chimera Desktop Workbench<br/>Chat · Model Bay · Applications · Workflow Studio"]
+    RUNTIME["AgentRuntime<br/>Persistent session · task state · tool dispatch"]
+    PROVIDER["Selected model provider<br/>Local llama.cpp / GGUF or explicitly configured API"]
+    POLICY{"TaskPolicy<br/>Schema · mode · scope · risk"}
+    APPROVAL["Operator reviews the exact protected action"]
+    TOOLS["Registered capability tools"]
+    ENV["Authorized digital environment<br/>Workspace · Windows apps · browser · specialist connectors"]
+    VERIFY{"Postcondition and evidence checks"}
+    STORE[("SQLite persistence<br/>Messages · events · runs · goals")]
+    RESULT["Result reported with evidence<br/>Completed · partial · blocked · failed · unknown"]
+
+    USER --> UI --> RUNTIME
+    RUNTIME <-->|Context and structured decisions| PROVIDER
+    RUNTIME --> POLICY
+    POLICY -->|Low-risk / permitted| TOOLS
+    POLICY -->|Approval required| APPROVAL
+    APPROVAL -->|Approved| TOOLS
+    APPROVAL -->|Rejected| RESULT
+    TOOLS --> ENV --> VERIFY
+    VERIFY -->|Observed outcome| RUNTIME
+    RUNTIME --> STORE
+    VERIFY --> RESULT
+    RESULT --> UI
 ```
 
 ---
