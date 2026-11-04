@@ -7,6 +7,7 @@ ordinary text; registered tools will be added behind an explicit protocol.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import uuid
 import threading
@@ -382,6 +383,7 @@ class AgentRuntime:
             "read_text": {"path": str},
             "create_artifact": {"name": str, "content": str},
             "create_file": {"path": str, "content": str},
+            "create_document": {"path": str, "title": str, "content": str},
             "computer.list_applications": {},
             "computer.list_windows": {},
             "computer.inspect_controls": {"session_id": str, "hwnd": int},
@@ -792,8 +794,9 @@ class AgentRuntime:
                     continue
                 decision["arguments"]["executable"] = launch_preflight["application"]
 
-            if tool_id == "workspace.create_file":
-                preflight = tools.run("create_file", decision["arguments"], approved=False)
+            if tool_id in {"workspace.create_file", "workspace.create_document"}:
+                operation_name = tool_id.removeprefix("workspace.")
+                preflight = tools.run(operation_name, decision["arguments"], approved=False)
                 if preflight.status != "awaiting_approval":
                     error = preflight.error or "The requested file operation did not pass validation."
                     payload = {
@@ -956,6 +959,21 @@ class AgentRuntime:
                 return False
         return True
 
+    @staticmethod
+    def _is_terminal_file_creation_request(request: str) -> bool:
+        """Recognize a single file-creation request without skipping follow-up work."""
+        import re
+
+        text = str(request or "").strip().casefold()
+        if not re.match(r"^(?:please\s+)?(?:create|make|write|generate|draft)\b", text):
+            return False
+        follow_up = re.compile(
+            r"\b(?:(?:and\s+)?then|after that|and)\s+"
+            r"(?:open|launch|run|send|email|upload|download|print|share|attach|"
+            r"install|execute|verify|inspect)\b"
+        )
+        return not bool(follow_up.search(text))
+
     def approve_pending(self, session_id: str, approve: bool) -> dict:
         pending = self.store.pending_tool(session_id)
         if not pending: raise ValueError("no pending tool approval")
@@ -1105,6 +1123,71 @@ class AgentRuntime:
                 "tool": pending["tool"],
             })
             return {"status": "completed", "message": assistant, "tools": [pending["tool"]]}
+
+        if (
+            pending["tool"] in {"workspace.create_file", "workspace.create_document"}
+            and self._is_terminal_file_creation_request(
+                next((item.content for item in reversed(self.store.messages(session_id)) if item.role == "user"), "")
+            )
+        ):
+            if result.status != "completed":
+                error = result.error or "file operation failed"
+                with sqlite3.connect(self.store.db_path) as db:
+                    db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
+                self._record(session_id, "turn.failed", {
+                    "turn_id": pending["turn_id"], "reason": error, "tool": pending["tool"],
+                })
+                if task:
+                    self.task_store.transition(task.task_id, "failed")
+                self._tasks.pop(session_id, None)
+                return {"status": "failed", "error": error, "tool": pending["tool"]}
+
+            relative = result.data.get("path")
+            verified = False
+            if workspace is not None and isinstance(relative, str) and relative.strip():
+                try:
+                    target = (workspace / relative).resolve()
+                    if target != workspace and workspace in target.parents and target.is_file():
+                        data = target.read_bytes()
+                        verified = (
+                            len(data) == result.data.get("bytes")
+                            and hashlib.sha256(data).hexdigest() == result.data.get("sha256")
+                        )
+                except OSError:
+                    verified = False
+            if not verified:
+                error = "the write operation returned success, but the resulting file could not be independently verified"
+                with sqlite3.connect(self.store.db_path) as db:
+                    db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
+                self._record(session_id, "turn.failed", {
+                    "turn_id": pending["turn_id"], "tool": pending["tool"], "error": error,
+                })
+                if task:
+                    self.task_store.transition(task.task_id, "failed")
+                self._tasks.pop(session_id, None)
+                return {"status": "failed", "error": error, "tool": pending["tool"]}
+
+            file_kind = "Word document" if pending["tool"] == "workspace.create_document" else "text file"
+            assistant = self.store.add_message(
+                session_id, "assistant",
+                f"Created and verified the {file_kind}: {relative} ({result.data['bytes']} bytes)."
+            )
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
+            self._record(session_id, "turn.completed", {
+                "turn_id": pending["turn_id"], "completion": "verified_file_creation",
+                "tool": pending["tool"], "path": relative, "sha256": result.data["sha256"],
+            })
+            if task:
+                self.task_store.transition(task.task_id, "completed")
+            self._tasks.pop(session_id, None)
+            return {
+                "status": "completed", "message": assistant, "tools": [pending["tool"]],
+                "verification": {
+                    "path": relative, "bytes": result.data["bytes"],
+                    "sha256": result.data["sha256"],
+                },
+            }
 
         self.store.add_message(session_id, "system", "The approved tool operation completed. Decide the next step using its actual result.")
         session = self.store.session(session_id)
