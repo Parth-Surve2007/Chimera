@@ -128,7 +128,7 @@ class WorkspaceTools:
                     raise ValueError("file path must be a non-empty workspace-relative path")
                 normalized_path = relative.replace("\\", "/")
                 if normalized_path.startswith("/") or Path(relative).is_absolute():
-                    raise ValueError("file path must be relative to the attached workspace; use a name such as hello.txt")
+                    raise ValueError("file path must be workspace-relative; use a name such as hello.txt")
                 if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_FILE:
                     raise ValueError("file content exceeds the 2 MB limit")
                 target = self._path(relative)
