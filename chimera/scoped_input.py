@@ -283,6 +283,13 @@ class ScopedWindowsInputBackend:
         modifiers = {"CTRL", "CONTROL", "SHIFT", "ALT"}
         if len(parts) > 1 and any(part not in modifiers for part in parts[:-1]):
             raise ValueError("only CTRL, SHIFT and ALT may precede a chord key")
+        forbidden = {
+            ("ALT", "TAB"), ("CTRL", "ESC"), ("CONTROL", "ESC"),
+            ("ALT", "F4"), ("CTRL", "ALT", "DELETE"),
+            ("CONTROL", "ALT", "DELETE"),
+        }
+        if tuple(parts) in forbidden:
+            raise ValueError("system switching, secure-attention, and window-close chords are disabled")
         return [_KEY_CODES[part] for part in parts]
 
     @staticmethod
@@ -382,6 +389,8 @@ class ScopedWindowsInputBackend:
             before_hash, before_payload = self._image_evidence(before_image)
             events = 0
             button_down = False
+            pressed_keys: list[int] = []
+            pressed_unicode_units: list[int] = []
 
             def guard() -> None:
                 if native.foreground_hwnd() != hwnd or native.foreground_pid() != expected_pid:
@@ -447,20 +456,41 @@ class ScopedWindowsInputBackend:
                     for unit in units:
                         guard()
                         native.send_unicode_unit(unit, True)
+                        pressed_unicode_units.append(unit)
                         events += 1
                         guard()
                         native.send_unicode_unit(unit, False)
+                        pressed_unicode_units.remove(unit)
                         events += 1
                 elif action == "press_key":
                     for vk in chord:
                         guard()
                         native.send_virtual_key(vk, True)
+                        pressed_keys.append(vk)
                         events += 1
                     for vk in reversed(chord):
                         guard()
                         native.send_virtual_key(vk, False)
+                        pressed_keys.remove(vk)
                         events += 1
             except Exception as exc:
+                # Always release held modifiers/Unicode key state if focus
+                # changes between down and up. Releases are cleanup, not new
+                # text or command input, and prevent stuck global key state.
+                for vk in reversed(pressed_keys):
+                    try:
+                        native.send_virtual_key(vk, False)
+                        events += 1
+                    except Exception:
+                        pass
+                pressed_keys.clear()
+                for unit in reversed(pressed_unicode_units):
+                    try:
+                        native.send_unicode_unit(unit, False)
+                        events += 1
+                    except Exception:
+                        pass
+                pressed_unicode_units.clear()
                 try:
                     up()
                 except Exception:
@@ -477,6 +507,12 @@ class ScopedWindowsInputBackend:
                     except Exception:
                         pass
 
+            if native.foreground_hwnd() != hwnd or native.foreground_pid() != expected_pid:
+                return ScopedInputResult(
+                    "uncertain", events > 0, False,
+                    "foreground window changed after input; inspect a fresh authorized observation",
+                    action, native.foreground_pid(), bounds, before_hash, None, None, events,
+                ).to_dict()
             time.sleep(0.04)
             after_image = native.capture(rect)
             after_hash, after_payload = self._image_evidence(after_image)
