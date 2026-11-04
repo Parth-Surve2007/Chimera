@@ -96,7 +96,7 @@ def test_plan_mode_blocks_write_at_runtime_boundary(tmp_path):
     assert not (tmp_path / ".chimera-agent-artifacts" / sid / "blocked.md").exists()
     assert any(e.event_type == "tool.failed" and e.payload["status"] == "blocked" for e in store.events(sid))
     task = runtime.task_store.latest_for_session(sid)
-    assert task.mode == "plan" and task.status == "completed"
+    assert task.mode == "plan" and task.status == "blocked"
     assert runtime.task_store.steps(task.task_id)[0]["status"] == "blocked"
 
 def test_approval_continuation_updates_persisted_task(tmp_path):
@@ -458,3 +458,94 @@ def test_identical_failed_tool_call_is_not_executed_twice_in_one_turn(tmp_path, 
     ]
     assert len(repeated_results) == 2
     assert "Identical retry not executed" in repeated_results[1]["error"]
+
+
+
+def test_runtime_continues_same_task_after_short_confirmation_and_restart(tmp_path):
+    class TodoProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self, complete=False):
+            self.calls = 0
+            self.complete = complete
+            self.seen_messages = []
+
+        def decide(self, messages, catalog, session=None):
+            self.seen_messages = messages
+            self.calls += 1
+            if self.calls == 1:
+                status = "completed" if self.complete else "in_progress"
+                return {
+                    "type": "tool_call",
+                    "tool": "agent.todo_write",
+                    "arguments": {"todos": [
+                        {"content": "Read the Notepad document", "status": status},
+                        {"content": "Create and verify the PDF", "status": "completed" if self.complete else "pending"},
+                    ]},
+                }
+            return {"type": "message", "content": "The task state has been saved."}
+
+    db_path = tmp_path / "chimera.db"
+    store = AgentSessionStore(db_path)
+    first_provider = TodoProvider()
+    first_runtime = AgentRuntime(store, first_provider)
+    session_id = first_runtime.create_session(tmp_path, mode="build")
+    assert first_runtime.send(session_id, "Open Notepad and export its text to PDF.")["status"] == "completed"
+    original_task = first_runtime.task_store.active_for_session(session_id)
+    assert original_task is not None
+    assert original_task.status == "ready"
+
+    # Reconstruct the runtime to simulate a desktop-app process restart.
+    second_provider = TodoProvider(complete=True)
+    second_runtime = AgentRuntime(AgentSessionStore(db_path), second_provider)
+    result = second_runtime.send(session_id, "yes, continue")
+    assert result["status"] == "completed"
+    resumed_task = second_runtime.task_store.latest_for_session(session_id)
+    assert resumed_task.task_id == original_task.task_id
+    assert resumed_task.status == "completed"
+    context_messages = [m.content for m in second_provider.seen_messages if m.role == "system"]
+    assert any("Active durable task state" in content for content in context_messages)
+    assert any(original_task.task_id in content for content in context_messages)
+    assert any(event.event_type == "task.resumed" for event in second_runtime.store.events(session_id))
+
+
+def test_explicit_new_task_pauses_unfinished_task_and_can_resume_it(tmp_path):
+    class PendingTodoProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self, decisions):
+            self.decisions = iter(decisions)
+
+        def decide(self, messages, catalog, session=None):
+            return next(self.decisions)
+
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    first = PendingTodoProvider([
+        {"type": "tool_call", "tool": "agent.todo_write", "arguments": {"todos": [
+            {"content": "Finish the existing research", "status": "pending"},
+        ]}},
+        {"type": "message", "content": "The research task is saved."},
+    ])
+    runtime = AgentRuntime(store, first)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    assert runtime.send(session_id, "Research this topic")["status"] == "completed"
+    original = runtime.task_store.active_for_session(session_id)
+    assert original is not None
+
+    second = PendingTodoProvider([
+        {"type": "message", "content": "Calculator inspection is complete."},
+    ])
+    runtime.provider = second
+    assert runtime.send(session_id, "New task: open Calculator and inspect it")["status"] == "completed"
+    new_task = runtime.task_store.latest_for_session(session_id)
+    assert new_task.task_id != original.task_id
+    assert runtime.task_store.get(original.task_id).status == "paused"
+    assert runtime.task_store.active_for_session(session_id) is None
+
+    third = PendingTodoProvider([
+        {"type": "message", "content": "I have resumed the previous research task."},
+    ])
+    runtime.provider = third
+    assert runtime.send(session_id, "Resume previous task and continue")["status"] == "completed"
+    assert runtime.task_store.latest_for_session(session_id).task_id == original.task_id
+    assert runtime.task_store.get(original.task_id).status == "ready"
