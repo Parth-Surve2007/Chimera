@@ -867,7 +867,7 @@ def test_packaged_notepad_launch_authorizes_actual_windowsapps_process_before_in
     monkeypatch.setattr(
         runtime.computer,
         "observe",
-        lambda app_session_id: SimpleNamespace(
+        lambda app_session_id, depth=3, limit=250: SimpleNamespace(
             session_id=app_session_id,
             observation_id="notepad-observation",
             generation=1,
