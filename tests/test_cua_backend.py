@@ -88,6 +88,19 @@ def _png_bytes(draw: bool = False) -> bytes:
     return stream.getvalue()
 
 
+class FakeToolRefusal(Exception):
+    def __init__(self):
+        super().__init__("CUA action refused")
+        self.kind = "background_unavailable"
+        self.structured_content = {
+            "error": {
+                "kind": "background_unavailable",
+                "message": "background delivery is unavailable for this exact target",
+            },
+            "escalation": {"recommended": "foreground", "reason": "canvas needs foreground"},
+        }
+
+
 class FakeDriver:
     def __init__(self, *, refuse_background=False):
         self.refuse_background = refuse_background
@@ -177,17 +190,7 @@ class FakeDriver:
     async def click(self, request):
         self.click_inputs.append(request.values)
         if request.values["delivery_mode"] is DeliveryMode.BACKGROUND and self.refuse_background:
-            return SimpleNamespace(
-                effect=Effect.REFUSED,
-                route=Route.ACCESSIBILITY,
-                summary="Background delivery was not available for this custom surface.",
-                error="background_unavailable",
-                hint="Try a foreground action after a separate approval.",
-                escalation=SimpleNamespace(
-                    target=EscalationTarget.FOREGROUND,
-                    reason=EscalationReason.DELIVERY_FAILED,
-                ),
-            )
+            raise FakeToolRefusal()
         return SimpleNamespace(
             effect=Effect.CONFIRMED,
             route=Route.ACCESSIBILITY,
@@ -267,7 +270,10 @@ def test_cua_background_refusal_never_auto_escalates_and_requires_fresh_approved
         )
         assert refused["status"] == "background_unavailable"
         assert refused["foreground_escalation_used"] is False
+        assert refused["foreground_retry_available"] is True
+        assert refused["driver_error_code"] == "background_unavailable"
         assert refused["foreground_retry"] == "computer.cua_click_foreground"
+        assert backend.can_foreground_retry("conversation-a", 4321) is True
         assert len(driver.click_inputs) == 1
         assert driver.click_inputs[0]["delivery_mode"] is DeliveryMode.BACKGROUND
 
@@ -354,5 +360,47 @@ def test_cua_draw_path_rejects_out_of_bounds_and_oversized_strokes():
         )
         assert bad_point["status"] == "blocked"
         assert driver.drag_inputs == []
+    finally:
+        backend.close()
+
+
+def test_cua_refusal_without_explicit_foreground_recommendation_cannot_escalate():
+    class NoEscalationDriver(FakeDriver):
+        async def click(self, request):
+            self.click_inputs.append(request.values)
+            exc = FakeToolRefusal()
+            exc.structured_content = {
+                "error": {"kind": "background_unavailable"},
+                "escalation": {"recommended": "stop", "reason": "target is unsupported"},
+            }
+            raise exc
+
+    driver = NoEscalationDriver(refuse_background=True)
+    backend = _backend(driver)
+    try:
+        state = backend.inspect_window("conversation-a", 4321, 77)
+        refusal = backend.click(
+            "conversation-a", 4321, 77, state["snapshot_ref"],
+            element_token=state["elements"][0]["element_token"],
+        )
+        assert refusal["status"] == "background_unavailable"
+        assert refusal["foreground_retry_available"] is False
+        assert "foreground_retry" not in refusal
+        assert backend.can_foreground_retry("conversation-a", 4321) is False
+    finally:
+        backend.close()
+
+
+def test_cua_discovery_contract_returns_bounded_application_and_exact_window_metadata():
+    driver = FakeDriver()
+    backend = _backend(driver)
+    try:
+        apps = backend.list_apps()
+        assert apps["status"] == "completed"
+        assert apps["apps"][0]["pid"] == 4321
+        windows = backend.list_windows(4321)
+        assert windows["status"] == "completed"
+        assert windows["windows"][0]["window_id"] == 77
+        assert windows["windows"][0]["pid"] == 4321
     finally:
         backend.close()
