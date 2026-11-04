@@ -59,6 +59,26 @@ class Win32InputNative:
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self._define_structures()
+        # Explicit Win32 prototypes prevent 64-bit HWND truncation and ensure
+        # SendInput receives the correct INPUT-array pointer and structure size.
+        self.user32.SendInput.argtypes = [
+            ctypes.c_uint, ctypes.POINTER(self.INPUT), ctypes.c_int,
+        ]
+        self.user32.SendInput.restype = ctypes.c_uint
+        self.user32.GetForegroundWindow.argtypes = []
+        self.user32.GetForegroundWindow.restype = wintypes.HWND
+        self.user32.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
+        ]
+        self.user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        self.user32.IsWindow.argtypes = [wintypes.HWND]
+        self.user32.IsWindow.restype = wintypes.BOOL
+        self.user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        self.user32.SetForegroundWindow.restype = wintypes.BOOL
+        self.user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        self.user32.ShowWindow.restype = wintypes.BOOL
+        self.user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        self.user32.GetSystemMetrics.restype = ctypes.c_int
 
     @staticmethod
     def _define_structures():
