@@ -103,6 +103,26 @@ A minimal profile looks like this:
 
 The resolver consumes only descriptive match rules, target hints, preferred-operation names and limitations. The storage layer preserves unknown metadata for backwards-compatible round trips, but those fields are stripped before a profile reaches the agent. Profiles are capped at 100 entries and bounded per descriptive field. Duplicate IDs and attempts to shadow built-in profile IDs are ignored or rejected. A malformed file disables custom profiles for that launch while preserving built-ins; it never changes execution permissions.
 
+### Optional Cua Driver background-first backend
+
+Chimera can optionally use the Rust-backed Cua Driver Python SDK (cua-driver 0.38.0) as a background-first native window backend. Install it for source runs with:
+
+```powershell
+python -m pip install -e ".[computer-use]"
+```
+
+The Windows portable build installs and bundles this extra. Source installs without the extra continue to use Chimera's existing UIA/Win32 and scoped-input backends. Set CHIMERA_CUA_ENABLED=0 to disable CUA explicitly; otherwise it is detected automatically when the package is present.
+
+The CUA adapter does not own authorization. It accepts an application only through the existing ComputerSessionManager identity bound to the current conversation, re-checks the live PID/executable identity for each request, and lists or snapshots windows only for that authorized PID. CUA window IDs are paired with that PID; they are never treated as global, reusable handles.
+
+A CUA observation produces a private, short-lived snapshot_ref and element tokens bound to the exact conversation, PID, window ID, and native snapshot. A new snapshot or action invalidates the previous reference; references expire after 30 seconds. Degraded or truncated snapshots cannot authorize actions. Use UIA element tokens whenever possible. Pixel actions must use coordinates from the exact window screenshot, not desktop coordinates.
+
+**Coordinate invariant:** CUA element frames are screen-absolute, whereas CUA window drag coordinates are local to the window screenshot. Chimera converts through the snapshot's exact window_bounds, screenshot width/height and capture scale. It rejects missing geometry, changed window size, out-of-bounds points, stale tokens and ambiguous canvas matches instead of guessing.
+
+Background click and drawing are separate approved actions. The driver is asked for background delivery first; Chimera never silently retries a foreground action. The foreground-click tool is not advertised unless that exact authorized process has a structured CUA refusal recommending foreground escalation. Even then, Chimera requires a fresh snapshot and a separate operator approval for the foreground action. The backend permits that one approved retry only for the exact PID/window that produced the refusal.
+
+CUA action delivery is not task completion. Clicks return delivery/effect evidence, and canvas strokes report pixel-diff evidence only. The agent must inspect the resulting state and verify the user's actual postcondition. Saved files must still be independently inspected or reopened as required. Browser page content should use the isolated Browser connector rather than desktop pixel automation.
+
 ### Multi-window UIA observation and context packing
 
 - A computer session may have several top-level windows. The agent first obtains the authorized window inventory and selects one exact HWND by title/purpose before inspecting its control tree.

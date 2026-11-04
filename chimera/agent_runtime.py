@@ -323,6 +323,10 @@ class AgentRuntime:
         # configured vision GGUF, llama-server executable and UIA target support.
         if self.computer.visual_perception is None or self.computer.uia is None:
             aliases.pop("computer.inspect_visual_target", None)
+        # Cua Driver is an optional extra. Its discovery tool is safe
+        # without an authorized app; all target-window tools remain gated.
+        if self.computer.cua is None:
+            aliases = {key: value for key, value in aliases.items() if not key.startswith("computer.cua_")}
         authorized_applications = [
             {
                 "session_id": identity.session_id,
@@ -334,6 +338,13 @@ class AgentRuntime:
             if identity.owner_session_id == (session.get("session_id") if session else None)
             and self.computer._identity_is_current(identity)
         ]
+        owner_session_id = session.get("session_id") if session else None
+        foreground_retry_ready = bool(owner_session_id) and any(
+            self.computer.cua_foreground_retry_available(item["session_id"], owner_session_id)
+            for item in authorized_applications
+        )
+        if not foreground_retry_ready:
+            aliases.pop("computer.cua_click_foreground", None)
         catalog_tools = [
             {
                 "id": "agent.skill_list",
@@ -363,7 +374,7 @@ class AgentRuntime:
             # explicitly authorized for this conversation.
             if key.startswith("computer.") and key not in {
                 "computer.launch", "computer.list_applications",
-                "computer.list_installed_applications",
+                "computer.list_installed_applications", "computer.cua_list_apps",
             } and not authorized_applications:
                 continue
             catalog_tools.append({"id": key, **tool_catalog()["operations"][value]})
@@ -469,6 +480,13 @@ class AgentRuntime:
             "computer.launch": {"executable": str},
             "computer.screenshot": {"session_id": str, "hwnd": int, "path": str},
             "computer.inspect_visual_target": {"session_id": str, "reference_id": str, "question": str},
+            "computer.cua_list_apps": {},
+            "computer.cua_list_windows": {"session_id": str},
+            "computer.cua_inspect_window": {"session_id": str, "window_id": int},
+            "computer.cua_capture_window": {"session_id": str, "window_id": int},
+            "computer.cua_click": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
+            "computer.cua_click_foreground": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
+            "computer.cua_draw_path": {"session_id": str, "window_id": int, "snapshot_ref": str, "canvas_element_token": str, "strokes": list, "duration_ms": int, "steps": int},
             "computer.inspect_window": {"session_id": str},
             "computer.inspect_pattern_support": {"session_id": str, "reference_id": str},
             "computer.invoke_element": {"session_id": str, "reference_id": str},
@@ -497,7 +515,10 @@ class AgentRuntime:
         # no-argument snapshot; ignore those extras so the model can filter the
         # returned applications in its reasoning. All targeted desktop actions
         # continue to reject unknown arguments.
-        if operation in {"computer.list_applications", "computer.list_installed_applications", "computer.list_windows"}:
+        if operation in {
+            "computer.list_applications", "computer.list_installed_applications",
+            "computer.list_windows", "computer.cua_list_apps",
+        }:
             return
         if set(arguments) - set(expected):
             raise ValueError(f"unsupported arguments for {operation}")
@@ -519,11 +540,71 @@ class AgentRuntime:
             "computer.scroll_element": {"session_id", "reference_id", "direction", "amount"},
             "computer.scroll_into_view": {"session_id", "reference_id"},
             "computer.visual_action": {"session_id", "reference_id", "action"},
+            "computer.cua_list_windows": {"session_id"},
+            "computer.cua_inspect_window": {"session_id", "window_id"},
+            "computer.cua_capture_window": {"session_id", "window_id"},
+            "computer.cua_click": {"session_id", "window_id", "snapshot_ref"},
+            "computer.cua_click_foreground": {"session_id", "window_id", "snapshot_ref"},
+            "computer.cua_draw_path": {"session_id", "window_id", "snapshot_ref", "canvas_element_token", "strokes"},
         }.get(operation)
         if required_arguments:
             missing = required_arguments - set(arguments)
             if missing:
                 raise ValueError(f"missing required arguments for {operation}: {sorted(missing)}")
+        if operation in {"computer.cua_click", "computer.cua_click_foreground"}:
+            has_token = "element_token" in arguments
+            has_x, has_y = "x" in arguments, "y" in arguments
+            if has_token == (has_x or has_y):
+                raise ValueError("CUA click requires either element_token or both x and y, but not both forms")
+            if has_x != has_y:
+                raise ValueError("CUA coordinate click requires both x and y")
+            if has_token and (not isinstance(arguments["element_token"], str) or not arguments["element_token"]):
+                raise ValueError("element_token must be a non-empty string")
+            if "button" in arguments and arguments["button"] not in {"left", "right", "middle"}:
+                raise ValueError("button must be left, right, or middle")
+            if "count" in arguments and not 1 <= arguments["count"] <= 2:
+                raise ValueError("count must be 1 or 2")
+            if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
+                raise ValueError("window_id must be a positive integer")
+        if operation in {
+            "computer.cua_list_windows", "computer.cua_inspect_window",
+            "computer.cua_capture_window", "computer.cua_click",
+            "computer.cua_click_foreground", "computer.cua_draw_path",
+        }:
+            if not arguments["session_id"].strip():
+                raise ValueError("session_id must be non-empty")
+        if operation in {"computer.cua_inspect_window", "computer.cua_capture_window"}:
+            if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
+                raise ValueError("window_id must be a positive integer")
+        if operation == "computer.cua_draw_path":
+            if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
+                raise ValueError("window_id must be a positive integer")
+            strokes = arguments["strokes"]
+            if not isinstance(strokes, list) or not 1 <= len(strokes) <= 16:
+                raise ValueError("CUA drawing requires 1 to 16 paths")
+            total_points = 0
+            for path_points in strokes:
+                if not isinstance(path_points, list) or not 2 <= len(path_points) <= 64:
+                    raise ValueError("each CUA drawing path requires 2 to 64 normalized points")
+                total_points += len(path_points)
+                for point in path_points:
+                    if (
+                        not isinstance(point, list) or len(point) != 2
+                        or any(
+                            isinstance(value, bool)
+                            or not isinstance(value, (int, float))
+                            or not math.isfinite(float(value))
+                            or not 0.02 <= float(value) <= 0.98
+                            for value in point
+                        )
+                    ):
+                        raise ValueError("CUA drawing points must be normalized [x, y] pairs between 0.02 and 0.98")
+            if total_points > 256:
+                raise ValueError("CUA drawing is limited to 256 total points")
+            if "duration_ms" in arguments and not 60 <= arguments["duration_ms"] <= 1200:
+                raise ValueError("duration_ms must be between 60 and 1200")
+            if "steps" in arguments and not 2 <= arguments["steps"] <= 40:
+                raise ValueError("steps must be between 2 and 40")
         if operation == "computer.scroll_element":
             if arguments["direction"] not in {"up", "down", "left", "right"}:
                 raise ValueError("scroll direction must be up, down, left, or right")
@@ -1117,7 +1198,7 @@ class AgentRuntime:
                         and previous.get("tool") == tool_id
                         and previous.get("arguments") == decision["arguments"]
                         and str(previous.get("status") or "").casefold()
-                        in {"failed", "blocked", "workspace_required", "uncertain"}
+                        in {"failed", "blocked", "workspace_required", "uncertain", "background_unavailable"}
                     ):
                         repeated_failures.append(previous)
                 if repeated_failures:
@@ -1312,7 +1393,26 @@ class AgentRuntime:
                         raise PermissionError("authorized application process identity has changed")
                     return identity
 
-                if operation == "computer.list_applications":
+                if operation == "computer.cua_list_apps":
+                    cua_result = self.computer.cua_list_apps()
+                    result_data = cua_result
+                    result_status = cua_result.get("status", "failed")
+                    result_error = cua_result.get("reason")
+                elif operation == "computer.cua_list_windows":
+                    cua_result = self.computer.cua_list_windows(
+                        args["session_id"], session_id
+                    )
+                    result_data = cua_result
+                    result_status = cua_result.get("status", "failed")
+                    result_error = cua_result.get("reason")
+                elif operation == "computer.cua_inspect_window":
+                    cua_result = self.computer.cua_inspect_window(
+                        args["session_id"], session_id, args["window_id"],
+                    )
+                    result_data = cua_result
+                    result_status = cua_result.get("status", "failed")
+                    result_error = cua_result.get("reason")
+                elif operation == "computer.list_applications":
                     result_data = computer.list_applications()
                     result_status, result_error = "completed", None
                 elif operation == "computer.list_installed_applications":
@@ -1656,7 +1756,9 @@ class AgentRuntime:
             "computer.expand_element", "computer.collapse_element",
             "computer.screenshot", "computer.inspect_visual_target",
             "computer.launch", "computer.visual_action",
-            "computer.close_window",
+            "computer.close_window", "computer.cua_capture_window",
+            "computer.cua_click", "computer.cua_click_foreground",
+            "computer.cua_draw_path",
         }:
             operation = pending["tool"]
             args = pending["arguments"]
@@ -1717,6 +1819,30 @@ class AgentRuntime:
                         "control_authorized": False,
                         "next_step": "The window appeared, but its process could not be matched strongly enough for automatic authorization. Confirm the exact process on the Applications page.",
                     }
+            elif operation == "computer.cua_capture_window":
+                result_data = self.computer.cua_inspect_window(
+                    args["session_id"], session_id, args["window_id"],
+                    include_screenshot=True,
+                )
+            elif operation in {"computer.cua_click", "computer.cua_click_foreground"}:
+                result_data = self.computer.cua_click(
+                    args["session_id"], session_id, args["window_id"],
+                    args["snapshot_ref"],
+                    element_token=args.get("element_token"),
+                    x=args.get("x"),
+                    y=args.get("y"),
+                    foreground=operation == "computer.cua_click_foreground",
+                    button=args.get("button", "left"),
+                    count=args.get("count", 1),
+                )
+            elif operation == "computer.cua_draw_path":
+                result_data = self.computer.cua_draw_path(
+                    args["session_id"], session_id, args["window_id"],
+                    args["snapshot_ref"], args["canvas_element_token"],
+                    args["strokes"],
+                    duration_ms=args.get("duration_ms", 240),
+                    steps=args.get("steps", 12),
+                )
             elif operation == "computer.inspect_visual_target":
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:

@@ -23,6 +23,13 @@ playwright_datas, playwright_binaries, playwright_hiddenimports = collect_all("p
 reportlab_datas, reportlab_binaries, reportlab_hiddenimports = collect_all("reportlab")
 pypdf_datas, pypdf_binaries, pypdf_hiddenimports = collect_all("pypdf")
 pillow_datas, pillow_binaries, pillow_hiddenimports = collect_all("PIL")
+# Cua Driver is installed only in the Windows portable-build extra. Keep
+# source/dev installs lightweight while collecting its Rust extension, daemon
+# wrapper and resources when present.
+try:
+    cua_datas, cua_binaries, cua_hiddenimports = collect_all("cua_driver")
+except Exception:
+    cua_datas, cua_binaries, cua_hiddenimports = [], [], []
 
 # Flet resolves icon names lazily from package JSON at runtime. These are not
 # included by collect_all("flet_desktop"), so mirror Flet's own PyInstaller
@@ -47,6 +54,7 @@ datas.extend(flet_icon_datas)
 datas.extend(reportlab_datas)
 datas.extend(pypdf_datas)
 datas.extend(pillow_datas)
+datas.extend(cua_datas)
 
 hiddenimports = [
     "flet",
@@ -102,17 +110,23 @@ hiddenimports = [
     "chimera.scoped_input",
     "chimera.applications.connectors.browser_connector",
     "playwright.sync_api",
+    "cua_driver",
+    "cua_driver._native",
+    "cua_driver._native_contract",
+    "cua_driver.wrapper",
+    "cua_driver._daemon",
 ]
 hiddenimports.extend(flet_hiddenimports)
 hiddenimports.extend(playwright_hiddenimports)
 hiddenimports.extend(reportlab_hiddenimports)
 hiddenimports.extend(pypdf_hiddenimports)
 hiddenimports.extend(pillow_hiddenimports)
+hiddenimports.extend(cua_hiddenimports)
 
 a = Analysis(
     ["launcher.py"],
     pathex=[],
-    binaries=flet_binaries + reportlab_binaries + pypdf_binaries + pillow_binaries + playwright_binaries,
+    binaries=flet_binaries + reportlab_binaries + pypdf_binaries + pillow_binaries + playwright_binaries + cua_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

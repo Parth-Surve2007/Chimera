@@ -871,6 +871,8 @@ class LocalModelProvider:
         tool_ids = {item.get("id") for item in compact_tools}
         visual_action_available = "computer.visual_action" in tool_ids
         visual_inspection_available = "computer.inspect_visual_target" in tool_ids
+        cua_background_available = "computer.cua_inspect_window" in tool_ids
+        cua_foreground_available = "computer.cua_click_foreground" in tool_ids
         workspace_available = any(
             isinstance(tool_id, str) and tool_id.startswith("workspace.")
             for tool_id in tool_ids
@@ -927,6 +929,27 @@ class LocalModelProvider:
             if visual_inspection_available else ""
         )
 
+        cua_guidance = (
+            "For authorized native Windows app windows, prefer the optional Cua Driver snapshot path when its tools are present: "
+            "call computer.cua_list_windows with the exact authorized session_id, choose one exact visible window_id, then call "
+            "computer.cua_inspect_window (read-only) or computer.cua_capture_window when screenshot evidence is needed. "
+            "Use element_token only with the snapshot_ref that created it; any new snapshot or action invalidates old tokens. "
+            "Prefer element-token clicks. Use computer.cua_draw_path for custom canvases only with a fresh canvas element_token and "
+            "separate pen-up paths; it re-observes after each segment. Pixel-diff is not semantic proof: inspect the resulting canvas "
+            "and verify saved files independently. CUA window element frames are screen-absolute but drag points are window-local "
+            "screenshot pixels; never convert those spaces yourself because the registered draw tool performs the conversion. "
+            "Background delivery is always attempted first and never steals focus. "
+            + (
+                "A separate foreground-click tool is currently available only because a specific CUA background action explicitly "
+                "recommended foreground delivery. Use it only for that exact refused action, after a fresh snapshot and separate operator approval. "
+                if cua_foreground_available else
+                "Do not attempt foreground CUA delivery; no explicit foreground escalation is currently authorized. "
+            )
+            + "If a CUA tool is unavailable, use the existing authorized UIA/Win32 tools. Browser page content should use the Browser connector, not desktop pixels. "
+            if cua_background_available else
+            "The optional Cua Driver backend is unavailable in this installation. Use the existing authorized UIA/Win32 tools; do not invent CUA tool IDs. "
+        )
+
         def render_prompt():
             return (
                 "You are Chimera's local agent decision engine. Return exactly one JSON object: "
@@ -959,7 +982,7 @@ class LocalModelProvider:
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
                 "Never guess an application ID. After an approved computer.launch, continue only when its result has control_authorized=true and computer_session_id; inspect that session. Otherwise stop and report the authorization blocker. Never bypass Applications authorization. "
-                + multi_window_guidance + app_control_guidance + visual_guidance + canvas_save_guidance + visual_inspection_guidance +
+                + multi_window_guidance + app_control_guidance + visual_guidance + canvas_save_guidance + visual_inspection_guidance + cua_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"

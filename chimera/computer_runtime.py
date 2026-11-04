@@ -12,6 +12,7 @@ from .interaction import (BrowserBackendDescriptor, GroundedInputBackend,
                           InteractionStrategyEngine, UIABackendDescriptor,
                           Win32BackendDescriptor)
 from .scoped_input import ScopedWindowsInputBackend
+from .cua_backend import CuaDriverBackend
 
 @dataclass(frozen=True)
 class ApplicationIdentity:
@@ -746,6 +747,9 @@ class ComputerSessionManager:
         except Exception: self.uia = None
         self.visual_input = ScopedWindowsInputBackend()
         self.application_profiles = DesktopApplicationProfileRegistry(custom_profiles)
+        # The Cua SDK is optional and starts its native runtime lazily on first
+        # use. It is never allowed to replace Chimera's approval or process checks.
+        self.cua = CuaDriverBackend.from_environment()
         try:
             from .vision import LocalVisionProvider
             self.visual_perception = LocalVisionProvider.from_env()
@@ -757,6 +761,99 @@ class ComputerSessionManager:
             Win32BackendDescriptor(self),
             GroundedInputBackend(self),
         ])
+
+    def _cua_authorized_identity(self, app_session_id: str, owner_session_id: str):
+        if self.cua is None:
+            raise RuntimeError("Cua Driver backend is unavailable; install Chimera's [computer-use] extra")
+        identity = self.sessions.get(app_session_id)
+        if not identity or identity.owner_session_id != owner_session_id:
+            raise PermissionError("application is not authorized for this Chimera conversation")
+        if not self._identity_is_current(identity):
+            raise PermissionError("authorized application process identity has changed")
+        return identity
+
+    def cua_list_apps(self) -> dict:
+        if self.cua is None:
+            return {"status": "unavailable", "reason": "Cua Driver is not installed or enabled"}
+        return self.cua.list_apps()
+
+    def cua_list_windows(self, app_session_id: str, owner_session_id: str) -> dict:
+        try:
+            identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            result = self.cua.list_windows(identity.pid)
+            return {
+                **result,
+                "authorized_session_id": app_session_id,
+                "authorized_pid": identity.pid,
+                "executable": identity.executable,
+            }
+        except Exception as exc:
+            return {"status": "blocked", "reason": f"{type(exc).__name__}: {exc}"}
+
+    def cua_inspect_window(
+        self, app_session_id: str, owner_session_id: str, window_id: int,
+        *, include_screenshot: bool = False,
+    ) -> dict:
+        try:
+            identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            result = self.cua.inspect_window(
+                owner_session_id, identity.pid, window_id,
+                include_screenshot=include_screenshot,
+            )
+            return {
+                **result,
+                "authorized_session_id": app_session_id,
+                "authorized_pid": identity.pid,
+                "executable": identity.executable,
+            }
+        except Exception as exc:
+            return {"status": "blocked", "reason": f"{type(exc).__name__}: {exc}"}
+
+    def cua_foreground_retry_available(
+        self, app_session_id: str, owner_session_id: str,
+    ) -> bool:
+        try:
+            identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            return bool(self.cua.can_foreground_retry(owner_session_id, identity.pid))
+        except Exception:
+            return False
+
+    def cua_click(
+        self, app_session_id: str, owner_session_id: str, window_id: int,
+        snapshot_ref: str, *, element_token: str | None = None,
+        x: float | None = None, y: float | None = None,
+        foreground: bool = False, button: str = "left", count: int = 1,
+    ) -> dict:
+        try:
+            identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            return self.cua.click(
+                owner_session_id, identity.pid, window_id, snapshot_ref,
+                element_token=element_token, x=x, y=y, foreground=foreground,
+                button=button, count=count,
+            )
+        except Exception as exc:
+            return {"status": "blocked", "verified": False,
+                    "reason": f"{type(exc).__name__}: {exc}"}
+
+    def cua_draw_path(
+        self, app_session_id: str, owner_session_id: str, window_id: int,
+        snapshot_ref: str, canvas_element_token: str,
+        strokes: list[list[list[float]]], *, duration_ms: int = 240,
+        steps: int = 12,
+    ) -> dict:
+        try:
+            identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            return self.cua.draw_path(
+                owner_session_id, identity.pid, window_id, snapshot_ref,
+                canvas_element_token, strokes, duration_ms=duration_ms, steps=steps,
+            )
+        except Exception as exc:
+            return {"status": "blocked", "verified": False,
+                    "reason": f"{type(exc).__name__}: {exc}"}
+
+    def close(self) -> None:
+        if self.cua is not None:
+            self.cua.close()
 
     def interaction_inventory(self) -> list[dict]:
         """Return backend capabilities without implying that any action succeeded."""
