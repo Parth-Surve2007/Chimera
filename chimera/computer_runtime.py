@@ -410,7 +410,7 @@ class ComputerSessionManager:
     def choose_interaction(self, operation: str, application_type: str = "native_windows", evidence: dict | None = None) -> dict:
         from dataclasses import asdict
         return asdict(self.strategy.choose(operation, application_type, evidence))
-    def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None, authorized_windows: list[dict] | None = None) -> ApplicationIdentity:
+    def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None, authorized_windows: list[dict] | None = None, expected_application_name: str | None = None) -> ApplicationIdentity:
         """Authorize one live process, optionally restricted to launch-observed HWNDs.
 
         A per-user WindowsApps execution alias can resolve to a different final
