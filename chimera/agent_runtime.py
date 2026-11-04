@@ -450,7 +450,7 @@ class AgentRuntime:
             if name not in arguments:
                 continue
             actual = arguments[name]
-            if kind is (int, float):
+            if kind == (int, float):
                 if isinstance(actual, bool) or not isinstance(actual, (int, float)) or not math.isfinite(float(actual)):
                     raise ValueError(f"argument {name} must be a finite number")
             elif type(actual) is not kind:
