@@ -131,7 +131,7 @@ class FakeDriver:
             in_web_content=False,
             actions=["click", "drag"],
             parent_index=0,
-            frame=SimpleNamespace(x=10.0, y=10.0, w=80.0, h=80.0),
+            frame=SimpleNamespace(x=210.0, y=110.0, w=80.0, h=80.0),
             min=None,
             max=None,
         )
@@ -170,7 +170,7 @@ class FakeDriver:
             screenshot_mime_type="image/png" if screenshot else None,
             screenshot_file_path=None,
             screenshot_frame_valid=bool(screenshot),
-            window_bounds=SimpleNamespace(x=0, y=0, width=100, height=100),
+            window_bounds=SimpleNamespace(x=200, y=100, width=100, height=100),
             images=images,
         )
 
