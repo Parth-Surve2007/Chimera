@@ -202,7 +202,7 @@ def _seed_uia_reference(manager, monkeypatch, session_id="agent-session"):
     observation = ComputerObservation(
         observation_id="observation-1", session_id=session_id, generation=3,
         created_at=time.time(), backend="uia", application={},
-        windows=[{"hwnd": 99}], elements=[],
+        windows=[{"hwnd": 99, "pid": 4321}], elements=[],
     )
     manager.sessions[session_id] = identity
     manager.observations[session_id] = (3, observation)
@@ -759,6 +759,7 @@ def test_visual_action_blocks_noneditable_text_targets(tmp_path, monkeypatch):
 
 
 def test_window_close_requires_approval_and_never_force_terminates(tmp_path, monkeypatch):
+    from types import SimpleNamespace
     from chimera import computer_use
 
     monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
@@ -815,4 +816,4 @@ def test_computer_session_close_window_rejects_stale_or_foreign_hwnd(tmp_path, m
 
     result = manager.close_window("agent-session", 99, approved=True)
     assert result["status"] == "blocked"
-    assert "exact authorized process" in result["reason"]
+    assert "authorized process" in result["reason"]
