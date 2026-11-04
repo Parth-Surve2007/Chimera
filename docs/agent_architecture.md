@@ -56,6 +56,12 @@ A compact model should not solve the whole job in one completion. The runtime mu
 7. Evidence-based completion: verify files, hashes, process windows or application-specific postconditions.
 8. Bounded context: retain objective, active checklist, relevant schemas and recent evidence.
 9. No hidden model fallback: provider/runtime changes require explicit operator choice.
+10. Repetition defenses: detect both user-prompt echoes and duplicate prior assistant answers, retry once with focused recovery instructions, and return an honest evidence-based fallback if the model repeats itself again.
+11. Tool-loop enforcement: do not execute an identical tool call again after it has already failed in the same user turn; allow one alternative-capability recovery before stopping repeated failures.
+
+Persistent llama-server inference sends role-separated messages through `/v1/chat/completions`, allowing llama.cpp to apply the GGUF's native chat template. Agent decisions use schema-constrained JSON on that endpoint. The one-shot CLI path remains explicit and uses its own constrained prompt mode.
+
+The Model Bay high-compute preset starts from 8K context, 768 output tokens, 8 CPU threads and adaptive GPU layer placement (`-ngl auto`). This is a starting configuration, not a guarantee that every model/build fits; llama.cpp's memory fit and the operator's available VRAM determine practical offload.
 
 A checklist is progress metadata, never permission to execute and never independent proof of success. The 3B model can still misplan or select the wrong tool; the harness improves structure and recoverability, not the model's intrinsic reasoning capacity.
 
@@ -72,6 +78,8 @@ No universal interface reliably controls every Windows application. Select the s
 Do not silently fall back to a weaker interaction method after a stronger method fails. Surface the blocker and a safe alternative.
 
 Windows UI Automation varies by application. Win32, WPF and WinForms often expose semantic controls; custom-rendered, elevated, remote, game, graphics, CAD and some Electron applications may expose incomplete control trees. Broad coverage requires live discovery, connector manifests, action-specific schemas, process identity, evidence, and a reproducible app/version test matrix.
+
+Packaged Windows apps are not always represented by a discoverable executable path. The Windows app inventory reads Start-menu entries and their registered Application User Model IDs (AUMIDs); launch uses the validated `shell:AppsFolder\\<AUMID>` activation route after the normal application-launch approval. This improves discovery for apps such as Paint, Photos and Calculator, but it does not provide semantic control of every custom-rendered canvas or prove that every Start-menu item is automatable.
 
 ## Permanent safety invariants
 

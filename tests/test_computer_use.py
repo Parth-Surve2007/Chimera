@@ -457,3 +457,162 @@ def test_computer_tool_schemas_and_argument_validation_cover_new_uia_patterns():
         "computer.scroll_element",
         {"session_id": "s", "reference_id": "r", "direction": "down", "amount": "page", "count": 2},
     )
+
+
+def test_packaged_paint_resolves_from_start_menu_when_executable_is_not_on_disk(monkeypatch):
+    from chimera import computer_use
+
+    aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        WindowsComputerUse,
+        "_resolve_executable",
+        staticmethod(lambda _name: None),
+    )
+    monkeypatch.setattr(
+        WindowsComputerUse,
+        "_start_menu_apps",
+        staticmethod(lambda: [{"name": "Paint", "app_id": aumid}]),
+    )
+
+    computer = object.__new__(WindowsComputerUse)
+    target = computer._resolve_launch_target("mspaint.exe")
+
+    assert target is not None
+    assert target["kind"] == "appsfolder"
+    assert target["aumid"] == aumid
+    assert target["application"] == "appsfolder:" + aumid
+    assert target["display_name"] == "Paint"
+
+
+def test_packaged_paint_preflight_returns_exact_aumid_for_approval(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from chimera import computer_use
+
+    aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        computer_use.ctypes,
+        "windll",
+        SimpleNamespace(user32=object(), kernel32=object()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        WindowsComputerUse,
+        "_resolve_executable",
+        staticmethod(lambda _name: None),
+    )
+    monkeypatch.setattr(
+        WindowsComputerUse,
+        "_start_menu_apps",
+        staticmethod(lambda: [{"name": "Paint", "app_id": aumid}]),
+    )
+
+    def unexpected_launch(*_args, **_kwargs):
+        raise AssertionError("preflight must not launch before approval")
+
+    monkeypatch.setattr(computer_use.subprocess, "Popen", unexpected_launch)
+    result = WindowsComputerUse(tmp_path).launch("Paint", approved=False)
+
+    assert result["status"] == "awaiting_approval"
+    assert result["launch_kind"] == "appsfolder"
+    assert result["application"] == "appsfolder:" + aumid
+    assert result["display_name"] == "Paint"
+    assert result["permission"] == "computer.launch"
+
+
+def test_packaged_paint_launch_uses_apps_folder_activation_without_shell(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import subprocess
+    from chimera import computer_use
+    from chimera.computer_use import WindowObservation
+
+    aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
+    explorer = tmp_path / "explorer.exe"
+    explorer.write_bytes(b"MZ")
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        computer_use.ctypes,
+        "windll",
+        SimpleNamespace(user32=object(), kernel32=object()),
+        raising=False,
+    )
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setattr(
+        WindowsComputerUse,
+        "_resolve_executable",
+        staticmethod(lambda _name: None),
+    )
+    monkeypatch.setattr(
+        WindowsComputerUse,
+        "_start_menu_apps",
+        staticmethod(lambda: [{"name": "Paint", "app_id": aumid}]),
+    )
+    commands = []
+
+    def fake_popen(command, shell=False):
+        commands.append((command, shell))
+        return SimpleNamespace(pid=111)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    computer = WindowsComputerUse(tmp_path)
+    monkeypatch.setattr(
+        computer,
+        "_windows",
+        lambda: [WindowObservation(77, 222, "Untitled - Paint", "ApplicationFrameWindow", True)],
+    )
+    monkeypatch.setattr(computer, "process_path", lambda _pid: None)
+
+    result = computer.launch("Paint", approved=True)
+
+    assert result["status"] == "completed"
+    assert result["pid"] == 222
+    assert result["spawned_pid"] == 111
+    assert result["launch_kind"] == "appsfolder"
+    assert result["verification"] == "visible_window_title_match"
+    assert commands == [([str(explorer), "shell:AppsFolder\\" + aumid], False)]
+
+
+def test_start_menu_inventory_decodes_bom_and_filters_invalid_application_ids(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    import subprocess
+    from chimera import computer_use
+
+    system_root = tmp_path
+    powershell = (
+        system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    )
+    powershell.parent.mkdir(parents=True)
+    powershell.write_bytes(b"MZ")
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    monkeypatch.setenv("SystemRoot", str(system_root))
+    monkeypatch.setattr(computer_use.shutil, "which", lambda _name: None)
+    payload = [
+        {"Name": "Paint", "AppID": "Microsoft.Paint_8wekyb3d8bbwe!App"},
+        {"Name": "Malformed", "AppID": "C:\\\\unsafe\\\\path.exe"},
+        {"Name": "Missing ID", "AppID": ""},
+    ]
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="\ufeff" + json.dumps(payload),
+        ),
+    )
+
+    apps = WindowsComputerUse._start_menu_apps()
+
+    assert apps == [{
+        "name": "Paint",
+        "app_id": "Microsoft.Paint_8wekyb3d8bbwe!App",
+    }]
+
+
+def test_computer_runtime_catalog_exposes_installed_app_inventory():
+    from chimera.tools import tool_catalog
+
+    operations = tool_catalog()["operations"]
+    assert operations["computer.list_installed_applications"]["arguments"] == {}
+    assert operations["computer.list_installed_applications"]["permission"] == "computer.observe"

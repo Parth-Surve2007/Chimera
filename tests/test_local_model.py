@@ -477,3 +477,318 @@ def test_local_agent_fails_closed_after_repeated_invalid_tool_choice(tmp_path):
             [SimpleNamespace(role="user", content="Write a palindrome function.")],
             {"version": 1, "tools": [{"id": "workspace.create_file", "arguments": {}}]},
         )
+
+
+def test_new_local_model_defaults_enable_more_reasoning_budget_and_adaptive_gpu(tmp_path, monkeypatch):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    monkeypatch.setenv("CHIMERA_DATA_DIR", str(tmp_path / "config"))
+
+    config = config_from_env({"CHIMERA_MODEL_PATH": str(model)})
+
+    assert config.context == 8192
+    assert config.max_tokens == 768
+    assert config.threads == 8
+    assert config.gpu_layers == "auto"
+
+
+def test_legacy_default_model_config_migrates_to_adaptive_gpu_and_higher_budget(tmp_path, monkeypatch):
+    from chimera.local_model import config_data_dir
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    data_dir = tmp_path / "config"
+    data_dir.mkdir()
+    (data_dir / "model_config.json").write_text(json.dumps({
+        "model_path": str(model),
+        "cli_path": None,
+        "server_path": None,
+        "context": 4096,
+        "max_tokens": 256,
+        "threads": 4,
+        "gpu_layers": 0,
+    }), encoding="utf-8")
+    monkeypatch.setenv("CHIMERA_DATA_DIR", str(data_dir))
+
+    config = config_from_env({"CHIMERA_MODEL_PATH": str(model)})
+
+    assert config.context == 8192
+    assert config.max_tokens == 768
+    assert config.threads == 8
+    assert config.gpu_layers == "auto"
+
+
+def test_saved_adaptive_gpu_setting_round_trips(tmp_path, monkeypatch):
+    from chimera.local_model import save_persisted_config
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    save_persisted_config(
+        model,
+        None,
+        data_dir=tmp_path,
+        context=8192,
+        max_tokens=768,
+        threads=8,
+        gpu_layers="auto",
+    )
+    monkeypatch.setenv("CHIMERA_DATA_DIR", str(tmp_path))
+
+    config = config_from_env({"CHIMERA_MODEL_PATH": str(model)})
+
+    assert config.gpu_layers == "auto"
+    assert json.loads((tmp_path / "model_config.json").read_text())["config_version"] == 2
+
+
+def test_agent_blocks_repeated_previous_assistant_answer_after_one_recovery(tmp_path):
+    stale_answer = "Can you create a new document in the workspace?"
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    outputs = iter([
+        json.dumps({"type": "message", "content": stale_answer}),
+        json.dumps({"type": "message", "content": stale_answer}),
+    ])
+    prompts = []
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda prompt, _config: prompts.append(prompt) or next(outputs),
+    )
+
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="assistant", content=stale_answer),
+            SimpleNamespace(role="user", content="Open Paint and draw a portrait."),
+        ],
+        {"version": 1, "tools": [
+            {"id": "computer.list_installed_applications", "arguments": {}},
+            {"id": "computer.launch", "arguments": {"executable": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert "repeated an earlier response" in decision["content"]
+    assert decision["_metrics"]["decision_recovery_attempted"] is True
+    assert decision["_metrics"]["repeated_assistant_response_blocked"] is True
+    assert len(prompts) == 2
+    assert "RECOVERY" in prompts[1]
+
+
+def test_repeated_assistant_response_fallback_uses_latest_real_tool_error(tmp_path):
+    stale_answer = "Can you create a new document in the workspace?"
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    failure = "could not resolve an installed executable or Start-menu app for 'mspaint.exe'"
+    outputs = iter([
+        json.dumps({"type": "message", "content": stale_answer}),
+        json.dumps({"type": "message", "content": stale_answer}),
+    ])
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: next(outputs),
+    )
+
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="assistant", content=stale_answer),
+            SimpleNamespace(role="user", content="Open Paint and draw a portrait."),
+            SimpleNamespace(role="tool", content=json.dumps({
+                "tool": "computer.launch",
+                "arguments": {"executable": "mspaint.exe"},
+                "status": "blocked",
+                "error": failure,
+            })),
+        ],
+        {"version": 1, "tools": [
+            {"id": "computer.list_installed_applications", "arguments": {}},
+            {"id": "computer.launch", "arguments": {"executable": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert failure in decision["content"]
+    assert "did not complete" in decision["content"]
+
+
+def test_user_can_explicitly_ask_to_repeat_an_earlier_assistant_response(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    previous = "The file was created successfully."
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: json.dumps({"type": "message", "content": previous}),
+    )
+
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="assistant", content=previous),
+            SimpleNamespace(role="user", content="Repeat your previous answer exactly."),
+        ],
+        {"version": 1, "tools": []},
+    )
+
+    assert decision["content"] == previous
+    assert decision["_metrics"].get("repeated_assistant_response_blocked") is not True
+
+
+def test_agent_decision_uses_role_separated_chat_messages_for_local_server(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    server = tmp_path / "llama-server.exe"
+    server.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, None, server_path=str(server)),
+    )
+    captured = {}
+
+    def fake_complete(prompt, max_tokens, **kwargs):
+        captured["prompt"] = prompt
+        captured["max_tokens"] = max_tokens
+        captured.update(kwargs)
+        return json.dumps({
+            "type": "message",
+            "content": "I will inspect the installed applications first.",
+        }), {"duration_ms": 5}
+
+    provider.server.complete = fake_complete
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="assistant", content="Previous answer."),
+            SimpleNamespace(role="user", content="Open Paint."),
+            SimpleNamespace(role="tool", content=json.dumps({
+                "tool": "computer.launch",
+                "arguments": {"executable": "mspaint.exe"},
+                "status": "blocked",
+                "error": "executable was not found",
+            })),
+        ],
+        {"version": 1, "tools": [
+            {"id": "computer.list_installed_applications", "arguments": {}},
+            {"id": "computer.launch", "arguments": {"executable": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    chat_messages = captured["messages"]
+    assert chat_messages[0]["role"] == "system"
+    assert "TOOLS:" in chat_messages[0]["content"]
+    assert [item["role"] for item in chat_messages[1:]] == [
+        "assistant", "user", "user",
+    ]
+    assert "RUNTIME TOOL RESULT" in chat_messages[-1]["content"]
+    assert "executable was not found" in chat_messages[-1]["content"]
+    assert captured["json_schema"] is not None
+    assert decision["type"] == "message"
+
+
+def test_conversation_uses_role_separated_messages_for_local_server(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    server = tmp_path / "llama-server.exe"
+    server.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, None, server_path=str(server)),
+    )
+    captured = {}
+
+    def fake_complete(prompt, max_tokens, **kwargs):
+        captured["messages"] = kwargs["messages"]
+        return "Hello. Ready when you are.", {"duration_ms": 3}
+
+    provider.server.complete = fake_complete
+    result = provider.converse([
+        SimpleNamespace(role="assistant", content="Previous assistant answer."),
+        SimpleNamespace(role="user", content="Hello, Chimera."),
+    ])
+
+    assert result.text == "Hello. Ready when you are."
+    assert [item["role"] for item in captured["messages"]] == [
+        "system", "assistant", "user",
+    ]
+
+
+def test_short_confirmation_continues_prior_goal_instead_of_echoing_earlier_request(tmp_path):
+    earlier_request = "open paint and draw monalisa in it"
+    stale_answer = earlier_request
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    outputs = iter([
+        json.dumps({"type": "message", "content": stale_answer}),
+        json.dumps({"type": "message", "content": stale_answer}),
+    ])
+    prompts = []
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda prompt, _config: prompts.append(prompt) or next(outputs),
+    )
+
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="user", content=earlier_request),
+            SimpleNamespace(role="assistant", content="Can you create a new document in the workspace?"),
+            SimpleNamespace(role="user", content="yes"),
+        ],
+        {"version": 1, "tools": [
+            {"id": "computer.list_installed_applications", "arguments": {}},
+            {"id": "computer.launch", "arguments": {"executable": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert decision["content"] != stale_answer
+    assert "confirmation to continue the earlier task" in decision["content"]
+    assert "task remains incomplete" in decision["content"]
+    assert decision["_metrics"]["decision_recovery_attempted"] is True
+    assert decision["_metrics"]["stale_user_request_echo_blocked"] is True
+    assert len(prompts) == 2
+    assert "short confirmation such as yes" in prompts[0]
+    assert "continue the unresolved goal" in prompts[1]
+
+
+def test_native_chat_recovery_instructions_are_added_to_system_message(tmp_path):
+    previous = "Can you create a new document in the workspace?"
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    server = tmp_path / "llama-server.exe"
+    server.write_bytes(b"fixture")
+    outputs = iter([
+        json.dumps({"type": "message", "content": previous}),
+        json.dumps({"type": "message", "content": "I will inspect installed apps before selecting a launch route."}),
+    ])
+    captured = []
+    provider = LocalModelProvider(LocalModelConfig(model, None, server_path=str(server)))
+
+    def fake_complete(prompt, max_tokens, **kwargs):
+        captured.append(kwargs["messages"])
+        return next(outputs), {"duration_ms": 3, "chat_template": True}
+
+    provider.server.complete = fake_complete
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="assistant", content=previous),
+            SimpleNamespace(role="user", content="Open Paint and draw a portrait."),
+        ],
+        {"version": 1, "tools": [
+            {"id": "computer.list_installed_applications", "arguments": {}},
+            {"id": "computer.launch", "arguments": {"executable": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert decision["content"].startswith("I will inspect installed apps")
+    assert len(captured) == 2
+    assert "RECOVERY:" not in captured[0][0]["content"]
+    assert "RECOVERY:" in captured[1][0]["content"]
+    assert "repeated an earlier assistant answer" in captured[1][0]["content"]
+    assert [item["role"] for item in captured[1][1:]] == ["assistant", "user"]

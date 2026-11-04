@@ -191,3 +191,101 @@ def test_http_4xx_and_5xx_are_reported_with_server_body(monkeypatch, status_code
 
     assert captured.value.status_code == status_code
     assert message in str(captured.value)
+
+
+def test_chat_completion_uses_role_messages_and_llama_cpp_json_schema(monkeypatch):
+    manager = make_manager()
+    messages = [
+        {"role": "system", "content": "Return one JSON decision."},
+        {"role": "user", "content": "Open Paint."},
+        {"role": "user", "content": "RUNTIME TOOL RESULT: executable lookup failed."},
+    ]
+    schema = {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["message", "tool_call"]},
+            "content": {"type": "string"},
+        },
+        "required": ["type"],
+    }
+    captured = {}
+    expected = '{"type":"message","content":"I will inspect installed applications."}'
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return FakeResponse([
+            ("data: " + json.dumps({
+                "choices": [{"delta": {"content": expected}}]
+            }) + "\n").encode(),
+            b"data: [DONE]\n",
+        ])
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    output, metrics = manager.complete(
+        "compatibility prompt",
+        512,
+        json_schema=schema,
+        messages=messages,
+    )
+
+    assert captured["url"] == "http://127.0.0.1:12345/v1/chat/completions"
+    assert captured["payload"]["messages"] == messages
+    assert captured["payload"]["response_format"] == {
+        "type": "json_schema",
+        "schema": schema,
+    }
+    assert captured["payload"]["max_tokens"] == 512
+    assert captured["payload"]["stream"] is True
+    assert output == expected
+    assert metrics["chat_template"] is True
+    assert metrics["json_schema"] is True
+    assert "compatibility prompt" not in json.dumps(captured["payload"])
+
+
+def test_chat_completion_rejects_unsupported_message_roles():
+    manager = make_manager()
+
+    with pytest.raises(ValueError, match="supported roles"):
+        manager.complete(
+            "",
+            32,
+            messages=[{"role": "tool", "content": "not a supported chat role"}],
+        )
+
+
+def test_chat_completion_parses_split_streamed_content_and_reasoning(monkeypatch):
+    manager = make_manager()
+    pieces = []
+
+    def fake_urlopen(_request, timeout):
+        assert timeout == manager.timeout
+        events = [
+            {"choices": [{"delta": {"reasoning_content": "inspect "}}]},
+            {"choices": [{"delta": {"content": '{"type":'}}]},
+            {"choices": [{"delta": {"content": '"message"}'}}]},
+        ]
+        return FakeResponse([
+            ("data: " + json.dumps(event)).encode() + bytes([10])
+            for event in events
+        ] + [b"data: [DONE]" + bytes([10])])
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    output, metrics = manager.complete(
+        "",
+        32,
+        messages=[{"role": "user", "content": "Return JSON."}],
+        on_delta=pieces.append,
+    )
+
+    assert output == '{"type":"message"}'
+    assert "".join(pieces) == output
+    assert metrics["reasoning_tokens_estimate"] == 1
+    assert metrics["chat_template"] is True
+
+
+def test_server_manager_defaults_to_adaptive_gpu_offload():
+    manager = make_manager()
+
+    assert manager.gpu_layers == "auto"

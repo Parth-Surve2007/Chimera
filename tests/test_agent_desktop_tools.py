@@ -97,7 +97,7 @@ def test_agent_tool_catalog_exposes_file_creation_only_with_workspace(tmp_path):
 
 
 def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
-    provider = LocalModelProvider(LocalModelConfig(None, None, context=2048))
+    provider = LocalModelProvider(LocalModelConfig(None, None, context=2048, max_tokens=256))
     captured = {}
 
     def fake_structured(prompt, **kwargs):
@@ -118,16 +118,17 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
         session={"mode": "plan", "workspace": None},
     )
     assert result["type"] == "message"
-    assert len(captured["prompt"]) < 5000
+    prompt_budget = max(3200, int(max(256, provider.config.context - provider.config.max_tokens - 128) * 3.2))
+    assert len(captured["prompt"]) <= prompt_budget
     assert "interaction_inventory" not in captured["prompt"]
     assert "unused inventory payload" not in captured["prompt"]
-    assert "Desktop inventory summary" in captured["prompt"]
+    assert "Visible desktop application inventory" in captured["prompt"]
     assert "- notepad.exe: Untitled" in captured["prompt"]
     assert "No user-facing applications found" not in captured["prompt"]
 
 
-def test_new_local_model_context_default_is_four_k():
-    assert LocalModelConfig(None, None).context == 4096
+def test_new_local_model_context_default_is_eight_k():
+    assert LocalModelConfig(None, None).context == 8192
 
 
 def test_ui_removes_verify_controls_and_optional_langflow_setup():

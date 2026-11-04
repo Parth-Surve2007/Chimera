@@ -22,7 +22,7 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 | Area | What is available |
 |---|---|
 | **Local reasoning** | Run a GGUF model through a persistent llama-server or an explicitly configured one-shot llama-cli runtime. |
-| **Computer control** | Discover visible Windows applications, authorize one exact running process, inspect its UI Automation tree, and use supported semantic controls. |
+| **Computer control** | Discover visible and installed Windows applications (including Start-menu packaged apps), authorize one exact running process, inspect its UI Automation tree, and use supported semantic controls. |
 | **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files and genuine Word DOCX documents after explicit approval. |
 | **3D workflows** | Ask the Blender connector to create a bounded primitive-based scene and render a PNG preview. |
 | **Reverse engineering** | Use REA for built-in static artifact inspection, strings, file-format detection, and available analysis backends. Connect Ghidra when installed. |
@@ -38,7 +38,7 @@ The desktop UI keeps the main navigation on the left while you move between Chat
 
 - **Chat** is the continuous conversation and task surface. Complex requests can maintain a persistent checklist with pending, in-progress, completed, and blocked items.
 - **Model Bay** manages local GGUF and explicitly selected API profiles.
-- **Applications** discovers open Windows apps and reports the state of specialist connectors.
+- **Applications** discovers open and installed Windows apps, including packaged Start-menu apps, and reports the state of specialist connectors.
 - **Capabilities** lists the built-in toolkit separately from custom capability proposals.
 - **Workflow Studio** and **Run History** show persisted workflow activity.
 - **Goals** stores operator-owned outcomes and evidence.
@@ -187,8 +187,10 @@ The first launch creates the local Chimera data directory. Source runs use .chim
 1. Open **Model Bay**.
 2. Select your .gguf model.
 3. Select the matching llama-server.exe for persistent inference, or explicitly configure llama-cli.exe for one-shot mode.
-4. Set the context and output budget to match your model and available memory.
-5. Save the configuration and load the model.
+4. Use **APPLY HIGH-COMPUTE PRESET** as a starting point (8K context, 768 output tokens, 8 CPU threads, adaptive GPU offload), then lower the context/output budget if your machine runs out of memory.
+5. Save the configuration and load the model. The llama-server must restart to apply the new settings.
+
+Persistent llama-server inference uses the GGUF's native chat template and schema-constrained JSON decisions when supported by the model/runtime. Failed actions are fed back as role-separated observations, and exact repeated failed tool calls are stopped. A 3B model remains a compact model: the runtime improves structure and recovery, not its intrinsic reasoning capacity.
 
 Chimera does not silently change providers, download a model, or fall back to a hosted service when a local runtime fails. Hosted API profiles can be added separately, but they are used only when explicitly selected for the conversation.
 
