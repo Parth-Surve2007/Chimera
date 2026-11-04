@@ -464,6 +464,11 @@ class AgentRuntime:
             "computer.select_element": {"session_id": str, "reference_id": str},
             "computer.expand_element": {"session_id": str, "reference_id": str},
             "computer.collapse_element": {"session_id": str, "reference_id": str},
+            "computer.visual_action": {
+                "session_id": str, "reference_id": str, "action": str,
+                "points": list, "button": str, "duration_ms": int,
+                "text": str, "key": str, "direction": str, "steps": int,
+            },
         }
         expected = contracts.get(operation)
         if expected is None: raise ValueError(f"unregistered tool: workspace.{operation}")
@@ -503,6 +508,39 @@ class AgentRuntime:
                 raise ValueError("scroll amount must be line or page")
             if "count" in arguments and not 1 <= arguments["count"] <= 5:
                 raise ValueError("scroll count must be between 1 and 5")
+
+        if operation == "computer.visual_action":
+            action = arguments["action"]
+            if action not in {"click", "double_click", "stroke", "type_text", "press_key", "scroll"}:
+                raise ValueError("visual action must be click, double_click, stroke, type_text, press_key, or scroll")
+            if action in {"click", "double_click", "scroll"}:
+                points = arguments.get("points")
+                if not isinstance(points, list) or len(points) != 1:
+                    raise ValueError(f"{action} requires exactly one normalized point")
+            elif action == "stroke":
+                points = arguments.get("points")
+                if not isinstance(points, list) or not 2 <= len(points) <= 64:
+                    raise ValueError("stroke requires between 2 and 64 normalized points")
+            if "points" in arguments:
+                for point in arguments["points"]:
+                    if (
+                        not isinstance(point, list) or len(point) != 2
+                        or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or not 0.02 <= float(v) <= 0.98 for v in point)
+                    ):
+                        raise ValueError("each point must be a normalized [x, y] pair between 0.02 and 0.98")
+            if "button" in arguments and arguments["button"] not in {"left", "right", "middle"}:
+                raise ValueError("button must be left, right, or middle")
+            if "duration_ms" in arguments and not 0 <= arguments["duration_ms"] <= 2000:
+                raise ValueError("duration_ms must be between 0 and 2000")
+            if action == "type_text" and (not isinstance(arguments.get("text"), str) or not 1 <= len(arguments["text"]) <= 4000):
+                raise ValueError("type_text requires 1 to 4000 characters")
+            if action == "press_key" and not isinstance(arguments.get("key"), str):
+                raise ValueError("press_key requires a key name or chord")
+            if action == "scroll":
+                if arguments.get("direction", "down") not in {"up", "down"}:
+                    raise ValueError("scroll direction must be up or down")
+                if type(arguments.get("steps", 3)) is not int or not 1 <= arguments.get("steps", 3) <= 8:
+                    raise ValueError("scroll steps must be an integer from 1 to 8")
 
     def _messages_with_goal_context(self, session_id: str):
         """Rehydrate durable task state and private goals for local inference."""
@@ -1513,7 +1551,7 @@ class AgentRuntime:
             "computer.scroll_element", "computer.scroll_into_view",
             "computer.toggle_element", "computer.select_element",
             "computer.expand_element", "computer.collapse_element",
-            "computer.screenshot", "computer.launch",
+            "computer.screenshot", "computer.launch", "computer.visual_action",
         }:
             operation = pending["tool"]
             args = pending["arguments"]
