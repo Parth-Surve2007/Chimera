@@ -509,6 +509,8 @@ class AgentRuntime:
                 if isinstance(actual, bool) or not isinstance(actual, (int, float)) or not math.isfinite(float(actual)):
                     raise ValueError(f"argument {name} must be a finite number")
             elif type(actual) is not kind:
+                if operation == "computer.visual_action" and name == "duration_ms":
+                    raise ValueError("duration_ms must be an integer between 0 and 2000")
                 raise ValueError(f"argument {name} must be {kind.__name__}")
         required_arguments = {
             "computer.get_range_value": {"session_id", "reference_id"},
