@@ -2,6 +2,8 @@
 setlocal EnableExtensions
 title Chimera Windows Setup
 
+cd /d "%~dp0.."
+
 echo.
 echo  CHIMERA - WINDOWS SETUP
 echo  ======================
@@ -44,11 +46,11 @@ if errorlevel 1 (
 )
 
 echo [2/2] Optional companion applications
-echo These are third-party applications. Winget downloads them from their
-echo configured package sources. Ghidra 12.2 requires a 64-bit JDK 25 or newer.
-echo Blender and Ghidra are separate from Chimera and can also be installed later.
+echo Blender is installed through Winget. Ghidra is downloaded from the official
+echo NSA GitHub release because it is distributed as a portable ZIP, not a setup wizard.
+echo Ghidra 12.2 requires a 64-bit JDK 25 or newer.
 echo.
-choice /C YN /M "Install Blender, Temurin JDK 25, and Ghidra now"
+choice /C YN /M "Install Blender, Temurin JDK 25, and official Ghidra now"
 if errorlevel 2 goto :finish
 
 echo.
@@ -62,9 +64,9 @@ winget install --id EclipseAdoptium.Temurin.25.JDK --exact --accept-source-agree
 if errorlevel 1 echo WARNING: JDK installation reported an error. Check the winget output.
 
 echo.
-echo Installing Ghidra...
-winget install --id NationalSecurityAgency.Ghidra --exact --accept-source-agreements --accept-package-agreements
-if errorlevel 1 echo WARNING: Ghidra installation reported an error. Check the winget output.
+echo Downloading and installing the latest official Ghidra release...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_ghidra.ps1"
+if errorlevel 1 echo WARNING: Ghidra installation did not complete. Use the manual link below.
 
 echo.
 echo Companion installation commands finished.
