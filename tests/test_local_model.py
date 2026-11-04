@@ -257,3 +257,49 @@ def test_persistent_server_uses_json_schema_for_agent_decisions(tmp_path):
     assert fake.received["json_schema"] == AGENT_DECISION_SCHEMA
     assert fake.received["grammar"] is None
     assert metrics["structured_output"] == "json_schema"
+
+
+def test_local_agent_decision_rejects_malformed_json_from_runner(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: '{"type":"message","content":',
+    )
+
+    with pytest.raises(ValueError, match="structured model output was invalid"):
+        provider.decide([], {"version": 1, "tools": []})
+
+
+def test_structured_server_failure_does_not_retry_with_cli(tmp_path, monkeypatch):
+    from chimera.local_model import ServerUnavailable
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    server_exe = tmp_path / "llama-server.exe"
+    server_exe.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli), server_path=str(server_exe)),
+    )
+
+    class BrokenServer:
+        def status(self):
+            return {"state": "ready", "url": "http://127.0.0.1:1234", "pid": 10}
+
+        def complete(self, *args, **kwargs):
+            raise ServerUnavailable("HTTP 400: invalid schema")
+
+    provider.server = BrokenServer()
+    calls = []
+    monkeypatch.setattr(
+        "chimera.local_model._run_streaming",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(RuntimeError, match="no CLI or hosted fallback was attempted"):
+        provider.decide([], {"version": 1, "tools": []})
+    assert calls == []
