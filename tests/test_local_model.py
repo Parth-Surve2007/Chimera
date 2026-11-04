@@ -429,9 +429,16 @@ def test_local_agent_retries_an_unregistered_tool_id_as_a_chat_answer(tmp_path):
     assert len(prompts) == 2
     assert "unregistered tool ID: 'python'" in prompts[1]
     assert "return the code directly" in prompts[1]
-    assert schemas[0]["oneOf"][1]["properties"]["tool"]["enum"] == [
-        "computer.launch", "workspace.create_file"
-    ]
+    generic_variant = next(
+        variant for variant in schemas[0]["oneOf"]
+        if "workspace.create_file" in variant.get("properties", {}).get("tool", {}).get("enum", [])
+    )
+    launch_variant = next(
+        variant for variant in schemas[0]["oneOf"]
+        if variant.get("properties", {}).get("tool", {}).get("enum") == ["computer.launch"]
+    )
+    assert generic_variant["properties"]["tool"]["enum"] == ["workspace.create_file"]
+    assert launch_variant["properties"]["arguments"]["required"] == ["executable"]
     assert schemas[1] == schemas[0]
 
 
@@ -1008,10 +1015,16 @@ def test_repeated_unavailable_desktop_tool_returns_safe_recovery_message(tmp_pat
     assert "computer.inspect_window is not available" in decision["content"]
     assert "No desktop action was executed" in decision["content"]
     assert len(schemas) == 2
-    assert schemas[0]["oneOf"][1]["properties"]["tool"]["enum"] == [
-        "computer.launch",
-        "computer.list_applications",
-    ]
+    launch_variant = next(
+        variant for variant in schemas[0]["oneOf"]
+        if variant.get("properties", {}).get("tool", {}).get("enum") == ["computer.launch"]
+    )
+    generic_variant = next(
+        variant for variant in schemas[0]["oneOf"]
+        if "computer.list_applications" in variant.get("properties", {}).get("tool", {}).get("enum", [])
+    )
+    assert launch_variant["properties"]["arguments"]["additionalProperties"] is False
+    assert generic_variant["properties"]["tool"]["enum"] == ["computer.list_applications"]
     assert decision["_metrics"]["unavailable_desktop_tool_blocked"] == "computer.inspect_window"
 
 
