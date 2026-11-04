@@ -113,8 +113,8 @@ class LlamaServerManager:
         self,
         executable: str | None,
         model: Path | None,
-        context=4096,
-        threads=4,
+        context=8192,
+        threads=8,
         gpu_layers="auto",
         timeout=60,
         port=None,
@@ -243,6 +243,8 @@ class LlamaServerManager:
                     "max_tokens": int(max_tokens),
                     "stream": True,
                     "temperature": 0.2,
+                    "repeat_penalty": 1.08,
+                    "repeat_last_n": 128,
                 }
                 if json_schema is not None:
                     payload["response_format"] = {
@@ -257,6 +259,8 @@ class LlamaServerManager:
                     "n_predict": int(max_tokens),
                     "stream": True,
                     "temperature": 0.2,
+                    "repeat_penalty": 1.08,
+                    "repeat_last_n": 128,
                 }
                 if json_schema is not None:
                     payload["json_schema"] = json_schema
