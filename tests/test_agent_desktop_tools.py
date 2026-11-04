@@ -152,6 +152,18 @@ def test_workspace_file_creation_rejects_absolute_host_paths_before_approval(tmp
     assert not (tmp_path / "hello.txt").exists()
 
 
+def test_workspace_file_creation_rejects_windows_drive_paths_on_all_platforms(tmp_path):
+    tools = WorkspaceTools(tmp_path, tmp_path / "out")
+    result = tools.run(
+        "create_file",
+        {"path": r"C:\Users\Parth\Desktop\hello.txt", "content": "Hello World"},
+        approved=False,
+    )
+    assert result.status == "failed"
+    assert "workspace-relative" in result.error
+    assert not (tmp_path / "C:" / "Users" / "Parth" / "Desktop" / "hello.txt").exists()
+
+
 def test_runtime_rejects_invalid_create_file_path_before_operator_approval(tmp_path):
     class DecidingProvider:
         config = SimpleNamespace(model_path=None)
