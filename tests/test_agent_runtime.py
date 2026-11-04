@@ -547,5 +547,5 @@ def test_explicit_new_task_pauses_unfinished_task_and_can_resume_it(tmp_path):
     ])
     runtime.provider = third
     assert runtime.send(session_id, "Resume previous task and continue")["status"] == "completed"
-    assert runtime.task_store.latest_for_session(session_id).task_id == original.task_id
+    assert runtime.task_store.active_for_session(session_id).task_id == original.task_id
     assert runtime.task_store.get(original.task_id).status == "ready"
