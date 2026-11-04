@@ -306,3 +306,58 @@ def test_application_inventory_remains_tolerant_only_for_no_argument_reads():
             "computer.inspect_controls",
             {"session_id": "session", "hwnd": 1, "extra": "not allowed"},
         )
+
+
+def test_standalone_launch_request_is_completed_from_confirmed_windows_result(tmp_path, monkeypatch):
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            return {
+                "type": "tool_call",
+                "tool": "computer.launch",
+                "arguments": {"executable": "Notepad"},
+                "invocation_id": "launch-notepad",
+            }
+
+    def fake_launch(self, executable, approved=False):
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "application": r"C:\\Windows\\System32\\notepad.exe",
+                "requested_application": executable,
+                "permission": "computer.launch",
+            }
+        return {
+            "status": "completed",
+            "pid": 456,
+            "executable": r"C:\\Windows\\System32\\notepad.exe",
+            "windows": [{"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"}],
+        }
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = DecidingProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    pending = runtime.send(session_id, "Open Notepad. Do not create a text file.")
+    assert pending["status"] == "awaiting_approval"
+
+    completed = runtime.approve_pending(session_id, True)
+
+    assert completed["status"] == "completed"
+    assert "Notepad opened successfully" in completed["message"].content
+    assert "Process ID: 456" in completed["message"].content
+    assert "Untitled - Notepad" in completed["message"].content
+    assert provider.calls == 1, "a standalone launch should not need a second model inference"
+    assert runtime.store.session(session_id)["state"] == "idle"
+
+
+def test_launch_completion_shortcut_does_not_skip_requested_follow_up_work():
+    assert AgentRuntime._is_terminal_launch_request("Open Notepad. Do not create a text file.")
+    assert not AgentRuntime._is_terminal_launch_request("Open Word and create a document.")
+    assert not AgentRuntime._is_terminal_launch_request("Launch Notepad, then type hello.")
