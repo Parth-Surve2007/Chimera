@@ -537,7 +537,7 @@ class AgentRuntime:
                 ],
             }
             context_blocks.append(
-                "Private local goal context (read-only):\\n"
+                "Private local goal context (read-only):\n"
                 + json.dumps(goal_context, ensure_ascii=False, separators=(",", ":"))
             )
 
@@ -565,7 +565,7 @@ class AgentRuntime:
                     ],
                 }
                 context_blocks.append(
-                    "Active durable task state. Continue this task unless the current user message explicitly starts a separate task. Completed actions and their results are historical evidence; do not repeat their side effects. Resolve pending/blocked work or explain the blocker. Do not claim completion while checklist items or action steps remain unresolved:\\n"
+                    "Active durable task state. Continue this task unless the current user message explicitly starts a separate task. Completed actions and their results are historical evidence; do not repeat their side effects. Resolve pending/blocked work or explain the blocker. Do not claim completion while checklist items or action steps remain unresolved:\n"
                     + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
                 )
 
@@ -574,7 +574,7 @@ class AgentRuntime:
                 message_id="runtime-context-" + session_id,
                 session_id=session_id,
                 role="system",
-                content="\\n\\n".join(context_blocks),
+                content="\n\n".join(context_blocks),
                 created_at=_now(),
             ))
         return messages
@@ -1543,9 +1543,9 @@ class AgentRuntime:
                 reader = PdfReader(str(target), strict=True)
                 if reader.is_encrypted or not reader.pages:
                     raise ValueError("PDF is encrypted or contains no pages")
-                extracted = "\\n".join(page.extract_text() or "" for page in reader.pages)
+                extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
                 normalize = lambda value: " ".join(str(value or "").replace("\\u00a0", " ").split())
-                expected = normalize(pending["arguments"]["title"] + "\\n" + pending["arguments"]["content"])
+                expected = normalize(pending["arguments"]["title"] + "\n" + pending["arguments"]["content"])
                 observed = normalize(extracted)
                 if observed != expected:
                     raise ValueError("independent PDF text extraction does not match the approved source text")
@@ -1648,7 +1648,10 @@ class AgentRuntime:
                 self._tasks.pop(session_id, None)
                 return {"status": "failed", "error": error, "tool": pending["tool"]}
 
-            file_kind = {\n                "workspace.create_document": "Word document",\n                "workspace.create_pdf": "PDF document",\n            }.get(pending["tool"], "text file")
+            file_kind = {
+                "workspace.create_document": "Word document",
+                "workspace.create_pdf": "PDF document",
+            }.get(pending["tool"], "text file")
             assistant = self.store.add_message(
                 session_id, "assistant",
                 f"Created and verified the {file_kind}: {relative} ({result.data['bytes']} bytes)."
