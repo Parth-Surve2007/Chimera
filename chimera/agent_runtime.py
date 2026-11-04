@@ -1329,6 +1329,7 @@ class AgentRuntime:
                         "session_id": observation.session_id,
                         "windows": observation.windows,
                         "backend": observation.backend,
+                        "application_profile": observation.application.get("profile"),
                     }
                     result_status, result_error = "completed", None
                 elif operation == "computer.inspect_controls":
@@ -1351,6 +1352,7 @@ class AgentRuntime:
                         "backend": observation.backend,
                         "selected_window": observation.windows[0] if observation.windows else None,
                         "windows": observation.windows[:12],
+                        "application_profile": observation.application.get("profile"),
                         "elements": observation.elements[:args.get("limit", 250)],
                         "element_count": len(observation.elements),
                         "limitation": observation.limitation,
