@@ -150,7 +150,7 @@ def test_draw_stroke_is_bounded_and_returns_pixel_change_evidence():
 
 def test_foreground_change_aborts_remaining_stroke_and_releases_button():
     native = FakeNative()
-    native.flip_foreground_after_moves = 1
+    native.flip_foreground_after_moves = 2
     backend = ScopedWindowsInputBackend(native=native)
 
     result = backend.execute(
