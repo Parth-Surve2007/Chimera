@@ -1289,7 +1289,7 @@ class ComputerSessionManager:
             return {
                 "status": "blocked", "verified": False,
                 "backend": "strategy",
-                "reason": strategy.reason,
+                "reason": strategy.get("reason"),
                 "selected_backend": strategy.get("selected"),
             }
         try:
