@@ -43,6 +43,30 @@ Reference: https://github.com/SWE-agent/SWE-agent
 
 References: https://github.com/All-Hands-AI/OpenHands and https://github.com/openai/openai-agents-python
 
+### Application coverage ladder (vNext)
+
+Chimera must not treat "computer use" as one mouse-and-keyboard backend. The same user outcome can require very different control surfaces. The runtime should choose from this ordered ladder using observed app identity and available evidence:
+
+1. **Native application adapter**: documented APIs, COM/WinRT, Office object models, application SDKs, or an app's own file/database interface. Prefer this for structured edits and repeatability.
+2. **Registered application connector**: a versioned manifest with discoverable actions, argument schemas, permission declarations, preconditions, execution context, and independent postconditions.
+3. **Windows UI Automation**: inspect accessible controls and use supported patterns such as Text, Value, Invoke, Toggle, Selection, RangeValue, Grid, and Scroll. Never infer support from an application name alone.
+4. **Browser automation**: use the isolated Playwright browser profile and semantic DOM/accessibility locators before pixel interaction.
+5. **Scoped visual interaction**: use only a fresh element reference, a rectangle contained by the exact authorized HWND, exact foreground PID/HWND checks before every input packet, and explicit approval. This is for custom surfaces that expose no useful semantic controls, not the default interaction strategy.
+6. **Validated file-format operations**: edit DOCX/PDF/CSV/JSON and other supported artifacts through format-aware libraries when that is the actual task, then reopen and verify the output.
+7. **Operator handoff**: when none of the above is grounded or safe, explain the missing capability and preserve resumable task state.
+
+An application adapter is accepted only when it has: a stable app identity/version match; an explicit capability manifest; strict schemas; a least-privilege permission set; deterministic preflight; cancellation/timeout behavior; bounded retries; audit events; and an independent postcondition test. Connector discovery is not permission, a successful API return is not always task completion, and a generic UIA tree is not proof that every app workflow is covered.
+
+This mirrors the useful UFO² design lesson: separate the desktop orchestrator from application-specific execution, and combine Windows UI Automation with native APIs rather than betting on vision-only control. The Windows accessibility guidance also recommends inspecting the actual UIA representation, because each app's exposed controls and patterns determine what an automation client can do. Hermes contributes a useful broad toolset and progressive skill loading pattern, but Chimera keeps all execution inside AgentRuntime's permission and evidence boundary.
+
+### Scoped custom-canvas drawing
+
+- computer.visual_action can use stroke for one connected path or multi_stroke for 1-16 distinct pen-up paths in one approval, with at most 256 normalized points total.
+- A target must be a fresh, visible, enabled UIA element with a usable rectangle fully contained in the authorized application window.
+- The broker verifies the foreground window and PID before each pointer event, releases held buttons on abort, and returns before/after pixel hashes and changed-pixel fraction.
+- Pixel change proves that the target region changed, not that the requested semantic drawing is correct. Chimera must not claim "house drawn" from accepted input or pixel-diff evidence alone; semantic verification needs a visual-capable model or app-specific inspection.
+- The approval replay binds a launched packaged app to the exact HWNDs returned by the launch observation. WindowsApps execution aliases may resolve to a different final image path; any alias exception requires the known WindowsApps path shape, a matching app/window identity, and the exact live HWND/PID. Shared host processes are restricted to those launch-observed windows.
+
 ## Designing for a 3B local model
 
 A compact model should not solve the whole job in one completion. The runtime must break work into bounded decisions and externalize state.
