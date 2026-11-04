@@ -59,6 +59,18 @@ An application adapter is accepted only when it has: a stable app identity/versi
 
 This mirrors the useful UFO² design lesson: separate the desktop orchestrator from application-specific execution, and combine Windows UI Automation with native APIs rather than betting on vision-only control. The Windows accessibility guidance also recommends inspecting the actual UIA representation, because each app's exposed controls and patterns determine what an automation client can do. Hermes contributes a useful broad toolset and progressive skill loading pattern, but Chimera keeps all execution inside AgentRuntime's permission and evidence boundary.
 
+### Optional local visual perception
+
+A user may configure a separate multimodal GGUF without changing Chimera's text model:
+
+- `CHIMERA_VISION_MODEL_PATH`: absolute path to a locally installed vision-capable GGUF.
+- `CHIMERA_VISION_SERVER`: absolute path to the matching local `llama-server` executable. If omitted, Chimera may use the already configured local llama-server executable path.
+- Optional tuning: `CHIMERA_VISION_CONTEXT`, `CHIMERA_VISION_THREADS`, `CHIMERA_VISION_GPU_LAYERS`, and `CHIMERA_VISION_TIMEOUT`.
+
+No model is downloaded. The vision server starts only when an approved visual inspection is requested. Images are resized and encoded as bounded JPEG data URLs and sent only to the local llama-server. Remote image URLs, hosted providers, and silent fallback are rejected. Missing or incompatible multimodal assets produce a truthful unavailable/failed result.
+
+The local observer can describe a screenshot, locate candidate controls, and compare visible state with an expected result. Its output is still model-generated observation, not a proof of side effects. Chimera must combine it with fresh UIA/process/window evidence, actual file state, and deterministic application/file-format checks before reporting completion. Screenshots are privacy-sensitive: `computer.inspect_visual_target` requires exact operator approval and refuses to capture a background or foreign window.
+
 ### Scoped custom-canvas drawing
 
 - computer.visual_action can use stroke for one connected path or multi_stroke for 1-16 distinct pen-up paths in one approval, with at most 256 normalized points total.
