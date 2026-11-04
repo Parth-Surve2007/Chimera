@@ -1770,9 +1770,18 @@ class MainWindow:
         self.live_events = self.live_events[-100:]
         if self.current_view == "chat" and self.task_busy:
             try:
-                self.page.run_task(self._update_live_status)
+                callback = (
+                    self._refresh_live_feed_after_tool
+                    if event.event_type in {"tool.completed", "tool.failed"}
+                    else self._update_live_status
+                )
+                self.page.run_task(callback)
             except Exception:
                 pass
+
+    async def _refresh_live_feed_after_tool(self):
+        await self._update_live_status()
+        self._refresh_chat_feed()
 
     async def _update_live_status(self):
         if self.current_view != "chat" or not self.task_busy or self.live_status_text is None:

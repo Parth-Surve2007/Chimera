@@ -936,6 +936,26 @@ class AgentRuntime:
             max_tools -= 1
         raise RuntimeError("maximum agent-turn limit reached")
 
+    @staticmethod
+    def _is_terminal_launch_request(request: str) -> bool:
+        """Recognize a standalone app-launch request without consuming follow-up work."""
+        import re
+
+        text = str(request or "").strip().casefold()
+        if not re.match(r"^(?:please\s+)?(?:open|launch|start|run)\b", text):
+            return False
+        clauses = re.split(r"[.!?;,]|\b(?:and then|and|then|after that)\b", text)
+        follow_up_actions = re.compile(
+            r"\b(?:create|write|edit|save|type|enter|fill|draft|make|generate|insert|"
+            r"format|export|print|upload|download)\b"
+        )
+        for clause in clauses[1:]:
+            if re.search(r"\b(?:do not|don't|never|not|without)\b", clause):
+                continue
+            if follow_up_actions.search(clause):
+                return False
+        return True
+
     def approve_pending(self, session_id: str, approve: bool) -> dict:
         pending = self.store.pending_tool(session_id)
         if not pending: raise ValueError("no pending tool approval")
@@ -1051,6 +1071,41 @@ class AgentRuntime:
         self.store.clear_pending_tool(session_id)
         self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "tool": pending["tool"], "arguments": pending["arguments"], "result": result.data, "status": result.status, "error": result.error}))
         self._record(session_id, "tool.completed" if result.status == "completed" else "tool.failed", {"invocation_id": pending["invocation_id"], "status": result.status, "data": result.data, "error": result.error})
+
+        # A standalone launch request is complete when Windows confirms that
+        # the requested application window appeared. Avoid an unnecessary
+        # second model turn that can leave a successful launch looking stuck.
+        if (
+            pending["tool"] == "computer.launch"
+            and result.status == "completed"
+            and self._is_terminal_launch_request(
+                next((item.content for item in reversed(self.store.messages(session_id)) if item.role == "user"), "")
+            )
+        ):
+            executable_text = str(result.data.get("executable") or pending["arguments"].get("executable") or "Application")
+            executable_name = executable_text.replace("\\", "/").rsplit("/", 1)[-1]
+            application = Path(executable_name).stem.replace("_", " ").strip() or "Application"
+            application = application[:1].upper() + application[1:]
+            windows = result.data.get("windows") or []
+            window_titles = [
+                str(item.get("title") or "").strip()
+                for item in windows if isinstance(item, dict) and item.get("title")
+            ]
+            summary = f"{application} opened successfully."
+            if result.data.get("pid") is not None:
+                summary += f" Process ID: {result.data['pid']}."
+            if window_titles:
+                summary += " Visible window: " + "; ".join(window_titles[:3]) + "."
+            assistant = self.store.add_message(session_id, "assistant", summary)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
+            self._record(session_id, "turn.completed", {
+                "turn_id": pending["turn_id"],
+                "completion": "confirmed_application_launch",
+                "tool": pending["tool"],
+            })
+            return {"status": "completed", "message": assistant, "tools": [pending["tool"]]}
+
         self.store.add_message(session_id, "system", "The approved tool operation completed. Decide the next step using its actual result.")
         session = self.store.session(session_id)
         try:
