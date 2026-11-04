@@ -753,6 +753,35 @@ class AgentRuntime:
             else:
                 needs_approval = permission not in {"workspace.read", "computer.observe"}
 
+            if tool_id == "computer.launch":
+                # Resolve the friendly app name before presenting the approval
+                # card so the operator approves one exact executable.
+                launch_preflight = WindowsComputerUse(workspace).launch(
+                    decision["arguments"].get("executable", ""), approved=False
+                )
+                if launch_preflight.get("status") != "awaiting_approval":
+                    error = launch_preflight.get("reason", "application executable could not be resolved")
+                    payload = {
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "arguments": decision["arguments"],
+                        "result": launch_preflight,
+                        "status": launch_preflight.get("status", "blocked"),
+                        "error": error,
+                    }
+                    self.store.add_message(session_id, "tool", json.dumps(payload, separators=(",", ":")))
+                    self._record(session_id, "tool.failed", {
+                        "turn_id": turn_id,
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "status": launch_preflight.get("status", "blocked"),
+                        "data": launch_preflight,
+                        "error": error,
+                    })
+                    max_tools -= 1
+                    continue
+                decision["arguments"]["executable"] = launch_preflight["application"]
+
             if tool_id == "workspace.create_file":
                 preflight = tools.run("create_file", decision["arguments"], approved=False)
                 if preflight.status != "awaiting_approval":
