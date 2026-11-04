@@ -171,11 +171,19 @@ def create_docx(path: Path, *, title: str, content: str) -> None:
     payloads["word/document.xml"] = _document_xml(title, content)
     payloads["word/styles.xml"] = _styles_xml()
 
+    created_by_this_call = False
     try:
+        # If exclusive creation fails, another process may own the destination.
+        # Only remove a partial file after this call successfully created it.
         with target.open("xb") as stream:
+            created_by_this_call = True
             with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for name, data in payloads.items():
                     archive.writestr(name, data)
-    except Exception:
-        target.unlink(missing_ok=True)
+    except BaseException:
+        if created_by_this_call:
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise
