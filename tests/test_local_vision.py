@@ -276,3 +276,81 @@ def test_visual_target_inspection_does_not_capture_background_or_foreign_windows
 
     assert result["status"] == "awaiting_operator_focus"
     assert result["verified"] is False
+
+
+def test_agent_runtime_requires_exact_screenshot_approval_for_local_visual_inspection(tmp_path):
+    class Provider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.decisions = iter([
+                {
+                    "type": "tool_call",
+                    "tool": "computer.inspect_visual_target",
+                    "arguments": {
+                        "session_id": "vision-app-session",
+                        "reference_id": "fresh-canvas",
+                        "question": "Does this canvas contain a house?",
+                    },
+                    "invocation_id": "inspect-local-vision",
+                },
+                {"type": "message", "content": "The local vision model describes a house outline."},
+            ])
+
+        def decide(self, messages, catalog, session=None):
+            return next(self.decisions)
+
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "vision-approval.db"),
+        Provider(),
+    )
+    session_id = runtime.create_session(tmp_path, mode="build")
+    identity = ApplicationIdentity(
+        4242, "C:/Apps/Paint.exe", 123.0, session_id, "vision-app-session", (77,),
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    runtime.computer._identity_is_current = lambda current: current is identity
+    runtime.computer.uia = SimpleNamespace()
+    runtime.computer.visual_perception = SimpleNamespace()
+    calls = []
+    runtime.computer.inspect_visual_target = lambda *args, **kwargs: (
+        calls.append((args, kwargs))
+        or {
+            "status": "completed",
+            "description": "A house outline is visible.",
+            "verified": False,
+            "hosted_fallback": False,
+        }
+    )
+
+    pending = runtime.send(session_id, "Inspect the Paint canvas and tell me whether a house is visible.")
+    assert pending["status"] == "awaiting_approval"
+    assert calls == []
+    approval = runtime.store.pending_tool(session_id)
+    assert approval["tool"] == "computer.inspect_visual_target"
+    assert approval["arguments"]["reference_id"] == "fresh-canvas"
+
+    completed = runtime.approve_pending(session_id, True)
+    assert completed["status"] == "completed"
+    assert len(calls) == 1
+    assert calls[0][1]["approved"] is True
+
+
+def test_protocol_catalog_hides_visual_inspection_without_local_vision_model(tmp_path):
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "vision-catalog.db"),
+        SimpleNamespace(config=SimpleNamespace(model_path=None)),
+    )
+    session_id = runtime.create_session(tmp_path, mode="build")
+    runtime.computer.uia = SimpleNamespace()
+    runtime.computer.visual_perception = None
+    identity = ApplicationIdentity(
+        4242, "C:/Apps/Paint.exe", 123.0, session_id, "vision-app-session", (77,),
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    runtime.computer._identity_is_current = lambda current: current is identity
+
+    catalog = runtime._protocol_catalog(runtime.store.session(session_id))
+    ids = {item["id"] for item in catalog["tools"]}
+    assert "computer.inspect_elements" in ids
+    assert "computer.inspect_visual_target" not in ids
