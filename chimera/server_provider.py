@@ -196,6 +196,8 @@ class LlamaServerManager:
                 raise ServerUnavailable("llama-server executable is unavailable")
             if not self.model or not self.model.is_file():
                 raise ServerUnavailable("GGUF model is unavailable")
+            if self.mmproj is not None and not self.mmproj.is_file():
+                raise ServerUnavailable("configured multimodal projector file is unavailable")
             self.state = "starting"
             self.last_error = None
             command = [
@@ -205,8 +207,6 @@ class LlamaServerManager:
                 "--parallel", "1", "--no-webui",
             ]
             if self.mmproj is not None:
-                if not self.mmproj.is_file():
-                    raise ServerUnavailable("configured multimodal projector file is unavailable")
                 command.extend(["--mmproj", str(self.mmproj)])
             # Never leave an unread PIPE attached to the long-lived inference process.
             kwargs = {
