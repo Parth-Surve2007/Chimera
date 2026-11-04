@@ -712,9 +712,9 @@ def test_agent_runtime_requires_pdf_approval_then_verifies_the_real_file(tmp_pat
     assert completed["verification"]["bytes"] == target.stat().st_size
     assert completed["verification"]["sha256"]
     reader = PdfReader(str(target), strict=True)
-    extracted = "\\n".join(page.extract_text() or "" for page in reader.pages)
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
     normalize = lambda value: " ".join(value.replace("\\u00a0", " ").split())
-    assert normalize("Notepad Export\\n" + source) == normalize(extracted)
+    assert normalize("Notepad Export\n" + source) == normalize(extracted)
 
     tool_result = next(
         json.loads(item.content)
