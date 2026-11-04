@@ -173,6 +173,20 @@ class BrowserConnector(BaseApplicationConnector):
                 requires_approval=True,
             ),
             ApplicationAction(
+                action_id="upload_file",
+                display_name="Upload workspace file",
+                description="Attach one existing file from the selected workspace to one uniquely matched HTML file input after approval. Files outside the workspace are never exposed.",
+                risk_level=ActionRiskLevel.LEVEL_4_EXTERNAL_SENSITIVE,
+                permission="browser.upload",
+                arguments_schema={
+                    "page_index": "integer", "expected_url": "string",
+                    "selector_kind": "string", "selector": "string",
+                    "relative_path": "string",
+                },
+                expected_side_effects=["Attaches one selected workspace file to a web form"],
+                requires_approval=True,
+            ),
+            ApplicationAction(
                 action_id="download",
                 display_name="Download page artifact",
                 description="Click one uniquely matched download control and save its file under the selected workspace. Files larger than 50 MB and path traversal are rejected.",
@@ -794,6 +808,57 @@ class BrowserConnector(BaseApplicationConnector):
                 raise ValueError("press key is not in the browser application-key allowlist")
             locator.press(key_map[key], timeout=5000)
             return {"status": "completed", "accepted": True, "url": page.url, "key": key_map[key]}
+        if action_id == "upload_file":
+            if not approved:
+                return {"status": "awaiting_approval", "permission": "browser.upload"}
+            runtime, page = self._page(arguments)
+            locator = self._locator(page, arguments["selector_kind"], arguments["selector"])
+            if locator.count() != 1:
+                raise ValueError(f"file input selector matched {locator.count()} elements; exactly one is required")
+            tag_info = locator.evaluate("""el => ({
+                tag: (el.tagName || '').toLowerCase(),
+                type: (el.getAttribute('type') || '').toLowerCase(),
+                disabled: !!el.disabled,
+                multiple: !!el.multiple,
+                accept: el.getAttribute('accept') || ''
+            })""")
+            if tag_info["tag"] != "input" or tag_info["type"] != "file":
+                raise ValueError("upload_file requires one exact HTML input[type=file] element")
+            if tag_info["disabled"]:
+                raise ValueError("selected file input is disabled")
+            relative = arguments["relative_path"]
+            import ntpath
+            if not isinstance(relative, str) or not relative.strip():
+                raise ValueError("upload path must be a non-empty workspace-relative path")
+            normalized = relative.replace("\\", "/")
+            drive, _ = ntpath.splitdrive(relative)
+            if drive or normalized.startswith("/") or Path(relative).is_absolute() or any(part in {"", ".", ".."} for part in normalized.split("/")):
+                raise ValueError("upload path must remain inside the selected workspace")
+            source = (runtime.workspace / normalized).resolve(strict=True)
+            if runtime.workspace not in source.parents or not source.is_file():
+                raise ValueError("upload source must be an existing file inside the selected workspace")
+            if source.is_symlink():
+                raise ValueError("upload source may not be a symbolic link")
+            locator.set_input_files(str(source), timeout=10_000)
+            observed = locator.evaluate("""el => Array.from(el.files || []).map(file => ({
+                name: file.name, size: file.size, type: file.type
+            }))""")
+            matches = [
+                item for item in observed
+                if item.get("name") == source.name and item.get("size") == source.stat().st_size
+            ]
+            if len(matches) != 1:
+                raise RuntimeError("browser file input did not retain the selected workspace file")
+            return {
+                "status": "completed", "verified": True,
+                "uploaded_file": {
+                    "path": source.relative_to(runtime.workspace).as_posix(),
+                    "name": source.name, "bytes": source.stat().st_size,
+                },
+                "multiple": tag_info["multiple"],
+                "accept": tag_info["accept"],
+                "url": page.url,
+            }
         if action_id == "download":
             if not approved:
                 return {"status": "awaiting_approval", "permission": "browser.download"}
