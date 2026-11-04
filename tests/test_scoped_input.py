@@ -65,9 +65,6 @@ class FakeNative:
             self.foreground = 9999
             self.foreground_window = 100
 
-    def send_virtual_key(self, key, down):
-        self.events.append(("key", key, down))
-
     def capture(self, _rect):
         return FakeImage(bytes([len(self.events) % 251]) * 128)
 
