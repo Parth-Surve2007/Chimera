@@ -489,3 +489,34 @@ def test_custom_profile_full_executable_path_is_normalized_to_basename(tmp_path)
     }])
     matched = registry.match("C:/Program Files/Studio/editor.exe", [])
     assert matched["profile_id"] == "custom.fullpath"
+
+
+def test_local_model_prompt_requires_file_evidence_after_canvas_save(tmp_path):
+    provider = LocalModelProvider(
+        LocalModelConfig(None, None, context=8192, max_tokens=256)
+    )
+    captured = {}
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "I will verify the saved file."}, {"context": 8192}
+
+    provider.structured_with_metrics = fake_structured
+    provider.decide(
+        [SimpleNamespace(role="user", content="Draw and save a PNG in this workspace.")],
+        {"tools": [
+            {"id": "computer.visual_action", "description": "Scoped canvas drawing",
+             "arguments": {"session_id": "string", "reference_id": "string",
+                           "action": "string", "strokes": "array"},
+             "permission": "computer.input"},
+            {"id": "workspace.inspect_file", "description": "Inspect exact file metadata",
+             "arguments": {"path": "string"}, "permission": "workspace.read"},
+        ], "authorized_applications": []},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    prompt = captured["prompt"]
+    assert "workspace.inspect_file" in prompt
+    assert "A dismissed Save dialog is not proof of success" in prompt
+    assert "nonzero size" in prompt
+    assert "Reopen the saved image" in prompt
