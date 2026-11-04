@@ -605,26 +605,30 @@ class ComputerSessionManager:
 
         target_hwnd = int(app["windows"][0]["hwnd"])
         generation = self.observations.get(session_id, (0, None))[0] + 1
-        elements = []
+        uia_elements = []
         if self.uia:
             try:
-                elements = self.uia.elements(target_hwnd, depth=depth, limit=limit)
+                uia_elements = self.uia.elements(target_hwnd, depth=depth, limit=limit)
             except Exception:
                 self.uia = None
-        if not elements:
-            elements = self.backend.controls(target_hwnd)[:min(limit, 250)]
-        backend = "uia" if self.uia else "win32"
-        if self.uia:
-            enriched = []
-            for element in elements:
-                runtime_id = element.get("runtime_id")
-                if not runtime_id:
-                    continue
+                uia_elements = []
+
+        # A successful provider query returning no usable runtime IDs is not
+        # a semantic observation. Fall back to read-only Win32 controls rather
+        # than labelling an empty Win32 tree as UIA.
+        uia_elements = [
+            item for item in uia_elements
+            if isinstance(item, dict) and item.get("runtime_id")
+        ]
+        backend = "uia" if self.uia is not None and uia_elements else "win32"
+        elements = []
+        if backend == "uia":
+            for element in uia_elements:
                 reference = ElementReference(
                     uuid.uuid4().hex,
                     session_id,
                     int(element.get("parent") or target_hwnd),
-                    runtime_id,
+                    str(element["runtime_id"]),
                     generation,
                     time.time() + self.observation_ttl,
                 )
@@ -634,8 +638,11 @@ class ComputerSessionManager:
                 item["session_id"] = session_id
                 item["observation_generation"] = generation
                 item["available_actions"] = self._available_actions(item)
-                enriched.append(item)
-            elements = enriched
+                elements.append(item)
+            if not elements:
+                backend = "win32"
+        if backend == "win32":
+            elements = self.backend.controls(target_hwnd)[:min(limit, 250)]
 
         observation = ComputerObservation(
             uuid.uuid4().hex,
