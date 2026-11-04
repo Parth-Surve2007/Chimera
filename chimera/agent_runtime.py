@@ -1284,7 +1284,7 @@ class AgentRuntime:
         if not pending: raise ValueError("no pending tool approval")
         session = self.store.session(session_id)
         if not session or session["state"] != "awaiting_approval": raise ValueError("session is not awaiting approval")
-        task = self.task_store.latest_for_session(session_id)
+        task = self.task_store.active_for_session(session_id)
         if task:
             self._tasks[session_id] = task.task_id
         if not approve:
@@ -1491,7 +1491,7 @@ class AgentRuntime:
                 "tool": pending["tool"], "path": relative, "sha256": result.data["sha256"],
             })
             if task:
-                self.task_store.transition(task.task_id, "completed")
+                self.task_store.reconcile_completion(task.task_id, "completed")
             self._tasks.pop(session_id, None)
             return {
                 "status": "completed", "message": assistant, "tools": [pending["tool"]],
@@ -1508,7 +1508,10 @@ class AgentRuntime:
             if task:
                 current = self.store.session(session_id)
                 mapped = {"idle": "completed", "cancelled": "cancelled", "awaiting_approval": "waiting_approval", "failed": "failed"}.get(current.get("state"), "failed")
-                self.task_store.transition(task.task_id, mapped)
+                if mapped == "completed":
+                    self.task_store.reconcile_completion(task.task_id, mapped)
+                else:
+                    self.task_store.transition(task.task_id, mapped)
             return result
         finally:
             self._tasks.pop(session_id, None)
