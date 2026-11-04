@@ -358,7 +358,7 @@ def test_approved_computer_launch_authorizes_exact_process_for_same_conversation
             "application": str(executable),
             "display_name": "Notepad",
             "verification": "visible_window_executable_match",
-            "windows": [{"title": "Untitled - Notepad"}],
+            "windows": [{"hwnd": 77, "pid": 4242, "title": "Untitled - Notepad", "class_name": "Notepad"}],
         }
 
     monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
@@ -374,7 +374,7 @@ def test_approved_computer_launch_authorizes_exact_process_for_same_conversation
     session_id = runtime.create_session(workspace=workspace, mode="build")
     identities = []
 
-    def authorize(pid, image=None, owner_session_id=None):
+    def authorize(pid, image=None, owner_session_id=None, **kwargs):
         identity = SimpleNamespace(
             pid=pid, executable=str(executable), process_create_time=123.0,
             session_id="authorized-notepad-session",
