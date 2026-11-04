@@ -583,10 +583,10 @@ class AgentRuntime:
                 content=(
                     "FORMAT REPAIR REQUIRED. Your previous output was not an agent "
                     "decision and no action was executed. A tool result is not a tool "
-                    "call. Return exactly one JSON object with either "
-                    "{\\"type\\":\\"message\\",\\"content\\":\\"...\\"} or "
-                    "{\\"type\\":\\"tool_call\\",\\"tool\\":\\"<exact registered tool id>\\","
-                    "\\"arguments\\":{...},\\"invocation_id\\":\\"optional-id\\"}. "
+                    "call. Return exactly one JSON object of one of two forms: a message "
+                    "decision with type=message and a non-empty content string; or a "
+                    "tool_call decision with type=tool_call, an exact registered tool "
+                    "identifier, an arguments object, and an optional invocation_id. "
                     "Do not include result, status, or error fields. Choose only a tool "
                     "in the supplied catalog. Do not claim any action has already happened."
                 ),
