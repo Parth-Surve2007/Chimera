@@ -377,3 +377,83 @@ def test_agent_runtime_plan_mode_blocks_uia_mutation_before_approval(tmp_path, m
         event.event_type == "tool.failed" and event.payload.get("status") == "blocked"
         for event in runtime.store.events(session_id)
     )
+
+
+def test_agent_can_inspect_installed_start_menu_applications(tmp_path, monkeypatch):
+    from chimera import agent_runtime as runtime_module
+
+    installed = [{
+        "name": "Paint",
+        "app_id": "Microsoft.Paint_8wekyb3d8bbwe!App",
+    }]
+    monkeypatch.setattr(
+        runtime_module.WindowsComputerUse,
+        "list_installed_applications",
+        lambda self: installed,
+    )
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "computer.list_installed_applications",
+            "arguments": {},
+            "invocation_id": "installed-apps-1",
+        },
+        {"type": "message", "content": "Paint is installed and available to launch."},
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    result = runtime.send(session_id, "Find the installed Paint application.")
+
+    assert result["status"] == "completed"
+    tool_message = next(item for item in store.messages(session_id) if item.role == "tool")
+    payload = json.loads(tool_message.content)
+    assert payload["tool"] == "computer.list_installed_applications"
+    assert payload["status"] == "completed"
+    assert payload["result"]["items"] == installed
+    assert any(
+        item["id"] == "computer.list_installed_applications"
+        for item in runtime._protocol_catalog(store.session(session_id))["tools"]
+    )
+
+
+def test_identical_failed_tool_call_is_not_executed_twice_in_one_turn(tmp_path, monkeypatch):
+    from chimera import agent_runtime as runtime_module
+
+    calls = []
+
+    def failed_launch(self, executable, approved=False):
+        calls.append((executable, approved))
+        return {
+            "status": "blocked",
+            "reason": "could not resolve an installed executable or Start-menu app",
+        }
+
+    monkeypatch.setattr(runtime_module.WindowsComputerUse, "launch", failed_launch)
+    repeated_call = {
+        "type": "tool_call",
+        "tool": "computer.launch",
+        "arguments": {"executable": "paint"},
+    }
+    provider = DecidingProvider([
+        dict(repeated_call),
+        dict(repeated_call),
+        {"type": "message", "content": "Paint could not be resolved, so I stopped."},
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    result = runtime.send(session_id, "Open Paint.")
+
+    assert result["status"] == "completed"
+    assert calls == [("paint", False)]
+    assert any(event.event_type == "tool.repeat.blocked" for event in store.events(session_id))
+    repeated_results = [
+        json.loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert len(repeated_results) == 2
+    assert "Identical retry not executed" in repeated_results[1]["error"]
