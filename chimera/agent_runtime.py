@@ -225,12 +225,16 @@ class AgentRuntime:
         source and packaged runs. Narrow workspaces retain their local fallback.
         """
         workspace = Path(workspace).resolve()
-        candidate = self.store.db_path.parent / "agent-artifacts" / session_id
-        try:
-            candidate.resolve().relative_to(workspace)
-            return candidate
-        except ValueError:
-            return workspace / ".chimera-agent-artifacts" / session_id
+        # Only a filesystem root (C:\\, /, etc.) uses the app-data support
+        # directory. Project folders retain the historical in-workspace folder.
+        if workspace == Path(workspace.anchor).resolve():
+            candidate = self.store.db_path.parent / "agent-artifacts" / session_id
+            try:
+                candidate.resolve().relative_to(workspace)
+                return candidate
+            except ValueError:
+                pass
+        return workspace / ".chimera-agent-artifacts" / session_id
 
     def subscribe(self, session_id: str, callback):
         with self._listener_lock: self._listeners.setdefault(session_id, []).append(callback)
