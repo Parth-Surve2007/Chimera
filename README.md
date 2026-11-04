@@ -23,7 +23,7 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 |---|---|
 | **Local reasoning** | Run a GGUF model through a persistent llama-server or an explicitly configured one-shot llama-cli runtime. |
 | **Computer control** | Discover visible and installed Windows applications (including Start-menu packaged apps), authorize one exact running process, inspect its UI Automation tree, and use supported semantic controls. |
-| **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files and genuine Word DOCX documents after explicit approval. |
+| **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files, genuine Word DOCX documents, and verified PDFs after explicit approval. |
 | **3D workflows** | Ask the Blender connector to create a bounded primitive-based scene and render a PNG preview. |
 | **Reverse engineering** | Use REA for built-in static artifact inspection, strings, file-format detection, and available analysis backends. Connect Ghidra when installed. |
 | **Multi-step work** | Run sequential workflows with tool validation, approval pauses, persistent run records, and evidence-aware outcomes. |
@@ -53,7 +53,7 @@ Chimera seeds a first-party capability inventory on startup. These are features 
 
 | Capability | Availability | Notes |
 |---|---|---|
-| Local file operations | Built in | Bounded listing, metadata inspection, filename/content search, text reading, and approval-gated file creation. |
+| Local file operations | Built in | Bounded listing, metadata inspection, filename/content search, text reading, and approval-gated text, DOCX, and PDF creation with format and content verification. |
 | Windows desktop control | Built in on Windows | Uses psutil and pywinauto for process identity and UI Automation. |
 | REA static analysis | Built in | Does not require a separate reverse-engineering application for its built-in parsers. |
 | Ghidra integration | Connector included | Detects a local Ghidra installation. Ghidra 12.2 requires a 64-bit JDK 25 or newer. |
