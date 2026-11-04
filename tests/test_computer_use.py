@@ -465,6 +465,12 @@ def test_packaged_paint_resolves_from_start_menu_when_executable_is_not_on_disk(
     aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
     monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(
+        computer_use.ctypes,
+        "windll",
+        SimpleNamespace(user32=object(), kernel32=object()),
+        raising=False,
+    )
+    monkeypatch.setattr(
         WindowsComputerUse,
         "_resolve_executable",
         staticmethod(lambda _name: None),
@@ -485,10 +491,17 @@ def test_packaged_paint_resolves_from_start_menu_when_executable_is_not_on_disk(
 
 
 def test_packaged_paint_preflight_returns_exact_aumid_for_approval(tmp_path, monkeypatch):
+    from types import SimpleNamespace
     from chimera import computer_use
 
     aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
     monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        computer_use.ctypes,
+        "windll",
+        SimpleNamespace(user32=object(), kernel32=object()),
+        raising=False,
+    )
     monkeypatch.setattr(
         WindowsComputerUse,
         "_resolve_executable",
@@ -584,7 +597,7 @@ def test_start_menu_inventory_decodes_bom_and_filters_invalid_application_ids(tm
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
-            stdout="\\ufeff" + json.dumps(payload),
+            stdout="\ufeff" + json.dumps(payload),
         ),
     )
 
