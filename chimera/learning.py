@@ -86,8 +86,11 @@ class ExperienceLearningEngine:
             if role == "tool":
                 try:
                     data = json.loads(content) if isinstance(content, str) else content
+                    if not isinstance(data, dict) or data.get("status") != "completed":
+                        continue
                     tool_name = data.get("tool", "")
-                    if tool_name:
+                    if not isinstance(tool_name, str) or not tool_name or tool_name.startswith("agent."):
+                        continue
                         # Extract permission from registry if application action, or fall back to heuristic
                         perm = None
                         if tool_name.startswith("application."):
@@ -114,9 +117,18 @@ class ExperienceLearningEngine:
                             read_indicators = ("list", "read", "extract", "inspect", "enumerate", "scan", "get", "query", "search", "find")
                             perm = f"{tool_name.split('.')[0]}.read" if any(k in tool_name for k in read_indicators) else f"{tool_name.split('.')[0]}.write"
                         permissions_needed.add(perm)
+                        arguments = data.get("arguments", {})
+                        if not isinstance(arguments, dict):
+                            arguments = {}
                         reusable_steps.append({
                             "action": tool_name,
-                            "sanitized_arguments": self._redact_secrets(data.get("result", {})),
+                            "sanitized_arguments": self._argument_schema(
+                                self._redact_secrets(arguments)
+                            ),
+                            "expected_result_fields": sorted(
+                                str(key)[:80] for key in data.get("result", {})
+                                if isinstance(data.get("result"), dict)
+                            )[:20],
                         })
                 except Exception:
                     pass
@@ -135,6 +147,25 @@ class ExperienceLearningEngine:
 
         self.skill_store.save(skill)
         return skill
+
+    @staticmethod
+    def _argument_schema(data: Any) -> Any:
+        """Keep argument shapes while removing run-specific values from learned skills."""
+        if isinstance(data, dict):
+            return {str(key): ExperienceLearningEngine._argument_schema(value) for key, value in data.items()}
+        if isinstance(data, list):
+            return {"type": "array", "items": ExperienceLearningEngine._argument_schema(data[0]) if data else "any"}
+        if isinstance(data, bool):
+            return "boolean"
+        if isinstance(data, int):
+            return "integer"
+        if isinstance(data, float):
+            return "number"
+        if isinstance(data, str):
+            return "string"
+        if data is None:
+            return "null"
+        return "any"
 
     @staticmethod
     def _redact_secrets(data: Any) -> Any:
