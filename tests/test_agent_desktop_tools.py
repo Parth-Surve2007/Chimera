@@ -628,7 +628,7 @@ def test_invalid_readonly_computer_arguments_return_one_repair_observation(tmp_p
 
     result = runtime.send(session_id, "Inspect the authorized application windows.")
 
-    assert result["status"] == "completed"
+    assert result["status"] == "completed", result
     assert provider.calls == 2
     tool_messages = [
         __import__("json").loads(item.content)
