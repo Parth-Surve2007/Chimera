@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-\nfrom chimera.agent_runtime import AgentRuntime, AgentSessionStore\n
+
+from chimera.agent_runtime import AgentRuntime, AgentSessionStore
+
 from chimera.computer_runtime import (
     ApplicationIdentity, ComputerObservation, ComputerSessionManager, ElementReference,
 )
