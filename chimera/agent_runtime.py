@@ -527,8 +527,13 @@ class AgentRuntime:
             "computer.list_windows", "computer.cua_list_apps",
         }:
             return
-        if set(arguments) - set(expected):
-            raise ValueError(f"unsupported arguments for {operation}")
+        unsupported = sorted(set(arguments) - set(expected))
+        if unsupported:
+            allowed = ", ".join(sorted(expected)) or "(no arguments)"
+            raise ValueError(
+                f"unsupported arguments for {operation}: {unsupported}. "
+                f"Allowed arguments: {allowed}"
+            )
         for name, kind in expected.items():
             if name not in arguments:
                 continue
