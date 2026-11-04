@@ -348,7 +348,10 @@ class AgentRuntime:
             if not isinstance(value.get("content"), str) or not value["content"].strip(): raise ValueError("message content must be non-empty")
             return value
         tool = value.get("tool")
-        if not isinstance(tool, str) or not (tool.startswith("workspace.") or tool.startswith("computer.") or tool.startswith("application.")): raise ValueError("tool identifier is invalid")
+        if not isinstance(tool, str) or not (tool.startswith("workspace.") or tool.startswith("computer.") or tool.startswith("application.")):
+            raise ValueError(
+                f"tool identifier is invalid: {tool!r}; expected a registered workspace.*, computer.*, or application.* ID"
+            )
         if not isinstance(value.get("arguments"), dict): raise ValueError("tool arguments must be an object")
         invocation = value.get("invocation_id")
         if invocation is not None and (not isinstance(invocation, str) or not invocation.strip()): raise ValueError("tool invocation_id is invalid")
