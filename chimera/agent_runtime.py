@@ -1319,7 +1319,7 @@ class AgentRuntime:
                         "backend": observation.backend,
                         "selected_window": observation.windows[0] if observation.windows else None,
                         "windows": observation.windows[:12],
-                        "elements": observation.elements[:250],
+                        "elements": observation.elements[:args.get("limit", 250)],
                         "element_count": len(observation.elements),
                         "limitation": observation.limitation,
                     }
