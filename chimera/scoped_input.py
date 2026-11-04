@@ -41,6 +41,7 @@ class InputNative(Protocol):
     def window_pid(self, hwnd: int) -> int | None: ...
     def focus_window(self, hwnd: int) -> None: ...
     def foreground_pid(self) -> int | None: ...
+    def foreground_hwnd(self) -> int | None: ...
     def send_mouse_move(self, x: int, y: int) -> None: ...
     def send_mouse_button(self, button: str, down: bool) -> None: ...
     def send_mouse_wheel(self, delta: int) -> None: ...
@@ -117,9 +118,13 @@ class Win32InputNative:
         self.user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
         return int(pid.value) if pid.value else None
 
-    def foreground_pid(self) -> int | None:
+    def foreground_hwnd(self) -> int | None:
         hwnd = self.user32.GetForegroundWindow()
-        return self.window_pid(int(hwnd)) if hwnd else None
+        return int(hwnd) if hwnd else None
+
+    def foreground_pid(self) -> int | None:
+        hwnd = self.foreground_hwnd()
+        return self.window_pid(hwnd) if hwnd else None
 
     def focus_window(self, hwnd: int) -> None:
         # Focusing is itself part of the approved action. We never attach input
@@ -353,12 +358,12 @@ class ScopedWindowsInputBackend:
             if not native.window_exists(hwnd) or native.window_pid(hwnd) != expected_pid:
                 return ScopedInputResult("blocked", False, False, "HWND no longer belongs to the authorized process", action).to_dict()
             try:
-                if native.foreground_pid() != expected_pid:
+                if native.foreground_hwnd() != hwnd or native.foreground_pid() != expected_pid:
                     native.focus_window(hwnd)
             except Exception as exc:
                 return ScopedInputResult("awaiting_operator_focus", False, False, str(exc), action).to_dict()
-            if native.foreground_pid() != expected_pid:
-                return ScopedInputResult("awaiting_operator_focus", False, False, "authorized app is not the foreground process; activate it and retry", action, native.foreground_pid()).to_dict()
+            if native.foreground_hwnd() != hwnd or native.foreground_pid() != expected_pid:
+                return ScopedInputResult("awaiting_operator_focus", False, False, "exact authorized window is not foreground; activate it and retry", action, native.foreground_pid()).to_dict()
 
             before_image = native.capture(rect)
             before_hash, before_payload = self._image_evidence(before_image)
@@ -366,8 +371,8 @@ class ScopedWindowsInputBackend:
             button_down = False
 
             def guard() -> None:
-                if native.foreground_pid() != expected_pid:
-                    raise PermissionError("foreground ownership changed; remaining input was aborted")
+                if native.foreground_hwnd() != hwnd or native.foreground_pid() != expected_pid:
+                    raise PermissionError("foreground window changed; remaining input was aborted")
                 if not native.window_exists(hwnd) or native.window_pid(hwnd) != expected_pid:
                     raise PermissionError("authorized HWND changed during input; remaining input was aborted")
 
