@@ -53,8 +53,11 @@ class FakeNative:
     def send_mouse_wheel(self, delta):
         self.events.append(("wheel", delta))
 
-    def send_unicode(self, text):
-        self.events.append(("unicode", text))
+    def send_unicode_unit(self, unit, down):
+        self.events.append(("unicode-unit", unit, down))
+        if self.flip_foreground_after_moves == "unicode" and down:
+            self.foreground = 9999
+            self.foreground_window = 100
 
     def send_virtual_key(self, key, down):
         self.events.append(("key", key, down))
@@ -191,7 +194,17 @@ def test_text_entry_uses_unicode_packets_and_caps_length():
     )
 
     assert result["status"] == "completed"
-    assert ("unicode", "Hello café") in native.events
+    expected_units = []
+    for character in "Hello café":
+        code = ord(character)
+        if code <= 0xFFFF:
+            expected_units.append(code)
+        else:
+            code -= 0x10000
+            expected_units.extend((0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)))
+    assert [
+        event for event in native.events if event[0] == "unicode-unit"
+    ] == [("unicode-unit", unit, state) for unit in expected_units for state in (True, False)]
 
     too_long = backend.execute(
         hwnd=99, expected_pid=4321, element_pid=4321, rectangle=RECT,
@@ -213,3 +226,21 @@ def test_scoped_scroll_is_directional_and_bounded():
 
     assert result["status"] == "completed"
     assert ("wheel", -2) in native.events
+
+
+
+def test_text_entry_aborts_between_unicode_packets_after_foreground_changes():
+    native = FakeNative()
+    native.flip_foreground_after_moves = "unicode"
+    backend = ScopedWindowsInputBackend(native=native)
+
+    result = backend.execute(
+        hwnd=99, expected_pid=4321, element_pid=4321, rectangle=RECT,
+        action="type_text", text="Hello", approved=True,
+    )
+
+    assert result["status"] == "blocked"
+    assert "foreground window changed" in result["reason"]
+    key_packets = [event for event in native.events if event[0] == "unicode-unit"]
+    assert len(key_packets) == 1
+    assert key_packets[0][2] is True
