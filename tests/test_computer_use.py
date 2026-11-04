@@ -463,7 +463,7 @@ def test_packaged_paint_resolves_from_start_menu_when_executable_is_not_on_disk(
     from chimera import computer_use
 
     aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
-    monkeypatch.setattr(computer_use.os, "name", "nt")
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(
         WindowsComputerUse,
         "_resolve_executable",
@@ -488,7 +488,7 @@ def test_packaged_paint_preflight_returns_exact_aumid_for_approval(tmp_path, mon
     from chimera import computer_use
 
     aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
-    monkeypatch.setattr(computer_use.os, "name", "nt")
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(
         WindowsComputerUse,
         "_resolve_executable",
@@ -522,7 +522,7 @@ def test_packaged_paint_launch_uses_apps_folder_activation_without_shell(tmp_pat
     aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
     explorer = tmp_path / "explorer.exe"
     explorer.write_bytes(b"MZ")
-    monkeypatch.setattr(computer_use.os, "name", "nt")
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
     monkeypatch.setenv("SystemRoot", str(tmp_path))
     monkeypatch.setattr(
         WindowsComputerUse,
@@ -571,7 +571,7 @@ def test_start_menu_inventory_decodes_bom_and_filters_invalid_application_ids(tm
     )
     powershell.parent.mkdir(parents=True)
     powershell.write_bytes(b"MZ")
-    monkeypatch.setattr(computer_use.os, "name", "nt")
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
     monkeypatch.setenv("SystemRoot", str(system_root))
     monkeypatch.setattr(computer_use.shutil, "which", lambda _name: None)
     payload = [
