@@ -72,6 +72,14 @@ No model is downloaded. The vision server starts only when an approved visual in
 
 The local observer can describe a screenshot, locate candidate controls, and compare visible state with an expected result. Its output is still model-generated observation, not a proof of side effects. Chimera must combine it with fresh UIA/process/window evidence, actual file state, and deterministic application/file-format checks before reporting completion. Screenshots are privacy-sensitive: `computer.inspect_visual_target` requires exact operator approval and refuses to capture a background or foreign window.
 
+### Multi-window UIA observation and context packing
+
+- A computer session may have several top-level windows. The agent first obtains the authorized window inventory and selects one exact HWND by title/purpose before inspecting its control tree.
+- UIA traversal is bounded by depth (0-8) and element count (1-500). Each reference is bound to the authorized process, selected HWND, observation generation, and a short expiry.
+- An empty UIA tree or a tree without usable runtime IDs is not called a successful semantic inspection. Chimera falls back to read-only Win32 control metadata and marks the limitation.
+- Local-model context packing ranks visible, enabled canvas/document/custom surfaces and preserves their exact fresh reference IDs, bounds, supported patterns, and available actions. A toolbar label or stale reference is not substituted for the actual target.
+- Model context is lossy by design, so all consequential actions still revalidate the original runtime reference. The model's summary never becomes authority.
+
 ### Scoped custom-canvas drawing
 
 - computer.visual_action can use stroke for one connected path or multi_stroke for 1-16 distinct pen-up paths in one approval, with at most 256 normalized points total.
