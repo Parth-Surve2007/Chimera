@@ -22,6 +22,7 @@ except ImportError: ft = None
 BG, SURFACE, ELEVATED, BORDER = "#000000", "#0A0A0A", "#151515", "#303030"
 TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F2F2F2", "#B8B8B8", "#858585", "#555555", "#E0E0E0"
 ACCENT = "#C5C5C5"
+THEME_SEED = "#BDBDBD"
 PANEL_SURFACE = "#101010"
 STATE_COLORS = {"pass": "#D0D0D0", "fail": "#A6A6A6", "unknown": "#888888", "blocked": "#666666"}
 
@@ -127,7 +128,7 @@ class MainWindow:
         self.max_tokens_field = ft.TextField(label="MAX TOKENS", color=TEXT, border_color=BORDER, value=str(initial_config.max_tokens), width=120)
         self.threads_field = ft.TextField(label="CPU THREADS", color=TEXT, border_color=BORDER, value=str(initial_config.threads), width=120)
         self.gpu_layers_field = ft.TextField(label="GPU LAYERS", color=TEXT, border_color=BORDER, value=str(initial_config.gpu_layers), width=120)
-        page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.theme = ft.Theme(font_family="Segoe UI"); page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
+        page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.theme = ft.Theme(color_scheme_seed=THEME_SEED, font_family="Segoe UI"); page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
         self.logo_font_family = "ChimeraDots" if font.exists() else "Segoe UI"
