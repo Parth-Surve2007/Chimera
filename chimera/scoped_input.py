@@ -18,10 +18,12 @@ from typing import Any, Protocol
 
 
 MAX_STROKE_POINTS = 64
+MAX_STROKES = 16
+MAX_TOTAL_STROKE_POINTS = 256
 MAX_TEXT_CHARS = 4000
 MAX_DURATION_MS = 2000
 MAX_SCROLL_STEPS = 8
-_VALID_ACTIONS = {"click", "double_click", "stroke", "type_text", "press_key", "scroll"}
+_VALID_ACTIONS = {"click", "double_click", "stroke", "multi_stroke", "type_text", "press_key", "scroll"}
 _VALID_BUTTONS = {"left", "right", "middle"}
 _KEY_CODES = {
     "ENTER": 0x0D, "TAB": 0x09, "ESC": 0x1B, "ESCAPE": 0x1B,
@@ -328,6 +330,7 @@ class ScopedWindowsInputBackend:
         rectangle: dict,
         action: str,
         points: Any = None,
+        strokes: Any = None,
         button: str = "left",
         duration_ms: int = 250,
         text: str | None = None,
@@ -360,6 +363,18 @@ class ScopedWindowsInputBackend:
                 normalized = self._points(points, 2, MAX_STROKE_POINTS)
             else:
                 normalized = []
+            normalized_strokes = []
+            if action == "multi_stroke":
+                if not isinstance(strokes, list) or not 1 <= len(strokes) <= MAX_STROKES:
+                    raise ValueError(f"strokes must contain between 1 and {MAX_STROKES} paths")
+                normalized_strokes = [
+                    self._points(path, 2, MAX_STROKE_POINTS) for path in strokes
+                ]
+                total_points = sum(len(path) for path in normalized_strokes)
+                if total_points > MAX_TOTAL_STROKE_POINTS:
+                    raise ValueError(
+                        f"multi_stroke is limited to {MAX_TOTAL_STROKE_POINTS} total points"
+                    )
             if action == "type_text" and (not isinstance(text, str) or not text or len(text) > MAX_TEXT_CHARS):
                 raise ValueError(f"text must contain 1 to {MAX_TEXT_CHARS} characters")
             chord = self._key_chord(key) if action == "press_key" else []
@@ -376,6 +391,13 @@ class ScopedWindowsInputBackend:
         mapped = [
             (round(left + x * (right - left)), round(top + y * (bottom - top)))
             for x, y in normalized
+        ]
+        mapped_strokes = [
+            [
+                (round(left + x * (right - left)), round(top + y * (bottom - top)))
+                for x, y in path
+            ]
+            for path in normalized_strokes
         ]
         with self.lock:
             if not native.window_exists(hwnd) or native.window_pid(hwnd) != expected_pid:
@@ -438,6 +460,24 @@ class ScopedWindowsInputBackend:
                         if interval:
                             time.sleep(interval)
                     up()
+                elif action == "multi_stroke":
+                    total_points = sum(len(path) for path in mapped_strokes)
+                    interval = min(
+                        0.015,
+                        (duration_ms / 1000) / max(1, total_points - len(mapped_strokes)),
+                    )
+                    for path_index, path in enumerate(mapped_strokes):
+                        guard()
+                        move(path[0])
+                        down()
+                        for point in path[1:]:
+                            move(point)
+                            if interval:
+                                time.sleep(interval)
+                        up()
+                        if path_index + 1 < len(mapped_strokes):
+                            guard()
+                            time.sleep(0.025)
                 elif action == "scroll":
                     move(mapped[0])
                     guard()
