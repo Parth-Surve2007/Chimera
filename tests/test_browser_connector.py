@@ -45,6 +45,8 @@ class FakeLocator:
         return self._editable
 
     def evaluate(self, script):
+        if "Array.from(el.files" in script:
+            return getattr(self, "files", [])
         if "isContentEditable" in script:
             return self._value
         return {
@@ -56,6 +58,14 @@ class FakeLocator:
     def select_option(self, value, **_kwargs):
         self.selected = [value]
         return self.selected
+
+    def set_input_files(self, path, **_kwargs):
+        source = Path(path)
+        self.files = [{
+            "name": source.name,
+            "size": source.stat().st_size,
+            "type": "application/octet-stream",
+        }]
 
     def click(self, **_kwargs):
         self.clicked += 1
@@ -451,3 +461,58 @@ def test_browser_manifest_exposes_select_option_as_approved_input():
     action = next(item for item in connector.manifest.actions if item.action_id == "select_option")
     assert action.permission == "browser.input"
     assert action.requires_approval is True
+
+
+
+def test_browser_upload_requires_approval_and_verifies_workspace_file(tmp_path):
+    connector, page = make_connector(tmp_path)
+    source = tmp_path / "attachments" / "notes.txt"
+    source.parent.mkdir()
+    source.write_text("meeting notes", encoding="utf-8")
+    file_input = FakeLocator()
+    file_input.evaluate = lambda script: (
+        [{"name": "notes.txt", "size": source.stat().st_size, "type": "text/plain"}]
+        if "Array.from(el.files" in script else
+        {"tag": "input", "type": "file", "disabled": False, "multiple": False, "accept": ".txt"}
+    )
+    page.locators[("label", "Attachment")] = file_input
+    arguments = {
+        "page_index": 0, "expected_url": page.url,
+        "selector_kind": "label", "selector": "Attachment",
+        "relative_path": "attachments/notes.txt",
+    }
+    with connector.execution_context("session-1", tmp_path):
+        pending = connector.execute_action("upload_file", arguments, approved=False)
+        assert pending["status"] == "awaiting_approval"
+        completed = connector.execute_action("upload_file", arguments, approved=True)
+
+    assert completed["status"] == "completed"
+    assert completed["verified"] is True
+    assert completed["uploaded_file"]["path"] == "attachments/notes.txt"
+    assert completed["uploaded_file"]["bytes"] == len(b"meeting notes")
+
+
+def test_browser_upload_rejects_non_file_inputs_and_workspace_escape(tmp_path):
+    connector, page = make_connector(tmp_path)
+    ordinary = FakeLocator()
+    page.locators[("label", "Ordinary")] = ordinary
+    arguments = {
+        "page_index": 0, "expected_url": page.url,
+        "selector_kind": "label", "selector": "Ordinary",
+        "relative_path": "notes.txt",
+    }
+    (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+    with connector.execution_context("session-1", tmp_path):
+        with pytest.raises(ValueError, match="input\\[type=file\\]"):
+            connector.execute_action("upload_file", arguments, approved=True)
+        arguments["relative_path"] = "../outside.txt"
+        with pytest.raises(ValueError, match="inside the selected workspace"):
+            connector.execute_action("upload_file", arguments, approved=True)
+
+
+def test_browser_upload_manifest_is_sensitive_and_requires_approval():
+    connector = BrowserConnector()
+    action = next(item for item in connector.manifest.actions if item.action_id == "upload_file")
+    assert action.permission == "browser.upload"
+    assert action.requires_approval is True
+    assert action.risk_level.value == 4
