@@ -616,3 +616,120 @@ def test_computer_runtime_catalog_exposes_installed_app_inventory():
     operations = tool_catalog()["operations"]
     assert operations["computer.list_installed_applications"]["arguments"] == {}
     assert operations["computer.list_installed_applications"]["permission"] == "computer.observe"
+
+
+
+def test_visual_action_is_a_registered_approval_gated_tool(tmp_path, monkeypatch):
+    from chimera.agent_runtime import AgentRuntime
+
+    catalog = tool_catalog()["operations"]
+    assert "computer.visual_action" in catalog
+    assert catalog["computer.visual_action"]["permission"] == "computer.input"
+    AgentRuntime._validate_arguments(
+        "computer.visual_action",
+        {
+            "session_id": "s",
+            "reference_id": "r",
+            "action": "stroke",
+            "points": [[0.1, 0.1], [0.5, 0.5], [0.9, 0.9]],
+            "duration_ms": 250,
+        },
+    )
+
+    for invalid in (
+        {"action": "stroke", "points": [[0.1, 0.1]]},
+        {"action": "click", "points": [[1.5, 0.5]]},
+        {"action": "type_text", "text": ""},
+        {"action": "press_key", "key": "CTRL+WIN+R"},
+        {"action": "scroll", "points": [[0.5, 0.5]], "direction": "sideways"},
+    ):
+        payload = {"session_id": "s", "reference_id": "r", **invalid}
+        try:
+            AgentRuntime._validate_arguments("computer.visual_action", payload)
+        except (ValueError, KeyError):
+            pass
+        else:
+            raise AssertionError(f"invalid visual action was accepted: {invalid}")
+
+
+def test_visual_action_manager_requires_fresh_target_and_operator_approval(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    reference = _seed_uia_reference(manager, monkeypatch)
+
+    class VisualUIA(_FakeUIA):
+        def visual_target(self, hwnd, runtime_id, expected_pid):
+            assert (hwnd, runtime_id, expected_pid) == (99, "42", 4321)
+            return {
+                "rectangle": {"left": 10, "top": 20, "right": 210, "bottom": 220},
+                "control_type": "Pane",
+                "patterns": [],
+                "process_id": 4321,
+            }
+
+    class VisualInput:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "status": "completed", "accepted": True, "verified": True,
+                "backend": "scoped_win32_input", "action": kwargs["action"],
+            }
+
+    fake_uia = VisualUIA()
+    fake_input = VisualInput()
+    manager.uia = fake_uia
+    manager.visual_input = fake_input
+    options = {
+        "action": "stroke",
+        "points": [[0.1, 0.1], [0.9, 0.9]],
+        "duration_ms": 100,
+    }
+
+    pending = manager.act_reference(
+        "agent-session", reference.reference_id, "visual_action",
+        approved=False, options=options,
+    )
+    assert pending["status"] == "awaiting_approval"
+    assert fake_input.calls == []
+
+    completed = manager.act_reference(
+        "agent-session", reference.reference_id, "visual_action",
+        approved=True, options=options,
+    )
+    assert completed["status"] == "completed"
+    assert completed["verified"] is True
+    assert fake_input.calls[0]["hwnd"] == 99
+    assert fake_input.calls[0]["expected_pid"] == 4321
+    assert fake_input.calls[0]["element_pid"] == 4321
+    assert fake_input.calls[0]["rectangle"] == {
+        "left": 10, "top": 20, "right": 210, "bottom": 220,
+    }
+
+
+def test_visual_action_blocks_noneditable_text_targets(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    reference = _seed_uia_reference(manager, monkeypatch)
+
+    class VisualUIA(_FakeUIA):
+        def visual_target(self, hwnd, runtime_id, expected_pid):
+            return {
+                "rectangle": {"left": 10, "top": 20, "right": 210, "bottom": 220},
+                "control_type": "Button",
+                "patterns": ["Invoke"],
+                "process_id": expected_pid,
+            }
+
+    class VisualInput:
+        def _native(self):
+            raise AssertionError("non-editable target must be rejected before focus or input")
+
+    manager.uia = VisualUIA()
+    manager.visual_input = VisualInput()
+    result = manager.act_reference(
+        "agent-session", reference.reference_id, "visual_action",
+        approved=True, options={"action": "type_text", "text": "unsafe"},
+    )
+    assert result["status"] == "blocked"
+    assert "editable UI Automation controls" in result["reason"]
