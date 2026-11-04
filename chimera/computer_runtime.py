@@ -695,12 +695,12 @@ class ComputerSessionManager:
                     "native_windows",
                     evidence={"fresh_window": True, "geometry": True},
                 )
-                if strategy.selected != "grounded_input":
+                if strategy.get("selected") != "grounded_input":
                     return {
                         "status": "blocked", "verified": False,
                         "backend": "strategy",
-                        "reason": strategy.reason,
-                        "selected_backend": strategy.selected,
+                        "reason": strategy.get("reason"),
+                        "selected_backend": strategy.get("selected"),
                     }
                 action = (options or {}).get("action")
                 if action == "type_text":
@@ -751,7 +751,7 @@ class ComputerSessionManager:
                     scroll_steps=(options or {}).get("steps", 3),
                     approved=True,
                 )
-                return {**input_result, "strategy": strategy.selected}
+                return {**input_result, "strategy": strategy.get("selected")}
             except Exception as exc:
                 return {"status": "failed", "verified": False, "backend": "scoped_win32_input", "reason": str(exc)}
         strategy = self.choose_interaction(
@@ -759,12 +759,12 @@ class ComputerSessionManager:
             "native_windows",
             evidence={"fresh_window": True, "geometry": True, "semantic_control": True},
         )
-        if strategy.selected != "uia":
+        if strategy.get("selected") != "uia":
             return {
                 "status": "blocked", "verified": False,
                 "backend": "strategy",
                 "reason": strategy.reason,
-                "selected_backend": strategy.selected,
+                "selected_backend": strategy.get("selected"),
             }
         try:
             result = self.uia.action(
@@ -778,7 +778,7 @@ class ComputerSessionManager:
             "session_id": reference.session_id,
             "reference_id": reference.reference_id,
             "hwnd": reference.hwnd,
-            "strategy": strategy.selected,
+            "strategy": strategy.get("selected"),
         }
 
     def validate_reference(self, reference: ElementReference) -> None:
