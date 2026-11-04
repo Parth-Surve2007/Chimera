@@ -777,10 +777,40 @@ class ComputerSessionManager:
             return {"status": "unavailable", "reason": "Cua Driver is not installed or enabled"}
         return self.cua.list_apps()
 
+    def _validate_cua_window_identity(self, identity: ApplicationIdentity, window_id: int) -> None:
+        if type(window_id) is not int or window_id <= 0:
+            raise ValueError("CUA window_id must be a positive integer")
+        if identity.authorized_hwnds and window_id not in identity.authorized_hwnds:
+            raise PermissionError("CUA window is outside the exact launch-approved HWND set")
+        if self.backend.window_process_id(window_id) != identity.pid:
+            raise PermissionError("CUA window does not belong to the exact authorized process")
+
     def cua_list_windows(self, app_session_id: str, owner_session_id: str) -> dict:
         try:
             identity = self._cua_authorized_identity(app_session_id, owner_session_id)
             result = self.cua.list_windows(identity.pid)
+            if result.get("status") == "completed":
+                allowed = []
+                rejected = 0
+                for window in result.get("windows", []):
+                    window_id = window.get("window_id")
+                    try:
+                        self._validate_cua_window_identity(identity, window_id)
+                    except (PermissionError, ValueError, OSError):
+                        rejected += 1
+                        continue
+                    allowed.append(window)
+                result = {
+                    **result,
+                    "windows": allowed,
+                    "count": len(allowed),
+                    "rejected_unapproved_windows": rejected,
+                    "authorization_scope": (
+                        "exact launch-approved HWND set"
+                        if identity.authorized_hwnds else
+                        "exact live PID and current process identity"
+                    ),
+                }
             return {
                 **result,
                 "authorized_session_id": app_session_id,
@@ -796,6 +826,7 @@ class ComputerSessionManager:
     ) -> dict:
         try:
             identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            self._validate_cua_window_identity(identity, window_id)
             capture_pixels = bool(include_screenshot or question)
             result = self.cua.inspect_window(
                 owner_session_id, identity.pid, window_id,
@@ -866,6 +897,7 @@ class ComputerSessionManager:
     ) -> dict:
         try:
             identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            self._validate_cua_window_identity(identity, window_id)
             return self.cua.click(
                 owner_session_id, identity.pid, window_id, snapshot_ref,
                 element_token=element_token, x=x, y=y, foreground=foreground,
@@ -883,6 +915,7 @@ class ComputerSessionManager:
     ) -> dict:
         try:
             identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            self._validate_cua_window_identity(identity, window_id)
             return self.cua.draw_path(
                 owner_session_id, identity.pid, window_id, snapshot_ref,
                 canvas_element_token, strokes, duration_ms=duration_ms, steps=steps,
