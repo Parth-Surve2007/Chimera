@@ -282,7 +282,7 @@ AGENT_DECISION_SCHEMA = {
         {
             "type": "object",
             "properties": {
-                "type": {"const": "message"},
+                "type": {"enum": ["message"]},
                 "content": {"type": "string"},
             },
             "required": ["type", "content"],
@@ -291,7 +291,7 @@ AGENT_DECISION_SCHEMA = {
         {
             "type": "object",
             "properties": {
-                "type": {"const": "tool_call"},
+                "type": {"enum": ["tool_call"]},
                 "tool": {"type": "string"},
                 "arguments": {"type": "object", "additionalProperties": True},
                 "invocation_id": {"type": "string"},
