@@ -202,7 +202,7 @@ def _seed_uia_reference(manager, monkeypatch, session_id="agent-session"):
     observation = ComputerObservation(
         observation_id="observation-1", session_id=session_id, generation=3,
         created_at=time.time(), backend="uia", application={},
-        windows=[{"hwnd": 99}], elements=[],
+        windows=[{"hwnd": 99, "pid": 4321}], elements=[],
     )
     manager.sessions[session_id] = identity
     manager.observations[session_id] = (3, observation)
@@ -616,3 +616,238 @@ def test_computer_runtime_catalog_exposes_installed_app_inventory():
     operations = tool_catalog()["operations"]
     assert operations["computer.list_installed_applications"]["arguments"] == {}
     assert operations["computer.list_installed_applications"]["permission"] == "computer.observe"
+
+
+
+def test_visual_action_is_a_registered_approval_gated_tool(tmp_path, monkeypatch):
+    from chimera.agent_runtime import AgentRuntime
+
+    catalog = tool_catalog()["operations"]
+    assert "computer.visual_action" in catalog
+    assert catalog["computer.visual_action"]["permission"] == "computer.input"
+    AgentRuntime._validate_arguments(
+        "computer.visual_action",
+        {
+            "session_id": "s",
+            "reference_id": "r",
+            "action": "stroke",
+            "points": [[0.1, 0.1], [0.5, 0.5], [0.9, 0.9]],
+            "duration_ms": 250,
+        },
+    )
+
+    for invalid in (
+        {"action": "stroke", "points": [[0.1, 0.1]]},
+        {"action": "click", "points": [[1.5, 0.5]]},
+        {"action": "type_text", "text": ""},
+        {"action": "press_key", "key": "CTRL+WIN+R"},
+        {"action": "scroll", "points": [[0.5, 0.5]], "direction": "sideways"},
+    ):
+        payload = {"session_id": "s", "reference_id": "r", **invalid}
+        try:
+            AgentRuntime._validate_arguments("computer.visual_action", payload)
+        except (ValueError, KeyError):
+            pass
+        else:
+            raise AssertionError(f"invalid visual action was accepted: {invalid}")
+
+
+def test_visual_action_manager_requires_fresh_target_and_operator_approval(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    reference = _seed_uia_reference(manager, monkeypatch)
+
+    class VisualUIA(_FakeUIA):
+        def visual_target(self, hwnd, runtime_id, expected_pid):
+            assert (hwnd, runtime_id, expected_pid) == (99, "42", 4321)
+            return {
+                "rectangle": {"left": 10, "top": 20, "right": 210, "bottom": 220},
+                "control_type": "Pane",
+                "patterns": [],
+                "process_id": 4321,
+            }
+
+    class VisualNative:
+        def foreground_hwnd(self): return 99
+        def foreground_pid(self): return 4321
+        def focus_window(self, hwnd):
+            assert hwnd == 99
+
+    class VisualInput:
+        def __init__(self):
+            self.calls = []
+            self._native_backend = VisualNative()
+
+        def _native(self):
+            return self._native_backend
+
+        def execute(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "status": "completed", "accepted": True, "verified": True,
+                "backend": "scoped_win32_input", "action": kwargs["action"],
+            }
+
+    fake_uia = VisualUIA()
+    fake_input = VisualInput()
+    manager.backend.window_rect = lambda _hwnd: {
+        "left": 0, "top": 0, "right": 800, "bottom": 800,
+    }
+    manager.uia = fake_uia
+    manager.visual_input = fake_input
+    options = {
+        "action": "stroke",
+        "points": [[0.1, 0.1], [0.9, 0.9]],
+        "duration_ms": 100,
+    }
+
+    pending = manager.act_reference(
+        "agent-session", reference.reference_id, "visual_action",
+        approved=False, options=options,
+    )
+    assert pending["status"] == "awaiting_approval"
+    assert fake_input.calls == []
+
+    completed = manager.act_reference(
+        "agent-session", reference.reference_id, "visual_action",
+        approved=True, options=options,
+    )
+    assert completed["status"] == "completed"
+    assert completed["verified"] is True
+    assert fake_input.calls[0]["hwnd"] == 99
+    assert fake_input.calls[0]["expected_pid"] == 4321
+    assert fake_input.calls[0]["element_pid"] == 4321
+    assert fake_input.calls[0]["rectangle"] == {
+        "left": 10, "top": 20, "right": 210, "bottom": 220,
+    }
+
+
+def test_visual_action_blocks_noneditable_text_targets(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    reference = _seed_uia_reference(manager, monkeypatch)
+
+    class VisualUIA(_FakeUIA):
+        def visual_target(self, hwnd, runtime_id, expected_pid):
+            return {
+                "rectangle": {"left": 10, "top": 20, "right": 210, "bottom": 220},
+                "control_type": "Button",
+                "patterns": ["Invoke"],
+                "process_id": expected_pid,
+            }
+
+    class VisualNative:
+        def foreground_hwnd(self): return 99
+        def foreground_pid(self): return 4321
+        def focus_window(self, hwnd):
+            assert hwnd == 99
+
+    class VisualInput:
+        def _native(self):
+            return VisualNative()
+
+    manager.backend.window_rect = lambda _hwnd: {
+        "left": 0, "top": 0, "right": 800, "bottom": 800,
+    }
+    manager.uia = VisualUIA()
+    manager.visual_input = VisualInput()
+    result = manager.act_reference(
+        "agent-session", reference.reference_id, "visual_action",
+        approved=True, options={"action": "type_text", "text": "unsafe"},
+    )
+    assert result["status"] == "blocked"
+    assert "editable UI Automation controls" in result["reason"]
+
+
+
+def test_window_close_requires_approval_and_never_force_terminates(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from chimera import computer_use
+
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    backend = object.__new__(WindowsComputerUse)
+    state = {"open": True, "messages": []}
+
+    def post_message(hwnd, message, wparam, lparam):
+        state["messages"].append((hwnd, message, wparam, lparam))
+        state["open"] = False
+        return True
+
+    backend.user32 = SimpleNamespace(
+        IsWindow=lambda _hwnd: state["open"],
+        PostMessageW=post_message,
+    )
+    backend.window_process_id = lambda _hwnd: 4321 if state["open"] else None
+
+    pending = backend.close(99, approved=False, expected_pid=4321)
+    assert pending["status"] == "awaiting_approval"
+    assert state["messages"] == []
+
+    wrong_pid = backend.close(99, approved=True, expected_pid=9999)
+    assert wrong_pid["status"] == "blocked"
+    assert state["messages"] == []
+
+    completed = backend.close(99, approved=True, expected_pid=4321)
+    assert completed["status"] == "completed"
+    assert completed["verified"] is True
+    assert [
+        (getattr(hwnd, "value", hwnd), message, wparam, lparam)
+        for hwnd, message, wparam, lparam in state["messages"]
+    ] == [(99, 0x0010, 0, 0)]
+
+
+def test_computer_session_close_window_requires_fresh_observation_and_approval(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    _seed_uia_reference(manager, monkeypatch)
+    calls = []
+    manager.backend.close = lambda hwnd, approved=False, expected_pid=None: (
+        calls.append((hwnd, approved, expected_pid))
+        or {"status": "completed", "verified": True, "hwnd": hwnd}
+    )
+
+    pending = manager.close_window("agent-session", 99, approved=False)
+    assert pending["status"] == "awaiting_approval"
+    assert calls == []
+
+    completed = manager.close_window("agent-session", 99, approved=True)
+    assert completed["status"] == "completed"
+    assert calls == [(99, True, 4321)]
+
+
+def test_computer_session_close_window_rejects_stale_or_foreign_hwnd(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    _seed_uia_reference(manager, monkeypatch)
+    manager.backend.window_process_id = lambda _hwnd: 9999
+
+    result = manager.close_window("agent-session", 99, approved=True)
+    assert result["status"] == "blocked"
+    assert "authorized process" in result["reason"]
+
+
+
+def test_window_close_returns_manual_handoff_when_app_keeps_window_open(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from chimera import computer_use
+
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    clock = {"now": 0.0}
+    monkeypatch.setattr(computer_use.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        computer_use.time, "sleep",
+        lambda delay: clock.__setitem__("now", clock["now"] + delay),
+    )
+    backend = object.__new__(WindowsComputerUse)
+    messages = []
+    backend.user32 = SimpleNamespace(
+        IsWindow=lambda _hwnd: True,
+        PostMessageW=lambda hwnd, message, wparam, lparam: (
+            messages.append((hwnd, message, wparam, lparam)) or True
+        ),
+    )
+    backend.window_process_id = lambda _hwnd: 4321
+
+    result = backend.close(99, approved=True, expected_pid=4321)
+
+    assert result["status"] == "uncertain"
+    assert result["verified"] is False
+    assert result["manual_handoff_required"] is True
+    assert "unsaved-work" in result["reason"]
+    assert len(messages) == 1

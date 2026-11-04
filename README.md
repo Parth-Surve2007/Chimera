@@ -2,7 +2,7 @@
 
 ### Your desktop. Your tools. Your rules.
 
-**Chimera is a local-first desktop agent for reasoning, file work, Windows application control, and governed workflows.** It brings a local model, a tool runtime, and a focused desktop workbench into one place. You choose the model. You choose which application to authorize. Protected changes wait for your approval.
+**Chimera is a local-first computer-work agent for reasoning, file work, browser workflows, Windows application control, and governed tasks.** It brings a local model, a tool runtime, and a focused desktop workbench into one place. You choose the model. Protected changes wait for your approval.
 
 Think less “chat window with a thousand promises,” more **a capable workbench with the safety catches left on**.
 
@@ -22,7 +22,8 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 | Area | What is available |
 |---|---|
 | **Local reasoning** | Run a GGUF model through a persistent llama-server or an explicitly configured one-shot llama-cli runtime. |
-| **Computer control** | Discover visible and installed Windows applications (including Start-menu packaged apps), authorize one exact running process, inspect its UI Automation tree, and use supported semantic controls. |
+| **Computer control** | Discover and launch Windows applications, bind verified processes to the current conversation, inspect UI Automation controls, use bounded foreground-scoped input, and gracefully close exact windows after approval. |
+| **Browser work** | Use an isolated visible Edge/Chrome profile to inspect pages, navigate, click unique controls, fill safe text fields, select native dropdowns, upload workspace files, capture screenshots, and download files. Mutations require approval. |
 | **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files, genuine Word DOCX documents, and verified PDFs after explicit approval. |
 | **3D workflows** | Ask the Blender connector to create a bounded primitive-based scene and render a PNG preview. |
 | **Reverse engineering** | Use REA for built-in static artifact inspection, strings, file-format detection, and available analysis backends. Connect Ghidra when installed. |
@@ -30,7 +31,7 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 | **Long-term context** | Keep operator-owned goals, priorities, success criteria, and completion evidence in the Goal Ledger. |
 | **Capability review** | See first-party capabilities separately from custom proposals awaiting review. |
 
-Chimera distinguishes between a **connector** and the external application it connects to. The Blender and Ghidra connectors ship with Chimera; Blender and Ghidra themselves are separate installs.
+Chimera distinguishes between a **connector** and the external application it connects to. The Blender, Ghidra, and browser connectors ship with Chimera. Blender, Ghidra, and an Edge/Chrome browser executable are separate local installations.
 
 ## 🧭 The workbench
 
@@ -117,9 +118,9 @@ The Applications page discovers currently visible, titled Windows application wi
 The control flow is deliberately staged:
 
 1. Refresh the live application inventory.
-2. Authorize one exact running process for the current conversation.
+2. Approve launching one exact installed application, or explicitly authorize an already-running process. A successfully launched process is automatically bound to the current conversation only after its PID and executable identity are verified.
 3. Capture a fresh UI Automation observation.
-4. Use supported semantic actions against controls from that observation.
+4. Use supported semantic actions or bounded foreground-scoped input against controls from that observation.
 
 Supported interactions depend on the live control patterns and include:
 
@@ -131,7 +132,7 @@ Supported interactions depend on the live control patterns and include:
 
 Every action uses a fresh element reference and revalidates the authorized process. State-changing actions require explicit operator approval. An accepted InvokePattern call is not treated as proof of the resulting task outcome: Chimera must inspect a fresh observation.
 
-Chimera does **not** currently use global blind keyboard injection, blind focus changes, or remote window closing. Some applications expose very little UI Automation information, so discoverability does not guarantee that every control in that application can be automated.
+Chimera does **not** use unscoped global input, background-window input, clipboard injection, or blind focus changes. Its scoped input broker can act only on a fresh UIA element rectangle inside the exact authorized foreground window, after approval. Some applications expose very little UI Automation information, so discoverability does not guarantee that every control in that application can be automated.
 
 ### Dependencies
 
@@ -139,6 +140,7 @@ The Windows dependency set includes:
 
 - **psutil** for process and window identity information.
 - **pywinauto** for Windows UI Automation.
+- **Playwright** for the visible, isolated Chromium browser connector.
 - **Flet's desktop runtime** for the native workbench.
 
 These are installed by the setup helper. No separate computer-control SDK needs to be downloaded manually.
@@ -244,7 +246,9 @@ Compile-check the application and tests:
     ├── builtin_capabilities.py # First-party capability inventory
     ├── computer_use.py         # Windows desktop discovery and interaction
     ├── computer_runtime.py     # Process authorization and UIA evidence
+    ├── scoped_input.py         # Approved foreground-scoped pointer and keyboard input
     ├── applications/           # Connector SDK, registry and app integrations
+        └── connectors/browser_connector.py  # Isolated Chromium automation
     ├── reverse_engineering/    # REA static analysis engine
     ├── goals.py                # Operator-owned goals and evidence
     ├── workflow.py             # Governed workflow execution
@@ -299,7 +303,9 @@ Chimera is a growing engineering project, not a claim that every desktop applica
 - Some applications expose no semantic controls or expose only a partial UIA tree.
 - Blender generation currently targets simple, validated primitive-based scenes.
 - The Ghidra connector's direct script-execution action remains unavailable. Ghidra-backed REA operations depend on the external installation and the correct JDK.
-- Browser automation and universal control of arbitrary third-party applications are not advertised as ready capabilities.
+- Browser automation requires an installed Edge/Chrome executable and a working Playwright runtime; Chimera does not download browser engines or reuse the user's default browser profile.
+- Browser page content is untrusted; password fields are not filled by the agent.
+- Universal control of arbitrary third-party applications is not guaranteed. Apps with incomplete UI Automation support may still require a native connector or manual handoff.
 - Local model quality, context limits, GPU memory, and inference speed depend on the selected GGUF and llama.cpp build.
 
 ---

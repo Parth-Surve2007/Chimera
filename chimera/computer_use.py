@@ -455,6 +455,20 @@ class WindowsComputerUse:
         self.user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
         return int(pid.value) if pid.value else None
 
+    def window_rect(self, hwnd: int) -> dict | None:
+        """Return current screen-space bounds for a live top-level HWND."""
+        if not _is_windows_platform() or not self.user32.IsWindow(hwnd):
+            return None
+        rect = wintypes.RECT()
+        if not self.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+            return None
+        if rect.right <= rect.left or rect.bottom <= rect.top:
+            return None
+        return {
+            "left": int(rect.left), "top": int(rect.top),
+            "right": int(rect.right), "bottom": int(rect.bottom),
+        }
+
     def controls(self, hwnd: int) -> list[dict]:
         if not _is_windows_platform() or not self.user32.IsWindow(hwnd): return []
         result = []; enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -487,6 +501,50 @@ class WindowsComputerUse:
             return {"status": "completed", "path": str(target), "width": image.width, "height": image.height}
         except Exception as exc: return {"status": "failed", "reason": str(exc)}
 
-    def close(self, hwnd: int, approved: bool = False) -> dict:
-        return {"status": "blocked", "reason": "remote window closing is disabled; close the application directly", "manual_handoff_required": True}
+    def close(self, hwnd: int, approved: bool = False, expected_pid: int | None = None) -> dict:
+        """Send WM_CLOSE to one exact, pre-authorized window; never force-kill its process."""
+        if not approved:
+            return {
+                "status": "awaiting_approval", "verified": False,
+                "hwnd": hwnd, "permission": "computer.close",
+            }
+        if not _is_windows_platform() or not self.user32.IsWindow(hwnd):
+            return {
+                "status": "blocked", "verified": False,
+                "reason": "target window is unavailable on this platform",
+            }
+        current_pid = self.window_process_id(hwnd)
+        if expected_pid is None or current_pid != expected_pid:
+            return {
+                "status": "blocked", "verified": False,
+                "reason": "target window no longer belongs to the exact authorized process",
+            }
+        try:
+            self.user32.PostMessageW.argtypes = [
+                wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+            ]
+            self.user32.PostMessageW.restype = wintypes.BOOL
+            if not self.user32.PostMessageW(wintypes.HWND(hwnd), 0x0010, 0, 0):
+                return {
+                    "status": "failed", "verified": False,
+                    "reason": f"Windows rejected WM_CLOSE (error {ctypes.get_last_error()})",
+                }
+        except Exception as exc:
+            return {"status": "failed", "verified": False, "reason": str(exc)}
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if not self.user32.IsWindow(hwnd) or self.window_process_id(hwnd) != expected_pid:
+                return {
+                    "status": "completed", "verified": True, "hwnd": hwnd,
+                    "pid": expected_pid, "method": "WM_CLOSE",
+                    "note": "The exact target window closed. The application process was not forcibly terminated.",
+                }
+            time.sleep(0.05)
+        return {
+            "status": "uncertain", "verified": False, "hwnd": hwnd,
+            "pid": expected_pid,
+            "reason": "WM_CLOSE was delivered, but the window remains open. The application may be showing an unsaved-work or confirmation dialog.",
+            "manual_handoff_required": True,
+        }
 

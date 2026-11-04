@@ -29,6 +29,7 @@ _TYPE_MAP: dict[str, type] = {
 APPLICATION_READ_PERMISSIONS = {
     "ghidra.read",
     "rea.read",
+    "browser.read",
 }
 
 

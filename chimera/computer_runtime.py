@@ -10,6 +10,7 @@ from .computer_use import WindowsComputerUse
 from .interaction import (BrowserBackendDescriptor, GroundedInputBackend,
                           InteractionStrategyEngine, UIABackendDescriptor,
                           Win32BackendDescriptor)
+from .scoped_input import ScopedWindowsInputBackend
 
 @dataclass(frozen=True)
 class ApplicationIdentity:
@@ -110,6 +111,46 @@ class WindowsUIABackend:
                 try: pending.extend((child, level+1) for child in item.children()[:250])
                 except Exception: pass
         return None
+
+    def visual_target(self, hwnd: int, runtime_id: str, expected_pid: int) -> dict:
+        """Resolve fresh element bounds and reject cross-process/offscreen targets."""
+        item = self._find(hwnd, runtime_id)
+        if item is None:
+            raise ValueError("visual target is stale or no longer exposed by UI Automation")
+        info = self._info(item, hwnd)
+        if int(info.get("process_id") or 0) != int(expected_pid):
+            raise PermissionError("visual target belongs to a different process")
+        rectangle = info.get("rectangle")
+        if not isinstance(rectangle, dict):
+            raise ValueError("visual target does not expose a usable bounding rectangle")
+        if not info.get("enabled", False) or info.get("offscreen", False):
+            raise ValueError("visual target is disabled or offscreen")
+        return {
+            "rectangle": rectangle,
+            "control_type": info.get("control_type"),
+            "patterns": info.get("patterns", []),
+            "name": info.get("name", ""),
+            "process_id": int(info.get("process_id") or 0),
+        }
+
+    def focus_element(self, hwnd: int, runtime_id: str, expected_pid: int) -> dict:
+        """Focus one exact observed UIA element after the containing app is foreground."""
+        item = self._find(hwnd, runtime_id)
+        if item is None:
+            return {"status": "failed", "reason": "target element is stale"}
+        if int(getattr(item.element_info, "process_id", 0) or 0) != int(expected_pid):
+            return {"status": "blocked", "reason": "target element belongs to a different process"}
+        try:
+            item.set_focus()
+            focused = bool(item.has_focus())
+            return {
+                "status": "completed" if focused else "uncertain",
+                "verified": focused,
+                "focused": focused,
+                "element": self._info(item, hwnd),
+            }
+        except Exception as exc:
+            return {"status": "failed", "reason": f"UI Automation could not focus the target element: {exc}"}
     def action(
         self,
         hwnd: int,
@@ -352,6 +393,7 @@ class ComputerSessionManager:
         self.backend = WindowsComputerUse(workspace); self.selector = ComputerBackendSelector(); self.observation_ttl = max(.5, observation_ttl); self.sessions = {}; self.observations = {}; self.references = {}
         try: self.uia = WindowsUIABackend() if self.selector.select().name == "uia" else None
         except Exception: self.uia = None
+        self.visual_input = ScopedWindowsInputBackend()
         self.strategy = InteractionStrategyEngine([
             UIABackendDescriptor(self),
             BrowserBackendDescriptor(),
@@ -408,6 +450,20 @@ class ComputerSessionManager:
             raise ValueError("current HWND owner does not match the authorized process")
         return identity
 
+    def close_window(self, session_id: str, hwnd: int, approved: bool = False) -> dict:
+        """Gracefully close one freshly observed window owned by this conversation."""
+        if not approved:
+            return {
+                "status": "awaiting_approval", "verified": False,
+                "session_id": session_id, "hwnd": int(hwnd),
+                "permission": "computer.close",
+            }
+        try:
+            identity = self.validate_window(session_id, int(hwnd))
+        except (KeyError, ValueError, RuntimeError) as exc:
+            return {"status": "blocked", "verified": False, "reason": str(exc)}
+        return self.backend.close(int(hwnd), approved=True, expected_pid=identity.pid)
+
     def observe(self, session_id: str) -> ComputerObservation:
         identity = self.sessions.get(session_id)
         if not identity: raise KeyError("computer session not found")
@@ -463,6 +519,8 @@ class ComputerSessionManager:
             actions.append("scroll_into_view")
         if "scroll" in patterns:
             actions.append("scroll_element")
+        if element.get("rectangle") and not element.get("offscreen", False):
+            actions.append("visual_action")
         return actions
 
     def act_reference(
@@ -494,6 +552,7 @@ class ComputerSessionManager:
         state_changing = {
             "invoke_element", "set_value", "set_range_value", "toggle",
             "select_item", "expand", "collapse", "scroll", "scroll_into_view",
+            "visual_action",
         }
         if operation not in read_only | state_changing:
             return {"status": "blocked", "verified": False, "reason": f"unsupported desktop action: {operation}"}
@@ -516,6 +575,76 @@ class ComputerSessionManager:
         identity = self.sessions.get(reference.session_id)
         if identity is None:
             return {"status": "blocked", "verified": False, "reason": "authorized application session no longer exists"}
+        if operation == "visual_action":
+            try:
+                target = self.uia.visual_target(reference.hwnd, reference.runtime_id, identity.pid)
+                window_rectangle = self.backend.window_rect(reference.hwnd)
+                if not isinstance(window_rectangle, dict):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "live target window geometry is unavailable",
+                        "backend": "scoped_win32_input",
+                    }
+                target_rectangle = target["rectangle"]
+                if not (
+                    window_rectangle["left"] <= target_rectangle["left"] < target_rectangle["right"] <= window_rectangle["right"]
+                    and window_rectangle["top"] <= target_rectangle["top"] < target_rectangle["bottom"] <= window_rectangle["bottom"]
+                ):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "UI Automation target rectangle is not fully contained by the authorized HWND",
+                        "backend": "scoped_win32_input",
+                    }
+                action = (options or {}).get("action")
+                if action == "type_text":
+                    control_type = str(target.get("control_type") or "").casefold()
+                    patterns = " ".join(str(item) for item in target.get("patterns", [])).casefold()
+                    if control_type not in {"edit", "document", "combobox"} and "value" not in patterns and "text" not in patterns:
+                        return {
+                            "status": "blocked", "verified": False,
+                            "reason": "type_text is limited to observed editable UI Automation controls",
+                            "backend": "scoped_win32_input",
+                        }
+                native = self.visual_input._native()
+                if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                    try:
+                        native.focus_window(reference.hwnd)
+                    except Exception as focus_exc:
+                        return {
+                            "status": "awaiting_operator_focus", "verified": False,
+                            "reason": str(focus_exc), "backend": "scoped_win32_input",
+                        }
+                if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                    return {
+                        "status": "awaiting_operator_focus", "verified": False,
+                        "reason": "the exact authorized application window could not be made foreground",
+                        "backend": "scoped_win32_input",
+                    }
+                if action in {"type_text", "press_key"}:
+                    focus_result = self.uia.focus_element(reference.hwnd, reference.runtime_id, identity.pid)
+                    if focus_result.get("status") != "completed":
+                        return {
+                            "status": "blocked", "verified": False,
+                            "reason": focus_result.get("reason") or "UI Automation could not focus the observed target",
+                            "backend": "uia",
+                        }
+                return self.visual_input.execute(
+                    hwnd=reference.hwnd,
+                    expected_pid=identity.pid,
+                    element_pid=target["process_id"],
+                    rectangle=target["rectangle"],
+                    action=action,
+                    points=(options or {}).get("points"),
+                    button=(options or {}).get("button", "left"),
+                    duration_ms=(options or {}).get("duration_ms", 250),
+                    text=(options or {}).get("text"),
+                    key=(options or {}).get("key"),
+                    scroll_direction=(options or {}).get("direction", "down"),
+                    scroll_steps=(options or {}).get("steps", 3),
+                    approved=True,
+                )
+            except Exception as exc:
+                return {"status": "failed", "verified": False, "backend": "scoped_win32_input", "reason": str(exc)}
         try:
             result = self.uia.action(
                 reference.hwnd, reference.runtime_id, operation, value,

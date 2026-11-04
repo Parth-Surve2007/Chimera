@@ -81,6 +81,23 @@ Windows UI Automation varies by application. Win32, WPF and WinForms often expos
 
 Packaged Windows apps are not always represented by a discoverable executable path. The Windows app inventory reads Start-menu entries and their registered Application User Model IDs (AUMIDs); launch uses the validated `shell:AppsFolder\\<AUMID>` activation route after the normal application-launch approval. This improves discovery for apps such as Paint, Photos and Calculator, but it does not provide semantic control of every custom-rendered canvas or prove that every Start-menu item is automatable.
 
+## Controlled browser automation
+
+- The browser connector launches a dedicated visible Edge/Chrome process with an isolated profile. It does not attach to or reuse the operator's everyday browser profile.
+- Playwright Sync API objects are owned by one connector worker thread. Calls from agent/UI threads are serialized onto that worker, with the calling conversation and workspace context explicitly rebound.
+- Page inspection returns bounded text and interactive-element metadata tagged as untrusted website content. It is observation, not policy.
+- Navigation and state-changing page operations require approval. Supported actions include unique-control click, editable non-password text fill, allowlisted key presses, exact native HTML select selection, workspace-confined file upload/download, and PNG screenshot capture.
+- Uploads require one exact HTML file input and an existing regular file inside the selected workspace. Downloads and screenshots are written only inside that workspace.
+- Browser screenshots verify the PNG signature and saved bytes against the browser-returned payload. Download/upload results report the actual file metadata.
+- Browser support depends on a locally installed Edge/Chrome executable and Playwright runtime; the connector does not download browser engines. Custom JavaScript comboboxes may need explicit click/keyboard actions rather than the native-select tool.
+
+## Graceful native-window close
+
+- The computer.close_window action requires Build Mode and exact operator approval.
+- At approval replay, AgentRuntime checks that the computer session belongs to the current conversation. ComputerSessionManager requires a fresh observation and confirms the HWND still belongs to the exact authorized PID.
+- The Windows backend sends WM_CLOSE to that HWND, then checks whether the window disappears.
+- It never calls TerminateProcess, taskkill, or a forced process-kill API. If the application keeps the window open (for example, an unsaved-work prompt), the result is uncertain with a manual handoff requirement, not a false success.
+
 ## Verified document output
 
 - `workspace.create_pdf` creates a genuine PDF with an embedded ReportLab font where available and refuses overwrites.
@@ -96,7 +113,11 @@ Packaged Windows apps are not always represented by a discoverable executable pa
 - Plan Mode is read-only for protected actions; Build Mode still requires existing permission and approval checks.
 - No access outside the active workspace scope.
 - No unregistered shell/Python/code execution.
-- No blind global keyboard/mouse injection or foreground stealing.
+- No unscoped keyboard/mouse injection, background-window input, clipboard injection, or global hooks.
+- A scoped Windows input broker may use short SendInput packets only after exact operator approval, against a fresh UIA element rectangle fully contained by the authorized HWND, while that exact HWND and PID remain foreground before every packet.
+- Graceful window closing is a distinct approved operation: send WM_CLOSE to one exact, freshly observed HWND belonging to the conversation-authorized process; verify disappearance and never force-terminate the process.
+- Browser pages are untrusted data. Browser mutations require their own approval and are limited to the isolated profile and selected workspace.
+- Scoped input supports bounded click/double-click/stroke/text/key/scroll operations. It aborts on focus/identity changes, releases held buttons, captures before/after hashes, and reports uncertainty when pixel changes cannot be verified.
 - No silent local-to-hosted fallback or automatic model download.
 - Preserve audit events for calls, approvals, outputs and verification.
 
@@ -116,16 +137,24 @@ Packaged Windows apps are not always represented by a discoverable executable pa
 - Define postcondition/evidence contracts for each action family.
 - Add relevant capability routing and context compaction.
 
+### Scoped visual interaction broker (current implementation)
+- Model-facing `computer.visual_action` accepts bounded, normalized coordinates relative to a fresh UIA element reference.
+- The reference is revalidated against the live process identity, exact HWND, observation generation and expiry.
+- The UIA element rectangle must be fully contained in the authorized top-level window rectangle.
+- Build Mode and the exact pending approval are required for all visual input.
+- The input broker activates only the approved target and verifies the exact foreground HWND/PID before every input packet. Focus changes abort the remaining sequence.
+- Supported bounded operations: click, double-click, draw stroke, Unicode text entry to editable UIA controls, named key chords and directional scroll.
+- Before/after pixel hashes and changed-pixel estimates are returned. Accepted input is not equated with a verified application outcome; the agent must inspect fresh state and verify the requested postcondition.
+
 ### Current generic Windows interaction slice
 - Execute actions through a validated, fresh UIA element reference and exact authorized process identity.
 - Keep read-only Text, RangeValue and Grid observations separate from state-changing actions.
 - Support ValuePattern, RangeValuePattern, InvokePattern, TogglePattern, SelectionItemPattern, ExpandCollapsePattern, ScrollPattern and ScrollItemPattern where the live control exposes them.
-- Require approval for every UIA state change; do not substitute blind global keyboard/mouse injection or a Win32 mutation fallback.
+- Require approval for every UIA state change. Use the scoped input broker only for observed controls/custom canvases that lack a suitable semantic pattern; do not use unscoped input or a Win32 background-mutation fallback.
 - Verify readable/range state after actions and require a fresh observation after operations such as InvokePattern where the control does not expose a deterministic postcondition.
 
 ### Next: Windows capability ecosystem
 - Add native Office automation and real spreadsheet/presentation operations.
-- Add browser control through a controlled protocol.
 - Add connectors for VS Code, file managers, media, CAD/EDA and more.
 - Add capability discovery, installation, tests and user-managed permissions.
 

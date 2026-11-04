@@ -181,3 +181,344 @@ def test_invalid_and_malicious_requests_fail_closed(test_env):
     res3 = r3.send(s3, "bad args")
     assert res3["status"] == "failed"
     assert "must be integer" in res3["error"]
+
+
+def _install_fake_browser_runtime(connector, session_id, workspace, page):
+    from chimera.applications.connectors.browser_connector import _BrowserRuntime
+
+    class Process:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+    class Browser:
+        def is_connected(self):
+            return True
+
+    class Context:
+        pages = [page]
+
+    connector._runtimes[session_id] = _BrowserRuntime(
+        playwright=object(), browser=Browser(), context=Context(),
+        process=Process(), pid=4321, process_create_time=123.0,
+        executable="C:/fake/msedge.exe", port=9333,
+        profile=workspace / ".chimera" / "browser" / "session" / "profile",
+        workspace=workspace,
+    )
+
+
+def test_browser_list_tabs_runs_through_agent_runtime_with_conversation_workspace(test_env, monkeypatch):
+    from chimera.applications.registry import get_application_registry
+    from chimera.applications.connectors.browser_connector import BrowserConnector
+
+    class Page:
+        url = "https://example.test/"
+        def title(self):
+            return "Example"
+
+    store, workspace = test_env["store"], test_env["tmp_path"]
+    registry = get_application_registry()
+    connector = BrowserConnector(browser_paths={})
+    connector.manifest.is_installed = True
+    monkeypatch.setattr(connector, "discover", lambda: connector.manifest)
+    monkeypatch.setitem(registry._connectors, "browser", connector)
+
+    provider = MockScriptedProvider([
+        {
+            "type": "tool_call", "tool": "application.browser.list_tabs",
+            "invocation_id": "browser-read-01", "arguments": {},
+        },
+        {"type": "message", "content": "The browser has one Example tab."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="plan")
+    _install_fake_browser_runtime(connector, session_id, workspace, Page())
+
+    result = runtime.send(session_id, "Inspect my current browser tab.")
+
+    assert result["status"] == "completed"
+    tool_message = next(message for message in store.messages(session_id) if message.role == "tool")
+    payload = json.loads(tool_message.content)
+    assert payload["status"] == "completed"
+    assert payload["result"]["tabs"][0]["url"] == "https://example.test/"
+    assert connector._context.get() is None
+
+
+def test_browser_click_uses_real_agent_approval_replay(test_env, monkeypatch):
+    from chimera.applications.registry import get_application_registry
+    from chimera.applications.connectors.browser_connector import BrowserConnector
+
+    class Locator:
+        clicked = 0
+        def count(self): return 1
+        def is_visible(self): return True
+        def is_enabled(self): return True
+        def evaluate(self, _script):
+            return {"tag": "button", "type": "", "disabled": False, "readOnly": False}
+        def click(self, **_kwargs): self.clicked += 1
+
+    class Page:
+        url = "https://example.test/"
+        locator_target = Locator()
+        def title(self): return "Example"
+        def get_by_role(self, role, name, exact):
+            assert (role, name, exact) == ("button", "Continue", True)
+            return self.locator_target
+
+    store, workspace = test_env["store"], test_env["tmp_path"]
+    registry = get_application_registry()
+    connector = BrowserConnector(browser_paths={})
+    connector.manifest.is_installed = True
+    monkeypatch.setattr(connector, "discover", lambda: connector.manifest)
+    monkeypatch.setitem(registry._connectors, "browser", connector)
+    page = Page()
+
+    provider = MockScriptedProvider([{
+        "type": "tool_call", "tool": "application.browser.click",
+        "invocation_id": "browser-click-01",
+        "arguments": {
+            "page_index": 0, "expected_url": "https://example.test/",
+            "selector_kind": "role", "selector": "button:Continue",
+        },
+    }])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    _install_fake_browser_runtime(connector, session_id, workspace, page)
+
+    pending = runtime.send(session_id, "Click Continue in the browser.")
+
+    assert pending["status"] == "awaiting_approval"
+    assert page.locator_target.clicked == 0
+    approved = runtime.approve_pending(session_id, True)
+
+    assert approved["status"] in {"completed", "running", "awaiting_approval"}
+    assert page.locator_target.clicked == 1
+    tool_messages = [json.loads(m.content) for m in store.messages(session_id) if m.role == "tool"]
+    click_result = next(item for item in tool_messages if item.get("tool") == "application.browser.click")
+    assert click_result["status"] == "completed"
+    assert connector._context.get() is None
+
+
+def test_browser_connector_exception_is_reported_as_failed_tool_result(test_env, monkeypatch):
+    from chimera.applications.registry import get_application_registry
+    from chimera.applications.connectors.browser_connector import BrowserConnector
+
+    store, workspace = test_env["store"], test_env["tmp_path"]
+    registry = get_application_registry()
+    connector = BrowserConnector(browser_paths={})
+    connector.manifest.is_installed = True
+    monkeypatch.setattr(connector, "discover", lambda: connector.manifest)
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("browser automation crashed safely")
+    monkeypatch.setattr(connector, "execute_action", explode)
+    monkeypatch.setitem(registry._connectors, "browser", connector)
+
+    provider = MockScriptedProvider([
+        {"type": "tool_call", "tool": "application.browser.list_tabs", "invocation_id": "browser-crash-01", "arguments": {}},
+        {"type": "message", "content": "The browser was unavailable."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="plan")
+    result = runtime.send(session_id, "Inspect browser tabs.")
+
+    assert result["status"] == "completed"
+    tool_message = next(message for message in store.messages(session_id) if message.role == "tool")
+    payload = json.loads(tool_message.content)
+    assert payload["status"] == "failed"
+    assert "crashed safely" in payload["error"]
+    assert store.session(session_id)["state"] == "idle"
+
+
+def test_approved_computer_launch_authorizes_exact_process_for_same_conversation(test_env, monkeypatch):
+    from types import SimpleNamespace
+    from chimera.computer_use import WindowsComputerUse
+
+    workspace = test_env["tmp_path"]
+    executable = workspace / "Notepad.exe"
+    executable.write_bytes(b"")
+    store = test_env["store"]
+
+    def fake_launch(_self, requested, approved=False):
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "application": str(executable),
+                "requested_application": requested,
+                "display_name": "Notepad",
+                "launch_kind": "executable",
+                "permission": "computer.launch",
+            }
+        return {
+            "status": "completed",
+            "pid": 4242,
+            "spawned_pid": 4242,
+            "executable": str(executable),
+            "application": str(executable),
+            "display_name": "Notepad",
+            "verification": "visible_window_executable_match",
+            "windows": [{"title": "Untitled - Notepad"}],
+        }
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = MockScriptedProvider([
+        {
+            "type": "tool_call", "tool": "computer.launch",
+            "invocation_id": "launch-notepad-01",
+            "arguments": {"executable": "Notepad"},
+        },
+        {"type": "message", "content": "Notepad is open and ready for inspection."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    identities = []
+
+    def authorize(pid, image=None, owner_session_id=None):
+        identity = SimpleNamespace(
+            pid=pid, executable=str(executable), process_create_time=123.0,
+            session_id="authorized-notepad-session",
+            owner_session_id=owner_session_id,
+        )
+        identities.append((pid, image, owner_session_id))
+        runtime.computer.sessions[identity.session_id] = identity
+        runtime.computer._identity_is_current = lambda item: item is identity
+        return identity
+
+    monkeypatch.setattr(runtime.computer, "create", authorize)
+    pending = runtime.send(session_id, "Open Notepad and inspect its contents.")
+
+    assert pending["status"] == "awaiting_approval"
+    approved = runtime.approve_pending(session_id, True)
+
+    assert identities == [(4242, str(executable), session_id)]
+    messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    launch_result = next(item for item in messages if item.get("tool") == "computer.launch")
+    assert launch_result["status"] == "completed"
+    assert launch_result["result"]["control_authorized"] is True
+    assert launch_result["result"]["computer_session_id"] == "authorized-notepad-session"
+
+
+
+def test_native_computer_action_revalidates_mode_at_approval_replay(test_env, monkeypatch):
+    import sqlite3
+    from chimera.computer_use import WindowsComputerUse
+
+    workspace, store = test_env["tmp_path"], test_env["store"]
+    calls = []
+
+    def fake_launch(_self, requested, approved=False):
+        calls.append(approved)
+        return {
+            "status": "awaiting_approval",
+            "application": str(workspace / "Notepad.exe"),
+            "requested_application": requested,
+            "display_name": "Notepad",
+            "launch_kind": "executable",
+            "permission": "computer.launch",
+        }
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = MockScriptedProvider([{
+        "type": "tool_call", "tool": "computer.launch",
+        "invocation_id": "launch-mode-check",
+        "arguments": {"executable": "Notepad"},
+    }])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    pending = runtime.send(session_id, "Open Notepad.")
+
+    assert pending["status"] == "awaiting_approval"
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_sessions SET mode='plan' WHERE session_id=?",
+            (session_id,),
+        )
+
+    with pytest.raises(PermissionError, match="Plan Mode is read-only"):
+        runtime.approve_pending(session_id, True)
+
+    assert calls == [False]
+    assert store.pending_tool(session_id) is not None
+
+
+def test_native_computer_launch_exception_becomes_failed_tool_result(test_env, monkeypatch):
+    from chimera.computer_use import WindowsComputerUse
+
+    workspace, store = test_env["tmp_path"], test_env["store"]
+
+    def fake_launch(_self, requested, approved=False):
+        if not approved:
+            return {
+                "status": "awaiting_approval", "application": requested,
+                "requested_application": requested, "display_name": "Notepad",
+                "launch_kind": "executable", "permission": "computer.launch",
+            }
+        raise OSError("Windows refused to start the executable")
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = MockScriptedProvider([
+        {
+            "type": "tool_call", "tool": "computer.launch",
+            "invocation_id": "launch-failure-01",
+            "arguments": {"executable": "Notepad"},
+        },
+        {"type": "message", "content": "The application could not be launched."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    pending = runtime.send(session_id, "Open Notepad.")
+    assert pending["status"] == "awaiting_approval"
+
+    runtime.approve_pending(session_id, True)
+    messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    launch_result = next(item for item in messages if item.get("tool") == "computer.launch")
+    assert launch_result["status"] == "failed"
+    assert "Windows refused to start" in launch_result["error"]
+
+
+
+def test_computer_close_window_requires_agent_approval_and_exact_conversation_scope(test_env, monkeypatch):
+    from types import SimpleNamespace
+
+    store, workspace = test_env["store"], test_env["tmp_path"]
+    provider = MockScriptedProvider([
+        {
+            "type": "tool_call",
+            "tool": "computer.close_window",
+            "invocation_id": "close-notepad-window",
+            "arguments": {"session_id": "authorized-notepad", "hwnd": 99},
+        },
+        {"type": "message", "content": "The Notepad window was closed."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    identity = SimpleNamespace(
+        pid=4242, executable="C:/Windows/System32/notepad.exe",
+        process_create_time=123.0,
+        owner_session_id=session_id, session_id="authorized-notepad",
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    monkeypatch.setattr(
+        runtime.computer, "_identity_is_current",
+        lambda current: current is identity,
+    )
+    calls = []
+
+    def close_window(app_session_id, hwnd, approved=False):
+        calls.append((app_session_id, hwnd, approved))
+        return {"status": "completed", "verified": True, "hwnd": hwnd, "method": "WM_CLOSE"}
+
+    monkeypatch.setattr(runtime.computer, "close_window", close_window)
+
+    pending = runtime.send(session_id, "Close the Notepad window.")
+    assert pending["status"] == "awaiting_approval"
+    assert calls == []
+
+    completed = runtime.approve_pending(session_id, True)
+    assert completed["status"] == "completed"
+    assert calls == [("authorized-notepad", 99, True)]
+    tool_messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    close_result = next(item for item in tool_messages if item.get("tool") == "computer.close_window")
+    assert close_result["status"] == "completed"
+    assert close_result["result"]["verified"] is True

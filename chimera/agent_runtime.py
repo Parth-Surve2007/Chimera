@@ -13,6 +13,7 @@ import uuid
 import threading
 import inspect
 import math
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -464,6 +465,12 @@ class AgentRuntime:
             "computer.select_element": {"session_id": str, "reference_id": str},
             "computer.expand_element": {"session_id": str, "reference_id": str},
             "computer.collapse_element": {"session_id": str, "reference_id": str},
+            "computer.close_window": {"session_id": str, "hwnd": int},
+            "computer.visual_action": {
+                "session_id": str, "reference_id": str, "action": str,
+                "points": list, "button": str, "duration_ms": int,
+                "text": str, "key": str, "direction": str, "steps": int,
+            },
         }
         expected = contracts.get(operation)
         if expected is None: raise ValueError(f"unregistered tool: workspace.{operation}")
@@ -491,6 +498,7 @@ class AgentRuntime:
             "computer.read_grid": {"session_id", "reference_id"},
             "computer.scroll_element": {"session_id", "reference_id", "direction", "amount"},
             "computer.scroll_into_view": {"session_id", "reference_id"},
+            "computer.visual_action": {"session_id", "reference_id", "action"},
         }.get(operation)
         if required_arguments:
             missing = required_arguments - set(arguments)
@@ -503,6 +511,42 @@ class AgentRuntime:
                 raise ValueError("scroll amount must be line or page")
             if "count" in arguments and not 1 <= arguments["count"] <= 5:
                 raise ValueError("scroll count must be between 1 and 5")
+
+        if operation == "computer.visual_action":
+            action = arguments["action"]
+            if action not in {"click", "double_click", "stroke", "type_text", "press_key", "scroll"}:
+                raise ValueError("visual action must be click, double_click, stroke, type_text, press_key, or scroll")
+            if action in {"click", "double_click", "scroll"}:
+                points = arguments.get("points")
+                if not isinstance(points, list) or len(points) != 1:
+                    raise ValueError(f"{action} requires exactly one normalized point")
+            elif action == "stroke":
+                points = arguments.get("points")
+                if not isinstance(points, list) or not 2 <= len(points) <= 64:
+                    raise ValueError("stroke requires between 2 and 64 normalized points")
+            if "points" in arguments:
+                for point in arguments["points"]:
+                    if (
+                        not isinstance(point, list) or len(point) != 2
+                        or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or not 0.02 <= float(v) <= 0.98 for v in point)
+                    ):
+                        raise ValueError("each point must be a normalized [x, y] pair between 0.02 and 0.98")
+            if "button" in arguments and arguments["button"] not in {"left", "right", "middle"}:
+                raise ValueError("button must be left, right, or middle")
+            if "duration_ms" in arguments and not 0 <= arguments["duration_ms"] <= 2000:
+                raise ValueError("duration_ms must be between 0 and 2000")
+            if action == "type_text" and (not isinstance(arguments.get("text"), str) or not 1 <= len(arguments["text"]) <= 4000):
+                raise ValueError("type_text requires 1 to 4000 characters")
+            if action == "press_key" and not isinstance(arguments.get("key"), str):
+                raise ValueError("press_key requires a key name or chord")
+            if action == "press_key":
+                from .scoped_input import ScopedWindowsInputBackend
+                ScopedWindowsInputBackend._key_chord(arguments["key"])
+            if action == "scroll":
+                if arguments.get("direction", "down") not in {"up", "down"}:
+                    raise ValueError("scroll direction must be up or down")
+                if type(arguments.get("steps", 3)) is not int or not 1 <= arguments.get("steps", 3) <= 8:
+                    raise ValueError("scroll steps must be an integer from 1 to 8")
 
     def _messages_with_goal_context(self, session_id: str):
         """Rehydrate durable task state and private goals for local inference."""
@@ -1180,10 +1224,22 @@ class AgentRuntime:
                 self._cancelled.discard(session_id)
                 return {"status": "cancelled"}
             if is_app_tool:
-                act_res = app_connector.execute_action(app_action.action_id, decision["arguments"], approved=False)
-                res_status = act_res.get("status", "completed")
-                res_err = act_res.get("error")
-                result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+                try:
+                    context_factory = getattr(app_connector, "execution_context", None)
+                    execution_context = (
+                        context_factory(session_id, workspace)
+                        if callable(context_factory) else nullcontext()
+                    )
+                    with execution_context:
+                        act_res = app_connector.execute_action(app_action.action_id, decision["arguments"], approved=False)
+                    res_status = act_res.get("status", "completed")
+                    res_err = act_res.get("error")
+                    result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+                except Exception as exc:
+                    result = type("AppResult", (), {
+                        "data": {"status": "failed", "error": str(exc), "action": app_action.action_id},
+                        "status": "failed", "error": str(exc),
+                    })()
             elif tool_id.startswith("computer."):
                 computer = WindowsComputerUse(workspace)
                 args = decision["arguments"]
@@ -1256,6 +1312,7 @@ class AgentRuntime:
                     "computer.scroll_element", "computer.scroll_into_view",
                     "computer.toggle_element", "computer.select_element",
                     "computer.expand_element", "computer.collapse_element",
+                    "computer.close_window",
                 }:
                     require_authorized_app(args["session_id"])
                     action = operation.removeprefix("computer.")
@@ -1384,7 +1441,9 @@ class AgentRuntime:
         follow_up_actions = re.compile(
             r"\b(?:create|write|edit|save|type|enter|fill|draft|make|generate|insert|"
             r"draw|paint|sketch|illustrate|annotate|mark|circle|highlight|crop|rotate|"
-            r"format|export|print|upload|download)\b"
+            r"format|export|print|upload|download|read|inspect|search|find|look|view|"
+            r"check|analyze|analyse|summarize|summarise|copy|paste|calculate|compute|"
+            r"convert|measure|compare|select|open|navigate|click|press|scroll)\b"
         )
         for clause in clauses[1:]:
             if re.search(r"\b(?:do not|don't|never|not|without)\b", clause):
@@ -1504,20 +1563,39 @@ class AgentRuntime:
             self.store.clear_pending_tool(session_id)
             with sqlite3.connect(self.store.db_path) as db:
                 db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
-            act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
-            res_status = act_res.get("status", "completed")
-            res_err = act_res.get("error")
-            result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+            try:
+                context_factory = getattr(connector, "execution_context", None)
+                execution_context = (
+                    context_factory(session_id, workspace)
+                    if callable(context_factory) else nullcontext()
+                )
+                with execution_context:
+                    act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
+                res_status = act_res.get("status", "completed")
+                res_err = act_res.get("error")
+                result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+            except Exception as exc:
+                result = type("AppResult", (), {
+                    "data": {"status": "failed", "error": str(exc), "action": action_id},
+                    "status": "failed", "error": str(exc),
+                })()
         elif pending["tool"].startswith("computer.") and pending["tool"] in {
             "computer.invoke_element", "computer.set_value", "computer.set_range_value",
             "computer.scroll_element", "computer.scroll_into_view",
             "computer.toggle_element", "computer.select_element",
             "computer.expand_element", "computer.collapse_element",
-            "computer.screenshot", "computer.launch",
+            "computer.screenshot", "computer.launch", "computer.visual_action",
+            "computer.close_window",
         }:
             operation = pending["tool"]
             args = pending["arguments"]
             self._validate_arguments(operation, args)
+            computer_spec = tool_catalog()["operations"].get(operation)
+            if computer_spec is None:
+                raise ValueError(f"unregistered computer action: {operation}")
+            TaskPolicy.validate(
+                session.get("mode", "plan"), operation, computer_spec["permission"]
+            )
             self._record(session_id, "tool.permission.granted", {
                 "invocation_id": pending["invocation_id"], "tool": operation, "source": "operator",
             })
@@ -1528,13 +1606,56 @@ class AgentRuntime:
             with sqlite3.connect(self.store.db_path) as db:
                 db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             if operation == "computer.launch":
-                result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
+                try:
+                    result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
+                except Exception as exc:
+                    result_data = {"status": "failed", "reason": f"application launch failed: {exc}"}
+                if (
+                    result_data.get("status") == "completed"
+                    and type(result_data.get("pid")) is int
+                    and result_data.get("verification") in {
+                        "visible_window_executable_match",
+                        "visible_window_process_match",
+                    }
+                ):
+                    try:
+                        identity = self.computer.create(
+                            result_data["pid"],
+                            result_data.get("executable"),
+                            owner_session_id=session_id,
+                        )
+                        result_data = {
+                            **result_data,
+                            "computer_session_id": identity.session_id,
+                            "control_authorized": True,
+                            "authorization_scope": "this conversation and exact process identity",
+                        }
+                    except Exception as exc:
+                        result_data = {
+                            **result_data,
+                            "control_authorized": False,
+                            "authorization_error": str(exc),
+                            "next_step": "The application opened, but its exact process identity could not be authorized. Use the Applications page to inspect and authorize the live process.",
+                        }
+                elif result_data.get("status") == "completed":
+                    result_data = {
+                        **result_data,
+                        "control_authorized": False,
+                        "next_step": "The window appeared, but its process could not be matched strongly enough for automatic authorization. Confirm the exact process on the Applications page.",
+                    }
             elif operation == "computer.screenshot":
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:
                     raise PermissionError("application is not authorized for this Chimera conversation")
                 self.computer.validate_window(args["session_id"], args["hwnd"])
                 result_data = WindowsComputerUse(workspace).screenshot(args["hwnd"], Path(args["path"]), approved=True)
+            elif operation == "computer.close_window":
+                identity = self.computer.sessions.get(args["session_id"])
+                if not identity or identity.owner_session_id != session_id:
+                    raise PermissionError("application is not authorized for this Chimera conversation")
+                result_data = self.computer.close_window(
+                    args["session_id"], args["hwnd"], approved=True
+                )
             else:
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:

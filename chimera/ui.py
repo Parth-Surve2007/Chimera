@@ -653,7 +653,7 @@ class MainWindow:
         else:
             content.extend(cards)
         content.append(ft.Text(
-            "Authorization is scoped to this conversation and exact process identity. Fresh UI Automation observations are still required; global keyboard injection, blind focus changes and remote window closing remain disabled.",
+            "Authorization is scoped to this conversation and exact process identity. Fresh UI Automation observations are required. Unscoped/background input and clipboard injection remain disabled; short pointer or keyboard actions are permitted only inside the exact authorized foreground window, against a fresh UIA element, after approval. A separate approval can send WM_CLOSE to one exact observed window; Chimera never force-terminates the application process.",
             color=MUTED, size=10,
         ))
         self._set(content)

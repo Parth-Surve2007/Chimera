@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# Keep only the newest validation/build for a branch. A newer commit makes
+# older matrix runs and portable builds obsolete and releases their runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     strategy:
