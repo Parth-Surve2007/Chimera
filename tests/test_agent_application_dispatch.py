@@ -329,3 +329,70 @@ def test_browser_connector_exception_is_reported_as_failed_tool_result(test_env,
     assert payload["status"] == "failed"
     assert "crashed safely" in payload["error"]
     assert store.session(session_id)["state"] == "idle"
+
+
+def test_approved_computer_launch_authorizes_exact_process_for_same_conversation(test_env, monkeypatch):
+    from types import SimpleNamespace
+    from chimera.computer_use import WindowsComputerUse
+
+    workspace = test_env["tmp_path"]
+    executable = workspace / "Notepad.exe"
+    executable.write_bytes(b"")
+    store = test_env["store"]
+
+    def fake_launch(_self, requested, approved=False):
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "application": str(executable),
+                "requested_application": requested,
+                "display_name": "Notepad",
+                "launch_kind": "executable",
+                "permission": "computer.launch",
+            }
+        return {
+            "status": "completed",
+            "pid": 4242,
+            "spawned_pid": 4242,
+            "executable": str(executable),
+            "application": str(executable),
+            "display_name": "Notepad",
+            "verification": "visible_window_executable_match",
+            "windows": [{"title": "Untitled - Notepad"}],
+        }
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = MockScriptedProvider([
+        {
+            "type": "tool_call", "tool": "computer.launch",
+            "invocation_id": "launch-notepad-01",
+            "arguments": {"executable": "Notepad"},
+        },
+        {"type": "message", "content": "Notepad is open and ready for inspection."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    identities = []
+
+    def authorize(pid, image=None, owner_session_id=None):
+        identity = SimpleNamespace(
+            pid=pid, executable=str(executable),
+            session_id="authorized-notepad-session",
+        )
+        identities.append((pid, image, owner_session_id))
+        runtime.computer.sessions[identity.session_id] = identity
+        runtime.computer._identity_is_current = lambda item: item is identity
+        return identity
+
+    monkeypatch.setattr(runtime.computer, "create", authorize)
+    pending = runtime.send(session_id, "Open Notepad and inspect its contents.")
+
+    assert pending["status"] == "awaiting_approval"
+    approved = runtime.approve_pending(session_id, True)
+
+    assert identities == [(4242, str(executable), session_id)]
+    messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    launch_result = next(item for item in messages if item.get("tool") == "computer.launch")
+    assert launch_result["status"] == "completed"
+    assert launch_result["result"]["control_authorized"] is True
+    assert launch_result["result"]["computer_session_id"] == "authorized-notepad-session"
