@@ -22,8 +22,8 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 | Area | What is available |
 |---|---|
 | **Local reasoning** | Run a GGUF model through a persistent llama-server or an explicitly configured one-shot llama-cli runtime. |
-| **Computer control** | Discover visible and installed Windows applications, launch an approved application, bind its verified process to the current conversation, inspect UI Automation controls, and use bounded foreground-scoped pointer/keyboard actions after approval. |
-| **Browser work** | Use an isolated visible Edge/Chrome profile to inspect pages, navigate, click unique controls, fill non-password fields, capture screenshots, and download files into the selected workspace. Mutations require approval. |
+| **Computer control** | Discover and launch Windows applications, bind verified processes to the current conversation, inspect UI Automation controls, use bounded foreground-scoped input, and gracefully close exact windows after approval. |
+| **Browser work** | Use an isolated visible Edge/Chrome profile to inspect pages, navigate, click unique controls, fill safe text fields, select native dropdowns, upload workspace files, capture screenshots, and download files. Mutations require approval. |
 | **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files, genuine Word DOCX documents, and verified PDFs after explicit approval. |
 | **3D workflows** | Ask the Blender connector to create a bounded primitive-based scene and render a PNG preview. |
 | **Reverse engineering** | Use REA for built-in static artifact inspection, strings, file-format detection, and available analysis backends. Connect Ghidra when installed. |
