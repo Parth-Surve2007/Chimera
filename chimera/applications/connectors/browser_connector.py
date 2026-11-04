@@ -147,7 +147,7 @@ class BrowserConnector(BaseApplicationConnector):
             ApplicationAction(
                 action_id="select_option",
                 display_name="Select web dropdown option",
-                description="Select one exact option from a uniquely matched native HTML select or accessible combobox, then verify the selected value.",
+                description="Select one exact option from a uniquely matched native HTML select, then verify the selected value.",
                 risk_level=ActionRiskLevel.LEVEL_3_PROTECTED,
                 permission="browser.input",
                 arguments_schema={
@@ -760,8 +760,8 @@ class BrowserConnector(BaseApplicationConnector):
                     "field_value_matches": True, "url": page.url,
                 }
             if action_id == "select_option":
-                if tag_info["tag"] != "select" and (tag_info.get("role") or "").casefold() != "combobox":
-                    raise ValueError("select_option requires a native select or combobox control")
+                if tag_info["tag"] != "select":
+                    raise ValueError("select_option currently supports native HTML select elements only")
                 value = arguments.get("value")
                 if not isinstance(value, str) or not value or len(value) > 500:
                     raise ValueError("option value must be a non-empty string of at most 500 characters")
