@@ -134,6 +134,10 @@ class UnavailableVisualProvider:
             "hosted_fallback": False,
         }
 
+    def inspect(self, image_path: str) -> dict[str, Any]:
+        """Backward-compatible inventory probe; never reads or sends the path."""
+        return self.inspect_image(image_path, "Describe the supplied image.")
+
 
 class InteractionStrategyEngine:
     def __init__(self, backends: list[InteractionBackend]):
