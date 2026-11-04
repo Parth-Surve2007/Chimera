@@ -71,7 +71,7 @@ def test_startup_server_failure_is_visible_and_does_not_change_runtime(tmp_path)
 
 
 
-def test_full_workbench_composes_left_chat_and_context_panels():
+def test_chat_workbench_uses_left_navigation_and_centered_chat_without_duplicate_rail():
     from chimera import ui
 
     class AgentStore:
@@ -113,4 +113,4 @@ def test_full_workbench_composes_left_chat_and_context_panels():
     window._show_overview()
 
     assert isinstance(window.body.content, ui.ft.Row)
-    assert len(window.body.content.controls) == 3
+    assert len(window.body.content.controls) == 2

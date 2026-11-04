@@ -126,6 +126,9 @@ class MainWindow:
         self.conversation_messages = []
         self.pending_agent_approval = None; self.live_events = []
         self.live_event_count = 0
+        self.live_status_text = None; self.chat_feed = None; self.current_view = "chat"
+        self.send_button = None; self.stop_button = None
+        self.runtime_status_text = None; self.chat_model_state_text = None
         self.agent_unsubscribe = self.agent_runtime.subscribe(self.agent_session_id, self._on_agent_event)
         try:
             pending = AuditStore(registry.data_dir / "chimera.db").clarification_pending()
@@ -164,10 +167,11 @@ class MainWindow:
             padding=ft.Padding.symmetric(vertical=8, horizontal=4),
             on_click=lambda e: self._navigate(self._show_overview),
         )
+        self.runtime_status_text = ft.Text(f"LOCAL RUNTIME  /  {local_state}", color=SECONDARY, size=10)
         status = ft.Container(
             ft.Row([
                 ft.Container(width=6, height=6, bgcolor=state_color, border_radius=6),
-                ft.Text(f"LOCAL RUNTIME  /  {local_state}", color=SECONDARY, size=10),
+                self.runtime_status_text,
             ], spacing=8),
             bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=20,
             padding=ft.Padding.symmetric(horizontal=13, vertical=8),
@@ -206,6 +210,7 @@ class MainWindow:
         return ft.Container(ft.Text(f"MODEL: {self._runtime_state().split(': ')[-1]}   ·   CAPABILITIES: {caps}   ·   REVIEW: {review}   ·   STATE: IDLE", color=MUTED, size=10), height=34, padding=ft.Padding.symmetric(horizontal=24, vertical=8), border=ft.Border.only(top=ft.BorderSide(1, BORDER)))
 
     def _set(self, controls):
+        self.current_view = "other"
         content = ft.Column(
             controls, expand=True, scroll=ft.ScrollMode.AUTO,
             horizontal_alignment=ft.CrossAxisAlignment.START, spacing=18,
@@ -626,7 +631,7 @@ class MainWindow:
             return self._toast("Select a llama-server executable and save the configuration first.")
         try:
             self.model_boot_status = "loading"
-            self._show_overview()
+            self._refresh_runtime_indicators()
             await asyncio.to_thread(self.local_provider.server.start)
             self.model_boot_status = "ready"
             self._toast("Local model loaded and resident in the llama-server process.")
@@ -653,21 +658,21 @@ class MainWindow:
         config = self.local_provider.config
         if not self.local_provider.server:
             self.model_boot_status = "cli_only" if config.cli_path else "missing"
-            self._show_overview()
+            self._refresh_runtime_indicators()
             return
         if check_status(config).state != "ready":
             self.model_boot_status = "missing"
-            self._show_overview()
+            self._refresh_runtime_indicators()
             return
         self.model_boot_status = "loading"
-        self._show_overview()
+        self._refresh_runtime_indicators()
         try:
             await asyncio.to_thread(self.local_provider.server.start)
             self.model_boot_status = "ready"
         except Exception as exc:
             self.model_boot_status = "failed"
             self.last_turn_notice = f"Local model failed to load. No CLI or hosted fallback was attempted: {exc}"
-        self._show_overview()
+        self._refresh_runtime_indicators()
     def _save_model_config(self, e=None):
         model = Path(self.model_path_field.value).expanduser() if self.model_path_field.value else None
         cli = self.runtime_path_field.value.strip() or None
@@ -1117,6 +1122,23 @@ class MainWindow:
         except Exception:
             return "Model configuration unavailable"
 
+    def _refresh_runtime_indicators(self):
+        local_state = self._runtime_state().replace("RUNTIME: ", "")
+        model_state, _, model_color = self._model_runtime_summary()
+        if getattr(self, "runtime_status_text", None) is not None:
+            self.runtime_status_text.value = f"LOCAL RUNTIME  /  {local_state}"
+            try:
+                self.runtime_status_text.update()
+            except Exception:
+                pass
+        if getattr(self, "chat_model_state_text", None) is not None:
+            self.chat_model_state_text.value = model_state
+            self.chat_model_state_text.color = model_color
+            try:
+                self.chat_model_state_text.update()
+            except Exception:
+                pass
+
     def _model_runtime_summary(self):
         provider = self.local_provider
         config = provider.config
@@ -1197,7 +1219,7 @@ class MainWindow:
         )
 
     def _chat_sidebar(self):
-        sessions = self.agent_store.list_sessions(limit=16)
+        sessions = self.agent_store.list_sessions(limit=6)
         recent = []
         for item in sessions:
             sid = item["session_id"]
@@ -1216,8 +1238,6 @@ class MainWindow:
                     on_click=lambda e, session_id=sid: self._resume_agent_session(session_id),
                 )
             )
-        model_state, model_detail, model_color = self._model_runtime_summary()
-        model_label = self._active_model_label()
         return ft.Container(
             ft.Column([
                 ft.Container(
@@ -1246,15 +1266,7 @@ class MainWindow:
                     ft.TextButton("＋", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=ACCENT)),
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 ft.Column(recent or [ft.Text("No threads yet. Start with one clear outcome.", color=MUTED, size=9)], spacing=3, scroll=ft.ScrollMode.AUTO, expand=True),
-                ft.Container(
-                    ft.Column([
-                        ft.Row([ft.Text("LOCAL MODEL", color=MUTED, size=8, weight=ft.FontWeight.BOLD), ft.Container(expand=True), ft.Text(model_state, color=model_color, size=7, weight=ft.FontWeight.BOLD)]),
-                        ft.Text(model_label, color=TEXT, size=9, max_lines=2),
-                        ft.Text(model_detail, color=SECONDARY, size=8, max_lines=3),
-                        ft.TextButton("Configure / load model ↗", on_click=self._show_settings, style=ft.ButtonStyle(color=FOCUS, padding=ft.Padding.all(0))),
-                    ], spacing=6),
-                    bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9, padding=ft.Padding.all(11),
-                ),
+
             ], spacing=9, expand=True),
             width=238, bgcolor="#070707", padding=ft.Padding.all(14),
             border=ft.Border.only(right=ft.BorderSide(1, BORDER)),
@@ -1329,6 +1341,7 @@ class MainWindow:
         )
 
     def _conversation_content(self):
+        self.live_status_text = None
         content = []
         try:
             messages = self.agent_store.messages(self.agent_session_id)
@@ -1371,28 +1384,16 @@ class MainWindow:
             )
 
         if self.task_busy:
-            live = []
-            for event_type, payload in self.live_events[-8:]:
-                if event_type.startswith("model.request"):
-                    label = "Local model is reasoning"
-                elif event_type == "tool.call.requested":
-                    label = f"Preparing {payload.get('tool', 'tool operation')}"
-                elif event_type == "tool.started":
-                    label = f"Running {payload.get('tool', 'tool operation')}"
-                elif event_type == "tool.completed":
-                    label = f"Completed {payload.get('tool', 'tool operation')}"
-                elif event_type == "tool.failed":
-                    label = f"Could not complete {payload.get('tool', 'tool operation')}"
-                else:
-                    continue
-                live.append(ft.Text(f"•  {label}", color=SECONDARY, size=10))
+            self.live_status_text = ft.Text(
+                self._live_status_label(), color=SECONDARY, size=11
+            )
             content.append(
                 ft.Container(
                     ft.Row([
                         ft.ProgressRing(width=15, height=15, stroke_width=2, color=ACCENT),
                         ft.Column([
                             ft.Text("CHIMERA IS WORKING", color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
-                            ft.Text(live[-1].value if live else "Sending the request to your local model…", color=SECONDARY, size=11),
+                            self.live_status_text,
                         ], spacing=4),
                     ], spacing=12),
                     bgcolor=ELEVATED, border=ft.Border.all(1, BORDER),
@@ -1419,8 +1420,8 @@ class MainWindow:
                         ft.Text(json.dumps(pending.get("arguments", {}), ensure_ascii=False, indent=2), color=SECONDARY, size=10),
                         ft.Text("Review the exact operation before allowing it to run.", color=MUTED, size=10),
                         ft.Row([
-                            self._button("APPROVE THIS ACTION", lambda e: self._approve_agent_tool(True)),
-                            ft.TextButton("Reject", on_click=lambda e: self._approve_agent_tool(False), style=ft.ButtonStyle(color=SECONDARY)),
+                            self._button("APPROVE THIS ACTION", self._approve_agent_tool_yes),
+                            ft.TextButton("Reject", on_click=self._approve_agent_tool_no, style=ft.ButtonStyle(color=SECONDARY)),
                         ], spacing=10),
                     ], spacing=9),
                     bgcolor="#120D08", border=ft.Border.all(1, ACCENT),
@@ -1429,13 +1430,64 @@ class MainWindow:
             )
         return content
 
+    def _live_status_label(self):
+        labels = {
+            "model.request.started": "Local model is reasoning",
+            "tool.call.requested": "Preparing {tool}",
+            "tool.started": "Running {tool}",
+            "tool.completed": "Completed {tool}",
+            "tool.failed": "Could not complete {tool}",
+            "assistant.message.completed": "Preparing the response",
+            "turn.completed": "Finishing the response",
+        }
+        for event_type, payload in reversed(self.live_events):
+            template = labels.get(event_type)
+            if template:
+                return template.format(tool=payload.get("tool", "tool operation"))
+        return "Sending the request to your local model…"
+
+    def _refresh_chat_feed(self):
+        if getattr(self, "current_view", "chat") != "chat":
+            return
+        if getattr(self, "chat_feed", None) is None:
+            self._show_overview()
+            return
+        # Keep the same scrollable control mounted. Flet's auto-scroll pins only
+        # while the operator is at the end; scrolling up suspends that pin.
+        self.chat_feed.controls = self._conversation_content()
+        self.chat_feed.update()
+
+    def _sync_chat_controls(self):
+        if self.task_field is not None:
+            self.task_field.disabled = self.task_busy
+            try:
+                self.task_field.update()
+            except Exception:
+                pass
+        if self.send_button is not None:
+            self.send_button.visible = not self.task_busy
+            try:
+                self.send_button.update()
+            except Exception:
+                pass
+        if self.stop_button is not None:
+            self.stop_button.visible = self.task_busy
+            try:
+                self.stop_button.update()
+            except Exception:
+                pass
+
     def _show_overview(self, e=None):
+        self.current_view = "chat"
         session = self.agent_store.session(self.agent_session_id) or {}
         session_mode = session.get("mode", "plan")
         session_title = self._session_title(self.agent_session_id)
         model_label = self._active_model_label()
         model_state, model_detail, model_color = self._model_runtime_summary()
         workspace_label = str(self.workspace_path) if self.workspace_path else "No workspace attached"
+        self.chat_model_state_text = ft.Text(
+            model_state, color=model_color, size=8, weight=ft.FontWeight.BOLD
+        )
 
         if not hasattr(self, "task_field") or self.task_field is None:
             self.task_field = ft.TextField(
@@ -1468,7 +1520,7 @@ class MainWindow:
                     ft.Column([
                         ft.Row([
                             ft.Container(width=7, height=7, bgcolor=model_color, border_radius=8),
-                            ft.Text(model_state, color=model_color, size=8, weight=ft.FontWeight.BOLD),
+                            self.chat_model_state_text,
                         ], spacing=6),
                         ft.Text(model_label, color=TEXT, size=9, max_lines=1),
                     ], spacing=4),
@@ -1491,6 +1543,11 @@ class MainWindow:
             border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)), bgcolor=BG,
         )
 
+        self.send_button = self._button("SEND  ↑", self._send_conversation)
+        self.stop_button = self._button("STOP  ■", self._cancel_conversation)
+        self.send_button.visible = not self.task_busy
+        self.stop_button.visible = self.task_busy
+
         composer = ft.Container(
             ft.Column([
                 ft.Row([
@@ -1505,19 +1562,24 @@ class MainWindow:
                     ft.TextButton("RUN WORKFLOW", on_click=self._run_multi_capability_workflow, disabled=self.task_busy, style=ft.ButtonStyle(color=SECONDARY, padding=ft.Padding.symmetric(horizontal=8, vertical=7))),
                     ft.Container(expand=True),
                     ft.Text("ENTER A GOAL  ·  KEEP THE THREAD GOING", color=MUTED, size=8),
-                    self._button("STOP  ■", self._cancel_conversation) if self.task_busy else self._button("SEND  ↑", self._send_conversation),
+                    self.send_button,
+                    self.stop_button,
                 ], spacing=6, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ], spacing=10),
             bgcolor="#0D0D0D", border=ft.Border.all(1, "#3A3025"), border_radius=13,
             padding=ft.Padding.all(14), margin=ft.Margin.symmetric(horizontal=22, vertical=13),
         )
 
-        feed = ft.Container(
-            ft.Column(
+        if getattr(self, "chat_feed", None) is None:
+            self.chat_feed = ft.Column(
                 self._conversation_content(), expand=True,
-                scroll=ft.ScrollMode.AUTO, spacing=17,
+                scroll=ft.ScrollMode.AUTO, auto_scroll=True, spacing=17,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
+            )
+        else:
+            self.chat_feed.controls = self._conversation_content()
+        feed = ft.Container(
+            self.chat_feed,
             expand=True, padding=ft.Padding.symmetric(horizontal=22, vertical=20),
             bgcolor=BG,
         )
@@ -1526,7 +1588,6 @@ class MainWindow:
         self.body.content = ft.Row([
             self._chat_sidebar(),
             ft.Container(center, expand=True, bgcolor=BG),
-            self._context_rail(),
         ], expand=True, spacing=0)
         self.page.update()
 
@@ -1573,9 +1634,10 @@ class MainWindow:
             return self._toast("Write a message first.")
         self.task_busy = True
         self.last_turn_notice = None
+        self.conversation_messages.append(("user", content))
         self.task_field.value = ""
-        self._show_overview()
-        self.page.run_task(self._watch_agent)
+        self._sync_chat_controls()
+        self._refresh_chat_feed()
         try:
             result = await asyncio.to_thread(self.agent_runtime.send, self.agent_session_id, content)
             if result.get("status") == "awaiting_approval":
@@ -1589,7 +1651,8 @@ class MainWindow:
             self._toast(self.last_turn_notice)
         finally:
             self.task_busy = False
-            self._show_overview()
+            self._sync_chat_controls()
+            self._refresh_chat_feed()
     async def _run_multi_capability_workflow(self, e=None):
         if self.task_busy:
             return self._toast("A request is already running.")
@@ -1601,7 +1664,8 @@ class MainWindow:
         self.task_busy = True
         self.conversation_messages.append(("user", f"[MULTI-STEP WORKFLOW] {objective}"))
         self.task_field.value = ""
-        self._show_overview()
+        self._sync_chat_controls()
+        self._refresh_chat_feed()
         try:
             orchestrator = AgenticWorkflowOrchestrator(
                 self.agent_runtime, self.agent_runtime.task_store, self.workspace_path
@@ -1621,7 +1685,8 @@ class MainWindow:
             self._toast(f"Workflow failed: {exc}")
         finally:
             self.task_busy = False
-            self._show_overview()
+            self._sync_chat_controls()
+            self._refresh_chat_feed()
 
     async def _pick_workspace(self, e=None):
         try:
@@ -1660,17 +1725,35 @@ class MainWindow:
         self.live_event_count = event.sequence
         self.live_events.append((event.event_type, event.payload))
         self.live_events = self.live_events[-100:]
-    async def _watch_agent(self):
-        while self.task_busy:
-            await asyncio.sleep(0.25)
-            if self.task_busy: self._show_overview()
+        if self.current_view == "chat" and self.task_busy:
+            try:
+                self.page.run_task(self._update_live_status)
+            except Exception:
+                pass
+
+    async def _update_live_status(self):
+        if self.current_view != "chat" or not self.task_busy or self.live_status_text is None:
+            return
+        self.live_status_text.value = self._live_status_label()
+        try:
+            self.live_status_text.update()
+        except Exception:
+            pass
     async def _cancel_conversation(self, e=None):
         if self.task_busy:
             self.agent_runtime.cancel(self.agent_session_id)
             self._toast("Cancellation requested; the active model/tool boundary will stop safely.")
+    async def _approve_agent_tool_yes(self, e=None):
+        await self._approve_agent_tool(True)
+
+    async def _approve_agent_tool_no(self, e=None):
+        await self._approve_agent_tool(False)
+
     async def _approve_agent_tool(self, approved):
         if self.task_busy: return
         self.task_busy = True
+        self._sync_chat_controls()
+        self._refresh_chat_feed()
         try:
             pending = self.agent_store.pending_tool(self.agent_session_id)
             if pending and str(pending.get("invocation_id", "")).startswith("wf:"):
@@ -1694,7 +1777,9 @@ class MainWindow:
                 elif result.get("status") not in {"denied"}: self.conversation_messages.append(("assistant", f"The approved operation did not complete: {result.get('error', 'unknown error')}"))
         except Exception as exc: self._toast(f"Approval handling failed: {exc}")
         finally:
-            self.task_busy = False; self._show_overview()
+            self.task_busy = False
+            self._sync_chat_controls()
+            self._refresh_chat_feed()
     def _metric(self, label, value): return ft.Container(ft.Column([ft.Text(label, color=MUTED, size=9), ft.Text(value, color=TEXT, size=13, weight=ft.FontWeight.BOLD)], spacing=5), width=180, bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=6, padding=ft.Padding.all(14))
     async def _execute_workspace(self, e=None, approve_writes=False):
         if self.task_busy: return self._toast("A request is already running.")
