@@ -378,6 +378,7 @@ def test_approved_computer_launch_authorizes_exact_process_for_same_conversation
         identity = SimpleNamespace(
             pid=pid, executable=str(executable),
             session_id="authorized-notepad-session",
+            owner_session_id=owner_session_id,
         )
         identities.append((pid, image, owner_session_id))
         runtime.computer.sessions[identity.session_id] = identity
