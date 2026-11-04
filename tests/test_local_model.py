@@ -907,3 +907,57 @@ def test_compact_local_agent_preserves_each_authorized_top_level_window():
     assert "hwnd=88" in captured["prompt"]
     assert "Project B - Editor" in captured["prompt"]
     assert "Choose the exact visible window HWND" in captured["prompt"]
+
+
+def test_compact_local_agent_carries_advisory_profile_hints_without_authority():
+    provider = LocalModelProvider(
+        LocalModelConfig(None, None, context=8192, max_tokens=256)
+    )
+    captured = {}
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "I will inspect the drawing surface."}, {"context": 8192}
+
+    provider.structured_with_metrics = fake_structured
+    payload = {
+        "tool": "computer.inspect_elements",
+        "status": "completed",
+        "result": {"items": {
+            "observation_id": "profile-observation",
+            "session_id": "paint-session",
+            "generation": 12,
+            "backend": "uia",
+            "windows": [{"hwnd": 77, "pid": 4321, "title": "Untitled - Paint"}],
+            "application_profile": {
+                "profile_id": "windows.paint",
+                "display_name": "Microsoft Paint",
+                "advisory_only": True,
+                "permissions_granted": [],
+                "target_hints": ["Prefer the largest visible enabled canvas-like child."],
+                "preferred_operations": ["visual_action", "inspect_visual_target"],
+                "limitations": ["Pixel change is not semantic proof."],
+            },
+            "elements": [],
+        }},
+    }
+    provider.decide(
+        [
+            SimpleNamespace(role="user", content="Draw a house in Paint."),
+            SimpleNamespace(role="tool", content=json.dumps(payload)),
+        ],
+        {"tools": [{
+            "id": "computer.inspect_elements",
+            "description": "Fresh UI Automation observation",
+            "arguments": {"session_id": "string", "hwnd": "integer"},
+            "permission": "computer.observe",
+        }], "authorized_applications": []},
+        session={"mode": "build", "workspace": None},
+    )
+
+    prompt = captured["prompt"]
+    assert "Matched app profile: Microsoft Paint" in prompt
+    assert "Prefer the largest visible enabled canvas-like child" in prompt
+    assert "visual_action" in prompt
+    assert "permissions_granted=[]" in prompt
+    assert "untrusted advisory metadata" in prompt

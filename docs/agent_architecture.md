@@ -72,6 +72,37 @@ No model is downloaded. The vision server starts only when an approved visual in
 
 The local observer can describe a screenshot, locate candidate controls, and compare visible state with an expected result. Its output is still model-generated observation, not a proof of side effects. Chimera must combine it with fresh UIA/process/window evidence, actual file state, and deterministic application/file-format checks before reporting completion. Screenshots are privacy-sensitive: `computer.inspect_visual_target` requires exact operator approval and refuses to capture a background or foreign window.
 
+### Advisory desktop application profiles
+
+The generic desktop agent includes conservative descriptive profiles for common Windows applications (Paint, Notepad, File Explorer, Word, Excel, PowerPoint, VS Code, GIMP, Blender, Edge and Chrome). Profiles identify likely control roles and preferred semantic operations, such as a Paint canvas, an Excel grid or a Word document surface. They are matched against the authorized process executable and observed window titles, then attached to the current observation.
+
+Profiles are hints only: they grant no permissions, contain no reusable coordinates, and cannot authorize or replay actions. Current process identity, window ownership, UIA references, supported patterns, operator approval and post-action evidence always take precedence. Profiles help the model ask for the right observation; they do not claim that a workflow is certified for that application version.
+
+Operator-owned profiles are loaded from `application_profiles.json` in Chimera's data directory. Set `CHIMERA_APP_PROFILES_PATH` to use an explicit file; otherwise Chimera uses `CHIMERA_DATA_DIR`, `%LOCALAPPDATA%\\Chimera` on Windows, or `.chimera` in the working directory. The JSON file is validated and replaced atomically when written by the profile store.
+
+A minimal profile looks like this:
+
+```json
+[
+  {
+    "profile_id": "studio.custom_editor",
+    "version": 1,
+    "display_name": "Studio Editor",
+    "match": {
+      "executable": ["studio.exe"],
+      "title_contains": ["Studio Editor"]
+    },
+    "target_hints": [
+      "Find the main document surface separately from side panels."
+    ],
+    "preferred_operations": ["inspect_elements", "read_text"],
+    "limitations": ["Custom extensions may render controls outside UI Automation."]
+  }
+]
+```
+
+The resolver consumes only descriptive match rules, target hints, preferred-operation names and limitations. The storage layer preserves unknown metadata for backwards-compatible round trips, but those fields are stripped before a profile reaches the agent. Profiles are capped at 100 entries and bounded per descriptive field. Duplicate IDs and attempts to shadow built-in profile IDs are ignored or rejected. A malformed file disables custom profiles for that launch while preserving built-ins; it never changes execution permissions.
+
 ### Multi-window UIA observation and context packing
 
 - A computer session may have several top-level windows. The agent first obtains the authorized window inventory and selects one exact HWND by title/purpose before inspecting its control tree.

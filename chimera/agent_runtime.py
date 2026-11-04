@@ -509,6 +509,8 @@ class AgentRuntime:
                 if isinstance(actual, bool) or not isinstance(actual, (int, float)) or not math.isfinite(float(actual)):
                     raise ValueError(f"argument {name} must be a finite number")
             elif type(actual) is not kind:
+                if operation == "computer.visual_action" and name == "duration_ms":
+                    raise ValueError("duration_ms must be an integer between 0 and 2000")
                 raise ValueError(f"argument {name} must be {kind.__name__}")
         required_arguments = {
             "computer.get_range_value": {"session_id", "reference_id"},
@@ -1329,6 +1331,7 @@ class AgentRuntime:
                         "session_id": observation.session_id,
                         "windows": observation.windows,
                         "backend": observation.backend,
+                        "application_profile": observation.application.get("profile"),
                     }
                     result_status, result_error = "completed", None
                 elif operation == "computer.inspect_controls":
@@ -1351,6 +1354,7 @@ class AgentRuntime:
                         "backend": observation.backend,
                         "selected_window": observation.windows[0] if observation.windows else None,
                         "windows": observation.windows[:12],
+                        "application_profile": observation.application.get("profile"),
                         "elements": observation.elements[:args.get("limit", 250)],
                         "element_count": len(observation.elements),
                         "limitation": observation.limitation,
