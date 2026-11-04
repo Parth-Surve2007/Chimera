@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import base64
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
+from chimera.computer_runtime import (
+    ApplicationIdentity, ComputerObservation, ComputerSessionManager, ElementReference,
+)
 from chimera.server_provider import validate_chat_messages
 from chimera.vision import LocalVisionConfig, LocalVisionProvider
 
@@ -125,3 +129,150 @@ def test_vision_provider_rejects_empty_question_and_token_overflow(tmp_path):
     image = Image.new("RGB", (32, 32))
     assert provider.inspect_image(image, " ")["status"] == "blocked"
     assert provider.inspect_image(image, "Describe", max_tokens=769)["status"] == "blocked"
+
+
+def test_visual_target_inspection_requires_approval_and_uses_only_fresh_authorized_pixels(tmp_path):
+    manager = ComputerSessionManager(tmp_path)
+    session_id = "conversation-vision"
+    computer_session_id = "app-vision"
+    hwnd, pid = 77, 4321
+    identity = ApplicationIdentity(
+        pid, "C:/Apps/Paint.exe", 123.0, session_id, computer_session_id, (hwnd,),
+    )
+    manager.sessions[computer_session_id] = identity
+    manager._identity_is_current = lambda current: current is identity
+    manager.backend.window_process_id = lambda current_hwnd: pid if current_hwnd == hwnd else None
+    bounds = {"left": 0, "top": 0, "right": 800, "bottom": 600}
+    manager.backend.window_rect = lambda current_hwnd: bounds
+
+    reference_id = "fresh-canvas"
+    reference = ElementReference(
+        reference_id, computer_session_id, hwnd, "runtime-canvas", 4, time.time() + 30,
+    )
+    manager.references[reference_id] = reference
+    manager.observations[computer_session_id] = (
+        4,
+        ComputerObservation(
+            "observation-4", computer_session_id, 4, time.time(), "uia",
+            {"pid": pid, "executable": identity.executable},
+            [{"hwnd": hwnd, "pid": pid, "title": "Paint"}],
+            [{"reference_id": reference_id, "runtime_id": "runtime-canvas"}],
+        ),
+    )
+
+    class FakeUIA:
+        def visual_target(self, current_hwnd, runtime_id, expected_pid):
+            assert (current_hwnd, runtime_id, expected_pid) == (hwnd, "runtime-canvas", pid)
+            return {
+                "rectangle": {"left": 20, "top": 30, "right": 420, "bottom": 330},
+                "control_type": "Pane", "patterns": [], "name": "Canvas",
+                "process_id": pid,
+            }
+
+    class FakeNative:
+        def window_exists(self, current_hwnd):
+            return current_hwnd == hwnd
+
+        def window_pid(self, current_hwnd):
+            return pid if current_hwnd == hwnd else None
+
+        def foreground_hwnd(self):
+            return hwnd
+
+        def foreground_pid(self):
+            return pid
+
+        def capture(self, rect):
+            assert rect == (20, 30, 420, 330)
+            return Image.new("RGB", (400, 300), "white")
+
+    class FakeInput:
+        def _native(self):
+            return FakeNative()
+
+    class FakeVision:
+        def inspect_image(self, image, question, cancel_event=None):
+            assert image.size == (400, 300)
+            assert question == "Does the canvas show a house?"
+            return {
+                "status": "completed", "description": "A house outline is visible.",
+                "provider": "local_llama_vision", "hosted_fallback": False,
+            }
+
+    manager.uia = FakeUIA()
+    manager.visual_input = FakeInput()
+    manager.visual_perception = FakeVision()
+
+    pending = manager.inspect_visual_target(
+        computer_session_id, reference_id, "Does the canvas show a house?",
+    )
+    assert pending["status"] == "awaiting_approval"
+
+    result = manager.inspect_visual_target(
+        computer_session_id, reference_id, "Does the canvas show a house?",
+        approved=True,
+    )
+    assert result["status"] == "completed"
+    assert result["verified"] is False
+    assert result["description"] == "A house outline is visible."
+    assert result["evidence_scope"] == "fresh_uia_target_inside_authorized_window"
+    assert result["hosted_fallback"] is False
+
+
+def test_visual_target_inspection_does_not_capture_background_or_foreign_windows(tmp_path):
+    manager = ComputerSessionManager(tmp_path)
+    session_id = "conversation-vision"
+    computer_session_id = "app-vision"
+    hwnd, pid = 77, 4321
+    identity = ApplicationIdentity(pid, "C:/Apps/Paint.exe", 123.0, session_id, computer_session_id, (hwnd,))
+    manager.sessions[computer_session_id] = identity
+    manager._identity_is_current = lambda current: current is identity
+    manager.backend.window_process_id = lambda current_hwnd: pid if current_hwnd == hwnd else None
+    manager.backend.window_rect = lambda current_hwnd: {
+        "left": 0, "top": 0, "right": 800, "bottom": 600,
+    }
+    reference_id = "fresh-canvas"
+    manager.references[reference_id] = ElementReference(
+        reference_id, computer_session_id, hwnd, "runtime-canvas", 2, time.time() + 30,
+    )
+    manager.observations[computer_session_id] = (
+        2,
+        ComputerObservation(
+            "observation-2", computer_session_id, 2, time.time(), "uia",
+            {"pid": pid, "executable": identity.executable},
+            [{"hwnd": hwnd, "pid": pid, "title": "Paint"}], [],
+        ),
+    )
+
+    class FakeUIA:
+        def visual_target(self, *_args):
+            return {
+                "rectangle": {"left": 20, "top": 20, "right": 420, "bottom": 320},
+                "control_type": "Pane", "patterns": [], "name": "Canvas",
+                "process_id": pid,
+            }
+
+    class FakeNative:
+        def window_exists(self, _hwnd): return True
+        def window_pid(self, _hwnd): return pid
+        def foreground_hwnd(self): return 88
+        def foreground_pid(self): return 9999
+        def capture(self, _rect):
+            raise AssertionError("a background or foreign window must never be captured")
+
+    class FakeInput:
+        def _native(self): return FakeNative()
+
+    class FakeVision:
+        def inspect_image(self, *_args, **_kwargs):
+            raise AssertionError("vision must not run without exact foreground ownership")
+
+    manager.uia = FakeUIA()
+    manager.visual_input = FakeInput()
+    manager.visual_perception = FakeVision()
+    result = manager.inspect_visual_target(
+        computer_session_id, reference_id, "Describe the canvas.", approved=True,
+    )
+
+    assert result["status"] == "awaiting_operator_focus"
+    assert result["verified"] is False
