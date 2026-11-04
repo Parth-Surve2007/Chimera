@@ -1,7 +1,7 @@
 """Trusted, bounded workspace operations; no shell or generated-code execution."""
 from dataclasses import dataclass, asdict
 from pathlib import Path
-import hashlib, json, os
+import hashlib, json, ntpath, os
 
 MAX_FILE = 2_000_000
 MAX_RESULTS = 200
@@ -127,7 +127,8 @@ class WorkspaceTools:
                 if not isinstance(relative, str) or not relative.strip():
                     raise ValueError("file path must be a non-empty workspace-relative path")
                 normalized_path = relative.replace("\\", "/")
-                if normalized_path.startswith("/") or Path(relative).is_absolute():
+                windows_drive, _ = ntpath.splitdrive(relative)
+                if normalized_path.startswith("/") or Path(relative).is_absolute() or windows_drive:
                     raise ValueError("file path must be workspace-relative; use a name such as hello.txt")
                 if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_FILE:
                     raise ValueError("file content exceeds the 2 MB limit")
