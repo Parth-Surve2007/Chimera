@@ -584,3 +584,97 @@ def test_authorized_notepad_text_flows_through_approval_into_verified_pdf(tmp_pa
     assert export_result["status"] == "completed"
     assert export_result["result"]["independent_verification"] is True
     assert export_result["result"]["text_verified"] is True
+
+
+
+def test_invalid_readonly_computer_arguments_return_one_repair_observation(tmp_path):
+    class RepairingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            tool_ids = {item["id"] for item in catalog["tools"]}
+            assert "computer.inspect_window" in tool_ids
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.inspect_window",
+                    "arguments": {"session_id": "not-authorized", "hwnd": 123},
+                }
+            tool_feedback = [
+                item.content for item in messages
+                if getattr(item, "role", None) == "tool"
+            ]
+            assert tool_feedback
+            assert "Allowed arguments: session_id" in tool_feedback[-1]
+            assert "No action was performed" in tool_feedback[-1]
+            return {
+                "type": "message",
+                "content": "I corrected the inspection arguments. No application was inspected.",
+            }
+
+    provider = RepairingProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    result = runtime.send(session_id, "Inspect the authorized application windows.")
+
+    assert result["status"] == "completed"
+    assert provider.calls == 2
+    tool_messages = [
+        __import__("json").loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool"] == "computer.inspect_window"
+    assert tool_messages[0]["status"] == "failed"
+    assert tool_messages[0]["result"]["status"] == "invalid_arguments"
+    assert not any(
+        event.event_type == "tool.call.requested"
+        for event in store.events(session_id)
+    )
+
+
+def test_local_model_prompt_states_inspect_window_argument_contract():
+    captured = {}
+    provider = LocalModelProvider(LocalModelConfig(None, None, context=4096, max_tokens=384))
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "Waiting for an authorized application."}, {"context": 4096}
+
+    provider.structured_with_metrics = fake_structured
+    provider.decide(
+        [SimpleNamespace(role="user", content="Inspect the app windows.")],
+        {
+            "tools": [
+                {
+                    "id": "computer.inspect_window",
+                    "description": "List authorized app windows. Pass only session_id.",
+                    "arguments": {"session_id": "string"},
+                    "permission": "computer.observe",
+                },
+                {
+                    "id": "computer.inspect_elements",
+                    "description": "Inspect the selected UI window.",
+                    "arguments": {
+                        "session_id": "string",
+                        "hwnd": "integer",
+                        "depth": "integer",
+                        "limit": "integer",
+                    },
+                    "permission": "computer.observe",
+                },
+            ],
+            "authorized_applications": [],
+        },
+    )
+
+    assert "pass exactly {session_id}" in captured["prompt"]
+    assert "Do not pass hwnd, window_id, title, or filters" in captured["prompt"]
+    assert "pass it with session_id to computer.inspect_elements" in captured["prompt"]
