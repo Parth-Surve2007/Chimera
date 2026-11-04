@@ -205,7 +205,7 @@ def test_ui_automation_observation_targets_exact_authorized_window_and_bounds_tr
     assert fake_uia.calls == [(88, 5, 310)]
     assert [window["hwnd"] for window in observation.windows] == [88]
     assert observation.elements[0]["name"] == "Document 88"
-    assert observation.elements[0]["session_id"] == session_id or observation.elements[0]["session_id"] == computer_session_id
+    assert observation.elements[0]["session_id"] == computer_session_id
     assert len(observation.elements[0]["reference_id"]) == 32
 
     try:
