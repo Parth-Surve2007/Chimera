@@ -770,6 +770,17 @@ def test_packaged_notepad_launch_authorizes_actual_windowsapps_process_before_in
             if self.calls == 2:
                 self.inspection_was_advertised = "computer.inspect_window" in ids
                 assert self.inspection_was_advertised
+                launch_results = [
+                    __import__("json").loads(item.content)
+                    for item in messages
+                    if getattr(item, "role", None) == "tool"
+                    and "computer.launch" in item.content
+                ]
+                assert launch_results
+                initial = launch_results[-1]["result"]["initial_observation"]
+                assert initial["status"] == "completed"
+                assert initial["backend"] == "uia"
+                assert initial["elements"][0]["reference_id"] == "notepad-editor-ref"
                 return {
                     "type": "tool_call",
                     "tool": "computer.inspect_window",
@@ -858,9 +869,27 @@ def test_packaged_notepad_launch_authorizes_actual_windowsapps_process_before_in
         "observe",
         lambda app_session_id: SimpleNamespace(
             session_id=app_session_id,
+            observation_id="notepad-observation",
+            generation=1,
             windows=[{"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"}],
             backend="uia",
             application={"profile": {"display_name": "Windows Notepad"}},
+            elements=[{
+                "reference_id": "notepad-editor-ref",
+                "session_id": app_session_id,
+                "name": "Text Editor",
+                "control_type": "Document",
+                "automation_id": "TextEditor",
+                "class_name": "RichEditD2DPT",
+                "rectangle": {"left": 20, "top": 80, "right": 900, "bottom": 650},
+                "enabled": True,
+                "offscreen": False,
+                "focused": True,
+                "patterns": ["Text"],
+                "available_actions": ["read_text", "visual_action"],
+                "observation_generation": 1,
+            }],
+            limitation=None,
         ),
     )
 
