@@ -380,13 +380,12 @@ class ScopedWindowsInputBackend:
         with self.lock:
             if not native.window_exists(hwnd) or native.window_pid(hwnd) != expected_pid:
                 return ScopedInputResult("blocked", False, False, "HWND no longer belongs to the authorized process", action).to_dict()
-            try:
-                if native.foreground_hwnd() != hwnd or native.foreground_pid() != expected_pid:
-                    native.focus_window(hwnd)
-            except Exception as exc:
-                return ScopedInputResult("awaiting_operator_focus", False, False, str(exc), action).to_dict()
             if native.foreground_hwnd() != hwnd or native.foreground_pid() != expected_pid:
-                return ScopedInputResult("awaiting_operator_focus", False, False, "exact authorized window is not foreground; activate it and retry", action, native.foreground_pid()).to_dict()
+                return ScopedInputResult(
+                    "awaiting_operator_focus", False, False,
+                    "exact authorized window lost foreground before input; inspect and retry",
+                    action, native.foreground_pid(),
+                ).to_dict()
 
             before_image = native.capture(rect)
             before_hash, before_payload = self._image_evidence(before_image)
