@@ -1146,10 +1146,21 @@ class LocalModelProvider:
             if isinstance(parsed, dict) and parsed.get("type") == "tool_call":
                 selected_tool = parsed.get("tool")
                 if not isinstance(selected_tool, str) or selected_tool not in available_tool_ids:
-                    raise ValueError(
-                        f"the local model selected an unregistered tool ID {selected_tool!r}; "
-                        "no tool was executed. For code questions, ask for the code directly in chat."
-                    )
+                    if isinstance(selected_tool, str) and selected_tool.startswith("computer."):
+                        metrics["unavailable_desktop_tool_blocked"] = selected_tool
+                        parsed = {
+                            "type": "message",
+                            "content": (
+                                f"I couldn't safely continue because {selected_tool} is not available in this conversation. "
+                                "No desktop action was executed. Open Applications, refresh the live application list, and authorize "
+                                "the exact running app for this conversation. Then start a new request so I can inspect the authorized window."
+                            ),
+                        }
+                    else:
+                        raise ValueError(
+                            f"the local model selected an unregistered tool ID {selected_tool!r}; "
+                            "no tool was executed. For code questions, ask for the code directly in chat."
+                        )
         metrics["schema_provenance"] = "chimera.agent_decision.v3"
         metrics["prompt_chars"] = len(prompt)
         if not isinstance(parsed, dict):
