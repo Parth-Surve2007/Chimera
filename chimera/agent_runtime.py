@@ -361,7 +361,8 @@ class AgentRuntime:
             or tool.startswith("application.") or tool in internal_tools
         ):
             raise ValueError(
-                f"tool identifier is invalid: {tool!r}; expected a registered workspace, computer, application, or agent progress tool"
+                f"tool identifier is invalid: {tool!r}; expected a registered workspace.*, computer.*, or application.* ID "
+                "or one of the internal agent progress tools"
             )
         if not isinstance(value.get("arguments"), dict): raise ValueError("tool arguments must be an object")
         invocation = value.get("invocation_id")
