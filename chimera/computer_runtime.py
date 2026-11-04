@@ -564,6 +564,23 @@ class ComputerSessionManager:
         if operation == "visual_action":
             try:
                 target = self.uia.visual_target(reference.hwnd, reference.runtime_id, identity.pid)
+                window_rectangle = self.backend.window_rect(reference.hwnd)
+                if not isinstance(window_rectangle, dict):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "live target window geometry is unavailable",
+                        "backend": "scoped_win32_input",
+                    }
+                target_rectangle = target["rectangle"]
+                if not (
+                    window_rectangle["left"] <= target_rectangle["left"] < target_rectangle["right"] <= window_rectangle["right"]
+                    and window_rectangle["top"] <= target_rectangle["top"] < target_rectangle["bottom"] <= window_rectangle["bottom"]
+                ):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "UI Automation target rectangle is not fully contained by the authorized HWND",
+                        "backend": "scoped_win32_input",
+                    }
                 action = (options or {}).get("action")
                 if action == "type_text":
                     control_type = str(target.get("control_type") or "").casefold()
