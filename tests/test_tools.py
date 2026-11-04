@@ -146,9 +146,9 @@ def test_create_pdf_is_approval_gated_and_independently_extractable(tmp_path):
     assert target.read_bytes().startswith(b"%PDF-")
 
     reader = PdfReader(str(target), strict=True)
-    extracted = "\\n".join(page.extract_text() or "" for page in reader.pages)
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
     normalize = lambda value: " ".join(value.replace("\\u00a0", " ").split())
-    assert normalize("Research Notes\\n" + source) == normalize(extracted)
+    assert normalize("Research Notes\n" + source) == normalize(extracted)
 
     duplicate = tools.run("create_pdf", arguments, approved=True)
     assert duplicate.status == "failed"
