@@ -577,6 +577,12 @@ class AgentRuntime:
                 raise ValueError("multi_stroke uses strokes, not points")
             if "strokes" in arguments and action != "multi_stroke":
                 raise ValueError("strokes are only valid with action=multi_stroke")
+            if "text" in arguments and action != "type_text":
+                raise ValueError("text is only valid with action=type_text")
+            if "key" in arguments and action != "press_key":
+                raise ValueError("key is only valid with action=press_key")
+            if ("direction" in arguments or "steps" in arguments) and action != "scroll":
+                raise ValueError("direction and steps are only valid with action=scroll")
             if "button" in arguments and arguments["button"] not in {"left", "right", "middle"}:
                 raise ValueError("button must be left, right, or middle")
             if "duration_ms" in arguments and (
