@@ -65,6 +65,7 @@ A user may configure a separate multimodal GGUF without changing Chimera's text 
 
 - `CHIMERA_VISION_MODEL_PATH`: absolute path to a locally installed vision-capable GGUF.
 - `CHIMERA_VISION_SERVER`: absolute path to the matching local `llama-server` executable. If omitted, Chimera may use the already configured local llama-server executable path.
+- `CHIMERA_VISION_MMPROJ_PATH`: optional absolute path to a separate multimodal projector GGUF when the selected model requires one.
 - Optional tuning: `CHIMERA_VISION_CONTEXT`, `CHIMERA_VISION_THREADS`, `CHIMERA_VISION_GPU_LAYERS`, and `CHIMERA_VISION_TIMEOUT`.
 
 No model is downloaded. The vision server starts only when an approved visual inspection is requested. Images are resized and encoded as bounded JPEG data URLs and sent only to the local llama-server. Remote image URLs, hosted providers, and silent fallback are rejected. Missing or incompatible multimodal assets produce a truthful unavailable/failed result.
