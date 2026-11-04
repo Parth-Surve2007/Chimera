@@ -834,11 +834,12 @@ class BrowserConnector(BaseApplicationConnector):
             drive, _ = ntpath.splitdrive(relative)
             if drive or normalized.startswith("/") or Path(relative).is_absolute() or any(part in {"", ".", ".."} for part in normalized.split("/")):
                 raise ValueError("upload path must remain inside the selected workspace")
-            source = (runtime.workspace / normalized).resolve(strict=True)
+            candidate = runtime.workspace / normalized
+            if candidate.is_symlink():
+                raise ValueError("upload source may not be a symbolic link")
+            source = candidate.resolve(strict=True)
             if runtime.workspace not in source.parents or not source.is_file():
                 raise ValueError("upload source must be an existing file inside the selected workspace")
-            if source.is_symlink():
-                raise ValueError("upload source may not be a symbolic link")
             locator.set_input_files(str(source), timeout=10_000)
             observed = locator.evaluate("""el => Array.from(el.files || []).map(file => ({
                 name: file.name, size: file.size, type: file.type
