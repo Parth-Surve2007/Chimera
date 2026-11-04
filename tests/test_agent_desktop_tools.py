@@ -197,3 +197,49 @@ def test_runtime_rejects_invalid_create_file_path_before_operator_approval(tmp_p
     payload = __import__("json").loads(tool_messages[0].content)
     assert payload["status"] == "failed"
     assert "workspace-relative" in payload["error"]
+
+
+def test_workspace_file_creation_supports_common_source_files(tmp_path):
+    tools = WorkspaceTools(tmp_path, tmp_path / "out")
+    result = tools.run(
+        "create_file",
+        {"path": "src/app.py", "content": "print('hello from Chimera')\n"},
+        approved=True,
+    )
+    assert result.status == "completed"
+    assert (tmp_path / "src" / "app.py").read_text(encoding="utf-8") == "print('hello from Chimera')\n"
+
+
+def test_workspace_directory_walk_is_bounded_and_lists_nested_files(tmp_path):
+    root = tmp_path / "drive"
+    (root / "Users" / "Parth" / "Desktop").mkdir(parents=True)
+    (root / "Users" / "Parth" / "Desktop" / "hello.txt").write_text("hello", encoding="utf-8")
+    (root / "Projects").mkdir()
+    (root / "Projects" / "readme.md").write_text("project", encoding="utf-8")
+
+    tools = WorkspaceTools(root, root / "out")
+    listed = tools.run("list_files", {"relative": ".", "recursive": True})
+    searched = tools.run("search_files", {"pattern": "*.md"})
+
+    assert listed.status == "completed"
+    assert set(listed.data["files"]) == {
+        "Projects/readme.md",
+        "Users/Parth/Desktop/hello.txt",
+    }
+    assert searched.data["files"] == ["Projects/readme.md"]
+
+
+def test_agent_session_can_persist_default_drive_scope(tmp_path):
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    session_id = store.create_session(None, None)
+    store.set_workspace(session_id, tmp_path)
+    assert store.session(session_id)["workspace"] == str(tmp_path.resolve())
+
+
+def test_builtin_capability_catalog_is_present_and_workspace_actions_resolve():
+    from chimera.builtin_capabilities import BUILTIN_CAPABILITIES, builtin_capability_ids, validate_builtin_catalog
+
+    assert len(BUILTIN_CAPABILITIES) >= 7
+    assert "3d.blender" in builtin_capability_ids()
+    assert "reverse_engineering.rea" in builtin_capability_ids()
+    assert validate_builtin_catalog()
