@@ -275,3 +275,26 @@ def test_key_chord_foreground_loss_releases_held_modifiers():
     assert [event for event in native.events if event[0] == "key"] == [
         ("key", 0x11, True), ("key", 0x11, False),
     ]
+
+
+
+@pytest.mark.parametrize(
+    "chord",
+    ["CTRL+SHIFT+ESC", "ALT+SPACE", "ALT+ESC", "CTRL+ALT+TAB"],
+)
+def test_windows_shell_navigation_chords_are_rejected(chord):
+    from chimera.scoped_input import ScopedWindowsInputBackend
+
+    with pytest.raises(ValueError):
+        ScopedWindowsInputBackend._key_chord(chord)
+
+
+def test_scroll_up_encodes_negative_wheel_delta_for_win32():
+    from chimera.scoped_input import Win32InputNative
+
+    native = object.__new__(Win32InputNative)
+    seen = []
+    native._mouse = lambda flags, x=0, y=0, data=0: seen.append((flags, x, y, data))
+    native.send_mouse_wheel(-3)
+
+    assert seen == [(0x0800, 0, 0, (-360) & 0xFFFFFFFF)]
