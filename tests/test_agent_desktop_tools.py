@@ -361,3 +361,89 @@ def test_launch_completion_shortcut_does_not_skip_requested_follow_up_work():
     assert AgentRuntime._is_terminal_launch_request("Open Notepad. Do not create a text file.")
     assert not AgentRuntime._is_terminal_launch_request("Open Word and create a document.")
     assert not AgentRuntime._is_terminal_launch_request("Launch Notepad, then type hello.")
+
+
+
+def test_runtime_completes_verified_text_file_write_without_second_model_call(tmp_path):
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            return {
+                "type": "tool_call",
+                "tool": "workspace.create_file",
+                "arguments": {"path": "hello.txt", "content": "Hello from Chimera."},
+                "invocation_id": "create-text-file",
+            }
+
+    provider = DecidingProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    pending = runtime.send(session_id, "Create a text file named hello.txt with Hello from Chimera.")
+
+    assert pending["status"] == "awaiting_approval"
+    completed = runtime.approve_pending(session_id, True)
+
+    target = tmp_path / "hello.txt"
+    assert completed["status"] == "completed"
+    assert target.read_text(encoding="utf-8") == "Hello from Chimera."
+    assert "Created and verified the text file" in completed["message"].content
+    assert completed["verification"]["sha256"]
+    assert provider.calls == 1
+    assert runtime.store.session(session_id)["state"] == "idle"
+
+
+def test_runtime_creates_real_word_document_for_docx_request(tmp_path):
+    import zipfile
+
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            return {
+                "type": "tool_call",
+                "tool": "workspace.create_document",
+                "arguments": {
+                    "path": "Cake-Recipe.docx",
+                    "title": "Chocolate Cake Recipe",
+                    "content": "Ingredients: flour, cocoa, sugar.\n\nMethod: mix and bake.",
+                },
+                "invocation_id": "create-word-document",
+            }
+
+    provider = DecidingProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    pending = runtime.send(
+        session_id,
+        "Create a Word document named Cake-Recipe.docx with a chocolate cake recipe.",
+    )
+
+    assert pending["status"] == "awaiting_approval"
+    completed = runtime.approve_pending(session_id, True)
+
+    target = tmp_path / "Cake-Recipe.docx"
+    assert completed["status"] == "completed"
+    assert target.is_file()
+    with zipfile.ZipFile(target) as archive:
+        assert archive.testzip() is None
+        xml = archive.read("word/document.xml").decode("utf-8")
+    assert "Chocolate Cake Recipe" in xml
+    assert "mix and bake" in xml
+    assert "Created and verified the Word document" in completed["message"].content
+    assert provider.calls == 1
+
+
+def test_terminal_file_creation_detection_preserves_requested_follow_up_work():
+    assert AgentRuntime._is_terminal_file_creation_request("Create a text file with hello.")
+    assert AgentRuntime._is_terminal_file_creation_request("Create a Word document with a recipe.")
+    assert not AgentRuntime._is_terminal_file_creation_request("Create a file and then open it.")
+    assert not AgentRuntime._is_terminal_file_creation_request("Create a file, then email it.")
