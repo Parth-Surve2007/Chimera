@@ -549,3 +549,40 @@ def test_explicit_new_task_pauses_unfinished_task_and_can_resume_it(tmp_path):
     assert runtime.send(session_id, "Resume previous task and continue")["status"] == "completed"
     assert runtime.task_store.active_for_session(session_id).task_id == original.task_id
     assert runtime.task_store.get(original.task_id).status == "ready"
+
+
+
+def test_malformed_tool_result_envelope_gets_one_safe_format_repair(tmp_path):
+    class RepairProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self):
+            self.calls = 0
+            self.repair_prompt = ""
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "tool": "workspace.create_file",
+                    "arguments": {"path": "claimed.txt", "content": "not executed"},
+                    "status": "completed",
+                    "result": {"path": "claimed.txt"},
+                    "error": None,
+                    "invocation_id": "fabricated-result",
+                }
+            self.repair_prompt = messages[-1].content
+            return {"type": "message", "content": "I can continue with a valid action decision."}
+
+    provider = RepairProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    result = runtime.send(session_id, "Create a file only after approval.")
+
+    assert result["status"] == "completed"
+    assert provider.calls == 2
+    assert "FORMAT REPAIR REQUIRED" in provider.repair_prompt
+    assert "no action was executed" in provider.repair_prompt
+    assert not (tmp_path / "claimed.txt").exists()
+    assert not store.pending_tool(session_id)
