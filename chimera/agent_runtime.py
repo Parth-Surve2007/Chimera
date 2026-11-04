@@ -324,7 +324,10 @@ class AgentRuntime:
                 continue
             # Desktop actions are offered only after an exact process has been
             # explicitly authorized for this conversation.
-            if key.startswith("computer.") and key not in {"computer.launch", "computer.list_applications"} and not authorized_applications:
+            if key.startswith("computer.") and key not in {
+                "computer.launch", "computer.list_applications",
+                "computer.list_installed_applications",
+            } and not authorized_applications:
                 continue
             catalog_tools.append({"id": key, **tool_catalog()["operations"][value]})
         try:
