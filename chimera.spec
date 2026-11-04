@@ -19,6 +19,7 @@ if not client_archive.is_file():
     raise SystemExit(f"Flet desktop client archive is missing: {client_archive}")
 
 flet_datas, flet_binaries, flet_hiddenimports = collect_all("flet_desktop")
+playwright_datas, playwright_binaries, playwright_hiddenimports = collect_all("playwright")
 reportlab_datas, reportlab_binaries, reportlab_hiddenimports = collect_all("reportlab")
 pypdf_datas, pypdf_binaries, pypdf_hiddenimports = collect_all("pypdf")
 pillow_datas, pillow_binaries, pillow_hiddenimports = collect_all("PIL")
@@ -41,6 +42,7 @@ datas = [
     (str(client_archive), "flet_desktop/app"),
 ]
 datas.extend(flet_datas)
+datas.extend(playwright_datas)
 datas.extend(flet_icon_datas)
 datas.extend(reportlab_datas)
 datas.extend(pypdf_datas)
@@ -98,8 +100,11 @@ hiddenimports = [
     "chimera.providers.adapters.local_adapter",
     "chimera.learning",
     "chimera.scoped_input",
+    "chimera.applications.connectors.browser_connector",
+    "playwright.sync_api",
 ]
 hiddenimports.extend(flet_hiddenimports)
+hiddenimports.extend(playwright_hiddenimports)
 hiddenimports.extend(reportlab_hiddenimports)
 hiddenimports.extend(pypdf_hiddenimports)
 hiddenimports.extend(pillow_hiddenimports)
@@ -107,7 +112,7 @@ hiddenimports.extend(pillow_hiddenimports)
 a = Analysis(
     ["launcher.py"],
     pathex=[],
-    binaries=flet_binaries + reportlab_binaries + pypdf_binaries + pillow_binaries,
+    binaries=flet_binaries + reportlab_binaries + pypdf_binaries + pillow_binaries + playwright_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
