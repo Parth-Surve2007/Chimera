@@ -78,11 +78,13 @@ class GroundedInputBackend:
         self.manager = manager
 
     def describe(self):
+        visual_input = getattr(self.manager, "visual_input", None) if self.manager else None
+        injected_native = getattr(visual_input, "native", None) is not None
         available = bool(
-            os.name == "nt"
+            (os.name == "nt" or injected_native)
             and self.manager is not None
             and getattr(self.manager, "uia", None) is not None
-            and getattr(self.manager, "visual_input", None) is not None
+            and visual_input is not None
         )
         return InteractionBackendInfo(
             "grounded_input", available,
