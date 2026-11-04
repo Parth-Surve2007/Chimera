@@ -1080,7 +1080,7 @@ class CuaDriverBackend:
                         ):
                             with self._lock:
                                 self._foreground_draw_escalations[draw_key] = {
-                                    "stroke_digest": self._draw_digest(pending_retry_strokes),
+                                    "stroke_digest": self._draw_digest(pending_retry_strokes, duration_ms, steps),
                                     "canvas_signature": signature,
                                     "expires_at": time.time() + self.SNAPSHOT_TTL_SECONDS,
                                 }
@@ -1136,7 +1136,7 @@ class CuaDriverBackend:
             if not foreground and not drag_returned and recommended and pending_retry_strokes:
                 with self._lock:
                     self._foreground_draw_escalations[draw_key] = {
-                        "stroke_digest": self._draw_digest(pending_retry_strokes),
+                        "stroke_digest": self._draw_digest(pending_retry_strokes, duration_ms, steps),
                         "canvas_signature": signature,
                         "expires_at": time.time() + self.SNAPSHOT_TTL_SECONDS,
                     }
