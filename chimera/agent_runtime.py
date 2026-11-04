@@ -553,7 +553,7 @@ class AgentRuntime:
             "computer.cua_click": {"session_id", "window_id", "snapshot_ref"},
             "computer.cua_click_foreground": {"session_id", "window_id", "snapshot_ref"},
             "computer.cua_draw_path": {"session_id", "window_id", "snapshot_ref", "canvas_element_token", "strokes"},
-            "computer.cua_draw_path_foreground": {"session_id", "window_id", "snapshot_ref", "canvas_element_token", "strokes"},
+            "computer.cua_draw_path_foreground": {"session_id", "window_id", "snapshot_ref", "canvas_element_token", "strokes", "duration_ms", "steps"},
         }.get(operation)
         if required_arguments:
             missing = required_arguments - set(arguments)
