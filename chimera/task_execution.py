@@ -74,18 +74,30 @@ class TaskStore:
             "steps": self.steps(task_id)[-12:],
         }
 
+    def completion_blockers(self, task_id):
+        """Return persisted work items that still prevent truthful completion."""
+        blockers = []
+        for item in self.todos(task_id):
+            if item["status"] not in {"completed", "cancelled"}:
+                blockers.append({"kind": "todo", "id": item["todo_id"], "status": item["status"], "description": item["content"]})
+        for item in self.steps(task_id):
+            if item["status"] not in {"completed", "cancelled"}:
+                blockers.append({"kind": "step", "id": item["step_id"], "status": item["status"], "description": item["description"], "tool": item["tool"]})
+        return blockers
+
     def can_complete(self, task_id):
-        """A task cannot complete while any persisted checklist item is unresolved."""
-        todos = self.todos(task_id)
-        return bool(todos) and all(item["status"] == "completed" for item in todos)
+        """A task can complete only after its recorded checklist and steps settle."""
+        return not self.completion_blockers(task_id)
 
     def reconcile_completion(self, task_id, requested_status):
-        """Prevent turn-idle from completing unfinished work."""
-        if requested_status == "completed" and not self.can_complete(task_id):
-            todos = self.todos(task_id)
-            status = "blocked" if any(item["status"] == "blocked" for item in todos) else "ready"
-            self.transition(task_id, status)
-            return status
+        """Prevent turn-idle from completing while durable work remains unresolved."""
+        if requested_status == "completed":
+            blockers = self.completion_blockers(task_id)
+            if blockers:
+                statuses = {item["status"] for item in blockers}
+                status = "blocked" if "blocked" in statuses else "failed" if "failed" in statuses else "ready"
+                self.transition(task_id, status)
+                return status
         self.transition(task_id, requested_status)
         return requested_status
     def transition(self, task_id, status):
