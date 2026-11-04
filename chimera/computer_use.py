@@ -181,7 +181,7 @@ class WindowsComputerUse:
                     pass
 
         if os.name == "nt":
-            system_root = Path(os.environ.get("SystemRoot", r"C:\\Windows"))
+            system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
             for root in (system_root / "System32", system_root / "SysWOW64"):
                 for executable_name in dict.fromkeys(executable_names):
                     candidate = root / executable_name
@@ -232,7 +232,7 @@ class WindowsComputerUse:
             )
             if result.returncode != 0 or not result.stdout.strip():
                 return []
-            payload = json.loads(result.stdout)
+            payload = json.loads(result.stdout.lstrip("\\ufeff"))
         except (OSError, subprocess.TimeoutExpired, TypeError, ValueError, json.JSONDecodeError):
             return []
         if isinstance(payload, dict):
@@ -267,7 +267,9 @@ class WindowsComputerUse:
                 return None
         aliases = {
             "paint": {"paint", "microsoftpaint", "mspaint"},
+            "microsoftpaint": {"paint", "microsoftpaint", "mspaint"},
             "mspaint": {"paint", "microsoftpaint", "mspaint"},
+            "windowspaint": {"paint", "microsoftpaint", "mspaint"},
             "calculator": {"calculator", "calc", "windowscalculator"},
             "calc": {"calculator", "calc", "windowscalculator"},
             "notepad": {"notepad", "windowsnotepad"},
