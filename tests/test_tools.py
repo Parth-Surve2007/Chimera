@@ -110,3 +110,68 @@ def test_create_document_rejects_non_docx_and_workspace_escape(tmp_path):
     )
     assert bad_extension.status == "failed" and ".docx" in bad_extension.error
     assert escaped.status == "failed" and "escapes" in escaped.error
+
+
+
+def test_create_pdf_is_approval_gated_and_independently_extractable(tmp_path):
+    import hashlib
+    from pypdf import PdfReader
+
+    workspace = tmp_path / "drive"
+    workspace.mkdir()
+    target = workspace / "Desktop" / "Research-Notes.pdf"
+    tools = WorkspaceTools(workspace, workspace / "out")
+    source = (
+        "The local-first agent must verify the actual output.\n"
+        "Unicode check: café, naïve, £ and €.\n"
+        "Literal markup must survive: <tag> & ampersand."
+    )
+    arguments = {
+        "path": "Desktop/Research-Notes.pdf",
+        "title": "Research Notes",
+        "content": source,
+    }
+
+    pending = tools.run("create_pdf", arguments, approved=False)
+    assert pending.status == "awaiting_approval"
+    assert not target.exists()
+
+    created = tools.run("create_pdf", arguments, approved=True)
+    assert created.status == "completed"
+    assert created.data["format"] == "pdf"
+    assert created.data["text_verified"] is True
+    assert created.data["page_count"] >= 1
+    assert created.data["bytes"] == target.stat().st_size
+    assert created.data["sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert target.read_bytes().startswith(b"%PDF-")
+
+    reader = PdfReader(str(target), strict=True)
+    extracted = "\\n".join(page.extract_text() or "" for page in reader.pages)
+    normalize = lambda value: " ".join(value.replace("\\u00a0", " ").split())
+    assert normalize("Research Notes\\n" + source) == normalize(extracted)
+
+    duplicate = tools.run("create_pdf", arguments, approved=True)
+    assert duplicate.status == "failed"
+    assert "refusing to overwrite" in duplicate.error
+
+
+def test_create_pdf_rejects_bad_extension_escape_and_empty_content(tmp_path):
+    tools = WorkspaceTools(tmp_path, tmp_path / "out")
+    bad_extension = tools.run(
+        "create_pdf",
+        {"path": "report.txt", "title": "Report", "content": "Text"},
+        approved=True,
+    )
+    escaped = tools.run(
+        "create_pdf",
+        {"path": "../report.pdf", "title": "Report", "content": "Text"},
+        approved=True,
+    )
+    empty = tools.run(
+        "create_pdf",
+        {"path": "report.pdf", "title": "Report", "content": "  "},
+        approved=True,
+    )
+    assert bad_extension.status == "failed" and ".pdf" in bad_extension.error
+    assert escaped.status == "failed" and "escapes" in escaped.error
+    assert empty.status == "failed" and "non-empty" in empty.error
