@@ -760,7 +760,8 @@ class LocalModelProvider:
             "Never silently downgrade a requested .docx to .txt. Use only workspace-relative paths under WORKSPACE_SCOPE.root and "
             "WORKSPACE_SCOPE.known_folders.desktop for Desktop requests. Never overwrite; require exact Build Mode approval and "
             "report success only after independent file hash/size verification. "
-            if workspace_available else ""
+            if workspace_available else
+            "No workspace tools are available in this turn: do not call workspace operations or invent host filesystem paths. "
         )
         app_control_guidance = (
             "Use fresh UIA references from inspect_elements; only invoke actions listed for the observed control. "
