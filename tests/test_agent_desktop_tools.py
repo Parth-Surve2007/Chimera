@@ -623,6 +623,16 @@ def test_invalid_readonly_computer_arguments_return_one_repair_observation(tmp_p
     store = AgentSessionStore(tmp_path / "chimera.db")
     runtime = AgentRuntime(store, provider)
     session_id = runtime.create_session(tmp_path, mode="build")
+    identity = SimpleNamespace(
+        session_id="authorized-notepad",
+        owner_session_id=session_id,
+        pid=4242,
+        executable="C:/Windows/System32/notepad.exe",
+        process_create_time=1.0,
+        authorized_hwnds=(),
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    runtime.computer._identity_is_current = lambda current: current is identity
 
     result = runtime.send(session_id, "Inspect the authorized application windows.")
 
@@ -707,6 +717,16 @@ def test_repeated_invalid_desktop_arguments_are_blocked_after_one_retry(tmp_path
     store = AgentSessionStore(tmp_path / "chimera.db")
     runtime = AgentRuntime(store, provider)
     session_id = runtime.create_session(tmp_path, mode="build")
+    identity = SimpleNamespace(
+        session_id="authorized-notepad",
+        owner_session_id=session_id,
+        pid=4242,
+        executable="C:/Windows/System32/notepad.exe",
+        process_create_time=1.0,
+        authorized_hwnds=(),
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    runtime.computer._identity_is_current = lambda current: current is identity
 
     result = runtime.send(session_id, "Inspect the authorized application windows.")
 
