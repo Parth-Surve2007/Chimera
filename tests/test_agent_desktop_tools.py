@@ -147,6 +147,8 @@ def test_ui_removes_verify_controls_and_optional_langflow_setup():
     assert "auto_scroll=True" in ui
     assert "self._context_rail()," not in ui
     assert "list_sessions(limit=6)" in ui
+    assert "APPLY LOW-MEMORY PRESET" in ui
+    assert "def _apply_low_memory_preset" in ui
 
 
 def test_workspace_file_creation_rejects_absolute_host_paths_before_approval(tmp_path):
@@ -681,3 +683,43 @@ def test_local_model_prompt_states_inspect_window_argument_contract():
     assert "pass exactly {session_id}" in captured["prompt"]
     assert "Do not pass hwnd, window_id, title, or filters" in captured["prompt"]
     assert "pass it with session_id to computer.inspect_elements" in captured["prompt"]
+
+
+
+def test_repeated_invalid_desktop_arguments_are_blocked_after_one_retry(tmp_path):
+    class RepeatingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            return {
+                "type": "tool_call",
+                "tool": "computer.inspect_window",
+                "arguments": {"session_id": "not-authorized", "hwnd": 123},
+            }
+
+    provider = RepeatingProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    result = runtime.send(session_id, "Inspect the authorized application windows.")
+
+    assert result["status"] == "failed"
+    assert provider.calls == 3
+    messages = [
+        __import__("json").loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert len(messages) == 3
+    assert messages[0]["result"]["status"] == "invalid_arguments"
+    assert messages[1]["status"] == "blocked"
+    assert messages[2]["status"] == "blocked"
+    assert not any(
+        event.event_type == "tool.call.requested"
+        for event in store.events(session_id)
+    )
