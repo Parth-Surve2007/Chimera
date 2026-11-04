@@ -727,3 +727,43 @@ def test_agent_runtime_requires_pdf_approval_then_verifies_the_real_file(tmp_pat
     task = runtime.task_store.latest_for_session(session_id)
     assert task.status == "completed"
     assert runtime.task_store.steps(task.task_id)[0]["status"] == "completed"
+
+
+
+def test_stale_approval_cannot_replay_an_invocation_already_started(tmp_path):
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "workspace.create_file",
+            "arguments": {"path": "once.txt", "content": "must not be duplicated"},
+            "invocation_id": "once-only-invocation",
+        },
+    ])
+    database = tmp_path / "chimera.db"
+    store = AgentSessionStore(database)
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    pending = runtime.send(session_id, "Create once.txt")
+    assert pending["status"] == "awaiting_approval"
+    assert store.pending_tool(session_id)["invocation_id"] == "once-only-invocation"
+
+    # Simulate a process crash after the durable tool.started event but before
+    # the old version removed its pending-approval row.
+    task = runtime.task_store.active_for_session(session_id)
+    step = next(
+        item for item in runtime.task_store.steps(task.task_id)
+        if item["invocation_id"] == "once-only-invocation"
+    )
+    runtime.task_store.step_transition(
+        step["step_id"], "running", invocation_id="once-only-invocation"
+    )
+
+    restarted = AgentRuntime(AgentSessionStore(database), provider)
+    result = restarted.approve_pending(session_id, True)
+    assert result["status"] == "blocked"
+    assert "will not be replayed" in result["error"]
+    assert restarted.store.pending_tool(session_id) is None
+    assert not (tmp_path / "once.txt").exists()
+    resumed_task = restarted.task_store.latest_for_session(session_id)
+    assert resumed_task.status == "blocked"
+    assert restarted.task_store.steps(resumed_task.task_id)[0]["status"] == "blocked"
