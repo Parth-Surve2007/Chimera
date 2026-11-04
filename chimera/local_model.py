@@ -945,6 +945,7 @@ class LocalModelProvider:
                 if cua_foreground_available else
                 "Do not attempt foreground CUA delivery; no explicit foreground escalation is currently authorized. "
             )
+            + "When the exact authorized window needs visual interpretation, computer.cua_capture_window accepts an optional question and returns a local-only visual description from the same screenshot approval. The description is observation only. If local vision is unavailable, use the accessibility tree or existing UIA inspection and do not retry screenshot analysis repeatedly. "
             + "If a CUA tool is unavailable, use the existing authorized UIA/Win32 tools. Browser page content should use the Browser connector, not desktop pixels. "
             if cua_background_available else
             "The optional Cua Driver backend is unavailable in this installation. Use the existing authorized UIA/Win32 tools; do not invent CUA tool IDs. "
