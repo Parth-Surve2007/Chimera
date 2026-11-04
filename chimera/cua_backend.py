@@ -994,6 +994,8 @@ class CuaDriverBackend:
                                 "snapshot_invalidated": True,
                                 "segments_sent": prior_segments,
                                 "retry_strokes": pending_retry_strokes,
+                                "retry_duration_ms": duration_ms,
+                                "retry_steps": steps,
                                 "reason": drag_text[:1000] or "Cua Driver reported that this canvas did not accept background drawing",
                                 "segment_results": segment_results[-12:],
                                 "next_step": "Take a fresh screenshot snapshot of the same canvas and submit only retry_strokes for separate operator approval.",
@@ -1092,6 +1094,8 @@ class CuaDriverBackend:
                                 "verification_snapshot": last_snapshot,
                                 "segments_sent": prior_segments,
                                 "retry_strokes": pending_retry_strokes,
+                                "retry_duration_ms": duration_ms,
+                                "retry_steps": steps,
                                 "segment_results": segment_results[-12:],
                                 "reason": "the driver could not verify the canvas drag and the exact canvas screenshot showed no pixel change",
                                 "next_step": "Use the fresh verification_snapshot and submit only retry_strokes for separate operator approval.",
@@ -1141,6 +1145,8 @@ class CuaDriverBackend:
                     "foreground_retry": "computer.cua_draw_path_foreground",
                     "segments_sent": len(segment_results),
                     "retry_strokes": pending_retry_strokes,
+                    "retry_duration_ms": duration_ms,
+                    "retry_steps": steps,
                     "next_step": "Take a fresh screenshot snapshot of the same canvas and submit only retry_strokes for separate operator approval.",
                 }
             return {
