@@ -442,6 +442,7 @@ class AgentRuntime:
             "create_artifact": {"name": str, "content": str},
             "create_file": {"path": str, "content": str},
             "create_document": {"path": str, "title": str, "content": str},
+            "create_pdf": {"path": str, "title": str, "content": str},
             "computer.list_applications": {},
             "computer.list_installed_applications": {},
             "computer.list_windows": {},
@@ -537,7 +538,7 @@ class AgentRuntime:
                 ],
             }
             context_blocks.append(
-                "Private local goal context (read-only):\\n"
+                "Private local goal context (read-only):\n"
                 + json.dumps(goal_context, ensure_ascii=False, separators=(",", ":"))
             )
 
@@ -565,7 +566,7 @@ class AgentRuntime:
                     ],
                 }
                 context_blocks.append(
-                    "Active durable task state. Continue this task unless the current user message explicitly starts a separate task. Completed actions and their results are historical evidence; do not repeat their side effects. Resolve pending/blocked work or explain the blocker. Do not claim completion while checklist items or action steps remain unresolved:\\n"
+                    "Active durable task state. Continue this task unless the current user message explicitly starts a separate task. Completed actions and their results are historical evidence; do not repeat their side effects. Resolve pending/blocked work or explain the blocker. Do not claim completion while checklist items or action steps remain unresolved:\n"
                     + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
                 )
 
@@ -574,7 +575,7 @@ class AgentRuntime:
                 message_id="runtime-context-" + session_id,
                 session_id=session_id,
                 role="system",
-                content="\\n\\n".join(context_blocks),
+                content="\n\n".join(context_blocks),
                 created_at=_now(),
             ))
         return messages
@@ -1144,7 +1145,7 @@ class AgentRuntime:
                     continue
                 decision["arguments"]["executable"] = launch_preflight["application"]
 
-            if tool_id in {"workspace.create_file", "workspace.create_document"}:
+            if tool_id in {"workspace.create_file", "workspace.create_document", "workspace.create_pdf"}:
                 operation_name = tool_id.removeprefix("workspace.")
                 preflight = tools.run(operation_name, decision["arguments"], approved=False)
                 if preflight.status != "awaiting_approval":
@@ -1382,6 +1383,7 @@ class AgentRuntime:
         clauses = re.split(r"[.!?;,]|\b(?:and then|and|then|after that)\b", text)
         follow_up_actions = re.compile(
             r"\b(?:create|write|edit|save|type|enter|fill|draft|make|generate|insert|"
+            r"draw|paint|sketch|illustrate|annotate|mark|circle|highlight|crop|rotate|"
             r"format|export|print|upload|download)\b"
         )
         for clause in clauses[1:]:
@@ -1414,6 +1416,46 @@ class AgentRuntime:
         task = self.task_store.active_for_session(session_id)
         if task:
             self._tasks[session_id] = task.task_id
+
+        # A crash can occur after tool.started is durable but before the
+        # pending-approval row is removed. Never execute that invocation twice.
+        if approve and task:
+            started_step = next(
+                (
+                    step for step in self.task_store.steps(task.task_id)
+                    if step.get("invocation_id") == pending["invocation_id"]
+                ),
+                None,
+            )
+            if started_step and started_step["status"] in {"running", "completed", "failed", "blocked"}:
+                reason = (
+                    "This exact approved invocation was already marked as started or finished. "
+                    "Its side-effect outcome must be verified from current application/file state; "
+                    "it will not be replayed from the stale approval card."
+                )
+                if started_step["status"] == "running":
+                    self.task_store.step_transition(
+                        started_step["step_id"], "blocked",
+                        result=started_step.get("result"),
+                        error="Process restart interrupted this action after it started. " + reason,
+                        invocation_id=pending["invocation_id"],
+                    )
+                self.store.clear_pending_tool(session_id)
+                with sqlite3.connect(self.store.db_path) as db:
+                    db.execute(
+                        "UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?",
+                        (_now(), session_id),
+                    )
+                self._record(session_id, "tool.failed", {
+                    "invocation_id": pending["invocation_id"],
+                    "tool": pending["tool"],
+                    "status": "blocked",
+                    "error": reason,
+                })
+                self.task_store.transition(task.task_id, "blocked")
+                self._tasks.pop(session_id, None)
+                return {"status": "blocked", "error": reason, "invocation_id": pending["invocation_id"]}
+
         if not approve:
             self.store.clear_pending_tool(session_id)
             self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "status": "denied", "error": "user denied approval"}))
@@ -1459,6 +1501,9 @@ class AgentRuntime:
                 "invocation_id": pending["invocation_id"], "tool": pending["tool"],
                 "arguments": pending["arguments"],
             })
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
             res_status = act_res.get("status", "completed")
             res_err = act_res.get("error")
@@ -1479,6 +1524,9 @@ class AgentRuntime:
             self._record(session_id, "tool.started", {
                 "invocation_id": pending["invocation_id"], "tool": operation, "arguments": args,
             })
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             if operation == "computer.launch":
                 result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
             elif operation == "computer.screenshot":
@@ -1522,9 +1570,63 @@ class AgentRuntime:
             TaskPolicy.validate(session.get("mode", "plan"), pending["tool"], spec["permission"])
             if spec["permission"] == "workspace.read":
                 raise PermissionError("workspace reads do not require approval")
+            self._record(session_id, "tool.permission.granted", {
+                "invocation_id": pending["invocation_id"],
+                "tool": pending["tool"],
+                "source": "operator",
+            })
+            self._record(session_id, "tool.started", {
+                "invocation_id": pending["invocation_id"],
+                "tool": pending["tool"],
+                "arguments": pending["arguments"],
+            })
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             result = WorkspaceTools(
                 workspace, self._artifact_output_dir(workspace, session_id)
             ).run(operation, pending["arguments"], approved=True)
+        if pending["tool"] == "workspace.create_pdf" and result.status == "completed":
+            # Independently reopen the produced file at the runtime boundary.
+            # The writer's own validation is not accepted as the only proof.
+            try:
+                relative = result.data.get("path")
+                if workspace is None or not isinstance(relative, str) or not relative.strip():
+                    raise ValueError("PDF result did not include a valid workspace-relative path")
+                target = (workspace / relative).resolve()
+                if target == workspace or workspace not in target.parents or not target.is_file():
+                    raise ValueError("PDF output is missing or outside the selected workspace")
+                data = target.read_bytes()
+                if not data.startswith(b"%PDF-"):
+                    raise ValueError("PDF signature is invalid")
+                from pypdf import PdfReader
+                reader = PdfReader(str(target), strict=True)
+                if reader.is_encrypted or not reader.pages:
+                    raise ValueError("PDF is encrypted or contains no pages")
+                extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+                normalize = lambda value: " ".join(str(value or "").split())
+                expected = normalize(pending["arguments"]["title"] + "\n" + pending["arguments"]["content"])
+                observed = normalize(extracted)
+                if observed != expected:
+                    raise ValueError("independent PDF text extraction does not match the approved source text")
+                result_data = dict(result.data)
+                result_data.update({
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "page_count": len(reader.pages),
+                    "text_verified": True,
+                    "independent_verification": True,
+                })
+                result = type("PDFVerificationResult", (), {
+                    "data": result_data, "status": "completed", "error": None,
+                })()
+            except Exception as exc:
+                result = type("PDFVerificationResult", (), {
+                    "data": {**(result.data if isinstance(result.data, dict) else {}), "independent_verification": False},
+                    "status": "failed",
+                    "error": f"PDF independent verification failed: {exc}",
+                })()
+
         self.store.clear_pending_tool(session_id)
         self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "tool": pending["tool"], "arguments": pending["arguments"], "result": result.data, "status": result.status, "error": result.error}))
         self._record(session_id, "tool.completed" if result.status == "completed" else "tool.failed", {"invocation_id": pending["invocation_id"], "status": result.status, "data": result.data, "error": result.error})
@@ -1564,7 +1666,7 @@ class AgentRuntime:
             return {"status": "completed", "message": assistant, "tools": [pending["tool"]]}
 
         if (
-            pending["tool"] in {"workspace.create_file", "workspace.create_document"}
+            pending["tool"] in {"workspace.create_file", "workspace.create_document", "workspace.create_pdf"}
             and self._is_terminal_file_creation_request(
                 next((item.content for item in reversed(self.store.messages(session_id)) if item.role == "user"), "")
             )
@@ -1606,7 +1708,10 @@ class AgentRuntime:
                 self._tasks.pop(session_id, None)
                 return {"status": "failed", "error": error, "tool": pending["tool"]}
 
-            file_kind = "Word document" if pending["tool"] == "workspace.create_document" else "text file"
+            file_kind = {
+                "workspace.create_document": "Word document",
+                "workspace.create_pdf": "PDF document",
+            }.get(pending["tool"], "text file")
             assistant = self.store.add_message(
                 session_id, "assistant",
                 f"Created and verified the {file_kind}: {relative} ({result.data['bytes']} bytes)."
