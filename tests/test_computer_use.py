@@ -465,12 +465,6 @@ def test_packaged_paint_resolves_from_start_menu_when_executable_is_not_on_disk(
     aumid = "Microsoft.Paint_8wekyb3d8bbwe!App"
     monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(
-        computer_use.ctypes,
-        "windll",
-        SimpleNamespace(user32=object(), kernel32=object()),
-        raising=False,
-    )
-    monkeypatch.setattr(
         WindowsComputerUse,
         "_resolve_executable",
         staticmethod(lambda _name: None),
@@ -537,6 +531,12 @@ def test_packaged_paint_launch_uses_apps_folder_activation_without_shell(tmp_pat
     explorer = tmp_path / "explorer.exe"
     explorer.write_bytes(b"MZ")
     monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        computer_use.ctypes,
+        "windll",
+        SimpleNamespace(user32=object(), kernel32=object()),
+        raising=False,
+    )
     monkeypatch.setenv("SystemRoot", str(tmp_path))
     monkeypatch.setattr(
         WindowsComputerUse,
