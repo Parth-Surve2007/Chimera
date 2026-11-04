@@ -666,9 +666,19 @@ def test_visual_action_manager_requires_fresh_target_and_operator_approval(tmp_p
                 "process_id": 4321,
             }
 
+    class VisualNative:
+        def foreground_hwnd(self): return 99
+        def foreground_pid(self): return 4321
+        def focus_window(self, hwnd):
+            assert hwnd == 99
+
     class VisualInput:
         def __init__(self):
             self.calls = []
+            self._native_backend = VisualNative()
+
+        def _native(self):
+            return self._native_backend
 
         def execute(self, **kwargs):
             self.calls.append(kwargs)
@@ -724,9 +734,15 @@ def test_visual_action_blocks_noneditable_text_targets(tmp_path, monkeypatch):
                 "process_id": expected_pid,
             }
 
+    class VisualNative:
+        def foreground_hwnd(self): return 99
+        def foreground_pid(self): return 4321
+        def focus_window(self, hwnd):
+            assert hwnd == 99
+
     class VisualInput:
         def _native(self):
-            raise AssertionError("non-editable target must be rejected before focus or input")
+            return VisualNative()
 
     manager.backend.window_rect = lambda _hwnd: {
         "left": 0, "top": 0, "right": 800, "bottom": 800,
