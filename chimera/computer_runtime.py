@@ -98,7 +98,6 @@ class ProfileStore:
             if not isinstance(match, dict) or not match or set(match) - cls.MATCH_KEYS:
                 raise ValueError("profile match must use executable, title_contains or class_name_contains")
 
-            clean_match = {}
             for key, value in match.items():
                 values = [value] if isinstance(value, str) else value
                 if (
@@ -106,20 +105,7 @@ class ProfileStore:
                     or any(not isinstance(entry, str) or not entry.strip() or len(entry) > 120 for entry in values)
                 ):
                     raise ValueError(f"profile match field {key} must contain 1 to 12 bounded strings")
-                if key == "executable":
-                    clean_match[key] = [
-                        entry.strip().replace("\\\\", "/").rsplit("/", 1)[-1].casefold()
-                        for entry in values
-                    ]
-                else:
-                    clean_match[key] = [entry.strip().casefold() for entry in values]
 
-            clean = {
-                "profile_id": profile_id,
-                "version": version,
-                "display_name": str(item.get("display_name") or profile_id)[:120],
-                "match": clean_match,
-            }
             for field, maximum, item_limit in (
                 ("target_hints", 500, 12),
                 ("preferred_operations", 80, 16),
@@ -130,10 +116,13 @@ class ProfileStore:
                     raise ValueError(f"{field} must be an array with at most {item_limit} items")
                 if any(not isinstance(value, str) or len(value) > maximum for value in values):
                     raise ValueError(f"{field} entries must be strings no longer than {maximum} characters")
-                clean[field] = list(values)
-            # Unknown metadata is intentionally discarded, especially
-            # permissions, executable actions and coordinate recipes.
-            sanitized.append(clean)
+
+            # Storage preserves unknown metadata for backwards compatibility.
+            # The profile resolver below projects only descriptive guidance
+            # fields and never forwards permissions, actions or coordinates.
+            preserved = dict(item)
+            preserved["profile_id"] = profile_id
+            sanitized.append(preserved)
         return sanitized
 
     def load(self) -> list[dict]:
@@ -323,14 +312,33 @@ class DesktopApplicationProfileRegistry:
             if profile_key in known_ids:
                 continue
             known_ids.add(profile_key)
+            match = {}
+            for key, value in item["match"].items():
+                values = [value] if isinstance(value, str) else value
+                if key == "executable":
+                    match[key] = [
+                        str(entry).strip().replace("\\\\", "/").rsplit("/", 1)[-1].casefold()
+                        for entry in values
+                    ]
+                else:
+                    match[key] = [str(entry).strip().casefold() for entry in values]
             self.profiles.append({
                 "profile_id": profile_id,
                 "version": item["version"],
-                "display_name": item["display_name"],
-                "match": dict(item["match"]),
-                "target_hints": list(item["target_hints"]),
-                "preferred_operations": list(item["preferred_operations"]),
-                "limitations": list(item["limitations"]),
+                "display_name": str(item.get("display_name") or profile_id)[:120],
+                "match": match,
+                "target_hints": [
+                    str(value)[:500] for value in item.get("target_hints", [])[:12]
+                    if isinstance(value, str)
+                ] if isinstance(item.get("target_hints"), list) else [],
+                "preferred_operations": [
+                    str(value)[:80] for value in item.get("preferred_operations", [])[:16]
+                    if isinstance(value, str)
+                ] if isinstance(item.get("preferred_operations"), list) else [],
+                "limitations": [
+                    str(value)[:500] for value in item.get("limitations", [])[:12]
+                    if isinstance(value, str)
+                ] if isinstance(item.get("limitations"), list) else [],
             })
 
     @staticmethod
