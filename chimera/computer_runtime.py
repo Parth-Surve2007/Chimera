@@ -94,7 +94,8 @@ class WindowsUIABackend:
             except Exception: return default
         try: name = item.window_text()
         except Exception: name = ""
-        return {"backend": "uia", "runtime_id": str(getattr(info, "runtime_id", None)), "parent": parent, "name": name, "automation_id": info.automation_id, "class_name": info.class_name, "control_type": info.control_type, "process_id": info.process_id, "rectangle": bounds, "enabled": safe_bool("is_enabled"), "offscreen": safe_bool("is_offscreen"), "focused": safe_bool("has_focus"), "patterns": patterns}
+        runtime_id = getattr(info, "runtime_id", None)
+        return {"backend": "uia", "runtime_id": str(runtime_id) if runtime_id is not None else None, "parent": parent, "name": name, "automation_id": info.automation_id, "class_name": info.class_name, "control_type": info.control_type, "process_id": info.process_id, "rectangle": bounds, "enabled": safe_bool("is_enabled"), "offscreen": safe_bool("is_offscreen"), "focused": safe_bool("has_focus"), "patterns": patterns}
     def elements(self, hwnd: int, depth=3, limit=250):
         root = self.desktop.window(handle=hwnd); result=[]; pending=[(root,0)]
         while pending and len(result)<limit:
