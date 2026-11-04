@@ -820,3 +820,34 @@ def test_computer_session_close_window_rejects_stale_or_foreign_hwnd(tmp_path, m
     result = manager.close_window("agent-session", 99, approved=True)
     assert result["status"] == "blocked"
     assert "authorized process" in result["reason"]
+
+
+
+def test_window_close_returns_manual_handoff_when_app_keeps_window_open(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from chimera import computer_use
+
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    clock = {"now": 0.0}
+    monkeypatch.setattr(computer_use.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        computer_use.time, "sleep",
+        lambda delay: clock.__setitem__("now", clock["now"] + delay),
+    )
+    backend = object.__new__(WindowsComputerUse)
+    messages = []
+    backend.user32 = SimpleNamespace(
+        IsWindow=lambda _hwnd: True,
+        PostMessageW=lambda hwnd, message, wparam, lparam: (
+            messages.append((hwnd, message, wparam, lparam)) or True
+        ),
+    )
+    backend.window_process_id = lambda _hwnd: 4321
+
+    result = backend.close(99, approved=True, expected_pid=4321)
+
+    assert result["status"] == "uncertain"
+    assert result["verified"] is False
+    assert result["manual_handoff_required"] is True
+    assert "unsaved-work" in result["reason"]
+    assert len(messages) == 1
