@@ -298,6 +298,158 @@ class AgentRuntime:
             local_p = LocalModelProvider(LocalModelConfig(Path(profile.model_path), config.cli_path, config.context, config.max_tokens, config.timeout, config.threads, config.gpu_layers, config.server_path))
         return get_provider_registry().resolve_from_profile(profile, credentials=credentials, local_provider=local_p, accountant=accountant)
 
+    def _authorized_application_for_launch(self, owner_session_id: str, requested_application: str):
+        """Find an already-authorized live process matching one requested app target.
+
+        This prevents a model from reopening an application it has just launched
+        and authorized. Matching is tied to the exact executable or to the
+        resolved Start-menu target's expected image/title, never to a loose
+        substring of an arbitrary process list.
+        """
+        try:
+            resolver = WindowsComputerUse()
+            target = resolver._resolve_launch_target(requested_application)
+        except Exception:
+            return None
+        if not isinstance(target, dict):
+            return None
+
+        launch_kind = target.get("kind")
+        expected_path = None
+        expected_names = {
+            str(value).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+            for value in target.get("expected_process_names", [])
+            if isinstance(value, str) and value.strip()
+        }
+        display_name = str(target.get("display_name") or "").strip()
+        display_key = resolver._normalise_app_name(display_name)
+
+        if launch_kind == "executable":
+            try:
+                expected_path = Path(target["path"]).expanduser().resolve()
+            except (KeyError, OSError, TypeError, ValueError):
+                return None
+        elif launch_kind != "appsfolder":
+            return None
+
+        try:
+            live_applications = self.computer.backend.list_applications()
+        except Exception:
+            live_applications = []
+
+        for identity in self.computer.sessions.values():
+            if (
+                identity.owner_session_id != owner_session_id
+                or not self.computer._identity_is_current(identity)
+            ):
+                continue
+            actual_path = Path(identity.executable).expanduser()
+            if launch_kind == "executable":
+                try:
+                    if actual_path.resolve().casefold() != expected_path.casefold():
+                        continue
+                except (OSError, ValueError):
+                    continue
+            else:
+                image_name = actual_path.name.casefold()
+                process_name_match = bool(expected_names and image_name in expected_names)
+                app = next(
+                    (item for item in live_applications if item.get("pid") == identity.pid),
+                    None,
+                )
+                live_windows = [
+                    window for window in (app or {}).get("windows", [])
+                    if isinstance(window, dict)
+                    and (
+                        not identity.authorized_hwnds
+                        or window.get("hwnd") in identity.authorized_hwnds
+                    )
+                ]
+                title_match = bool(
+                    display_key
+                    and any(
+                        display_key in resolver._normalise_app_name(window.get("title", ""))
+                        for window in live_windows
+                    )
+                )
+                if not (process_name_match or title_match):
+                    continue
+
+            app = next(
+                (item for item in live_applications if item.get("pid") == identity.pid),
+                None,
+            )
+            windows = [
+                window for window in (app or {}).get("windows", [])
+                if isinstance(window, dict)
+                and (
+                    not identity.authorized_hwnds
+                    or window.get("hwnd") in identity.authorized_hwnds
+                )
+            ]
+            if windows or not identity.authorized_hwnds:
+                return identity, windows, target
+        return None
+
+    def _authorized_observation_summary(
+        self, app_session_id: str, *, depth: int = 4, limit: int = 160,
+    ) -> dict:
+        """Take and compact a fresh UIA observation for the next agent decision."""
+        try:
+            observation = self.computer.observe(
+                app_session_id, depth=depth, limit=limit,
+            )
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "reason": f"{type(exc).__name__}: {str(exc)[:240]}",
+                "hosted_fallback": False,
+            }
+
+        def rank(element):
+            control_type = str(element.get("control_type") or "").casefold()
+            patterns = {
+                str(item).casefold()
+                for item in element.get("patterns", [])
+            }
+            if control_type in {"edit", "document", "combobox"} or {"value", "text"} & patterns:
+                return 0
+            if control_type in {"button", "menuitem", "tabitem", "listitem"}:
+                return 1
+            return 2
+
+        observed = [
+            item for item in observation.elements
+            if isinstance(item, dict)
+        ]
+        observed.sort(key=rank)
+        elements = []
+        for item in observed[:48]:
+            elements.append({
+                key: item.get(key)
+                for key in (
+                    "reference_id", "session_id", "name", "automation_id",
+                    "class_name", "control_type", "rectangle", "enabled",
+                    "offscreen", "focused", "patterns", "available_actions",
+                    "observation_generation",
+                )
+                if key in item
+            })
+        return {
+            "status": "completed" if observation.backend == "uia" else "degraded",
+            "session_id": observation.session_id,
+            "observation_id": observation.observation_id,
+            "generation": observation.generation,
+            "backend": observation.backend,
+            "selected_window": observation.windows[0] if observation.windows else None,
+            "windows": observation.windows[:8],
+            "elements": elements,
+            "element_count": len(observed),
+            "elements_returned": len(elements),
+            "limitation": observation.limitation,
+            "fresh_for_seconds": self.computer.observation_ttl,
+        }
+
     def _protocol_catalog(self, session=None):
         aliases = {("workspace." + name if "." not in name else name): name for name in tool_catalog()["operations"]}
         session_workspace = None
