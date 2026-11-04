@@ -664,7 +664,8 @@ class MainWindow:
             self._toast(f"Application authorization failed: {exc}")
 
     def _show_runs(self, e=None):
-        self.active_page = "runs" self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
+        self.active_page = "runs"
+        self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
     def _show_settings(self, e=None):
         self.active_page = "model"
         config = self.local_provider.config
