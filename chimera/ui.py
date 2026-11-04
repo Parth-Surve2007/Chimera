@@ -1125,13 +1125,13 @@ class MainWindow:
     def _refresh_runtime_indicators(self):
         local_state = self._runtime_state().replace("RUNTIME: ", "")
         model_state, _, model_color = self._model_runtime_summary()
-        if self.runtime_status_text is not None:
+        if getattr(self, "runtime_status_text", None) is not None:
             self.runtime_status_text.value = f"LOCAL RUNTIME  /  {local_state}"
             try:
                 self.runtime_status_text.update()
             except Exception:
                 pass
-        if self.chat_model_state_text is not None:
+        if getattr(self, "chat_model_state_text", None) is not None:
             self.chat_model_state_text.value = model_state
             self.chat_model_state_text.color = model_color
             try:
@@ -1447,9 +1447,9 @@ class MainWindow:
         return "Sending the request to your local model…"
 
     def _refresh_chat_feed(self):
-        if self.current_view != "chat":
+        if getattr(self, "current_view", "chat") != "chat":
             return
-        if self.chat_feed is None:
+        if getattr(self, "chat_feed", None) is None:
             self._show_overview()
             return
         # Keep the same scrollable control mounted. Flet's auto-scroll pins only
@@ -1570,7 +1570,7 @@ class MainWindow:
             padding=ft.Padding.all(14), margin=ft.Margin.symmetric(horizontal=22, vertical=13),
         )
 
-        if self.chat_feed is None:
+        if getattr(self, "chat_feed", None) is None:
             self.chat_feed = ft.Column(
                 self._conversation_content(), expand=True,
                 scroll=ft.ScrollMode.AUTO, auto_scroll=True, spacing=17,
