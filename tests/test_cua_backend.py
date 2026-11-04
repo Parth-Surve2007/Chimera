@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import pytest
 import io
 from enum import Enum
 from types import SimpleNamespace
@@ -427,3 +428,105 @@ def test_cua_snapshot_image_is_available_only_for_the_exact_fresh_screenshot():
         assert "different conversation" in foreign_error
     finally:
         backend.close()
+
+
+def test_agent_runtime_validates_cua_click_forms_before_permission_prompt():
+    from chimera.agent_runtime import AgentRuntime
+
+    valid_token = {
+        "session_id": "authorized-session",
+        "window_id": 77,
+        "snapshot_ref": "fresh-snapshot",
+        "element_token": "s00000001:1",
+    }
+    assert AgentRuntime._validate_arguments(
+        "computer.cua_click", valid_token,
+    ) is None
+
+    valid_pixels = {
+        "session_id": "authorized-session",
+        "window_id": 77,
+        "snapshot_ref": "fresh-snapshot",
+        "x": 32.5,
+        "y": 48,
+    }
+    assert AgentRuntime._validate_arguments(
+        "computer.cua_click", valid_pixels,
+    ) is None
+
+    invalid = [
+        {key: value for key, value in valid_token.items() if key != "element_token"},
+        {**valid_token, "x": 1, "y": 2},
+        {**valid_pixels, "y": True},
+        {**valid_token, "window_id": True},
+    ]
+    for arguments in invalid:
+        with pytest.raises(ValueError):
+            AgentRuntime._validate_arguments("computer.cua_click", arguments)
+
+
+def test_cua_mutations_remain_build_mode_only_and_registered_as_approved_actions():
+    from chimera.task_execution import TaskPolicy
+    from chimera.tools import tool_catalog
+
+    operations = tool_catalog()["operations"]
+    assert operations["computer.cua_click"]["permission"] == "computer.input"
+    assert operations["computer.cua_draw_path"]["permission"] == "computer.input"
+    assert operations["computer.cua_capture_window"]["permission"] == "computer.screenshot"
+    assert operations["computer.cua_click_foreground"]["permission"] == "computer.input.foreground"
+
+    with pytest.raises(PermissionError, match="read-only"):
+        TaskPolicy.validate(
+            "plan", "computer.cua_click_foreground", "computer.input.foreground",
+        )
+    assert TaskPolicy.validate(
+        "build", "computer.cua_click_foreground", "computer.input.foreground",
+    )
+
+
+def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path):
+    from types import SimpleNamespace
+    from chimera.agent_runtime import AgentRuntime, AgentSessionStore
+
+    class FakeComputer:
+        def __init__(self):
+            self.uia = object()
+            self.visual_perception = object()
+            self.cua = object()
+            self.sessions = {
+                "cua-session": SimpleNamespace(
+                    session_id="cua-session",
+                    pid=4321,
+                    executable="C:/Windows/mspaint.exe",
+                    process_create_time=12.0,
+                    owner_session_id="conversation-a",
+                )
+            }
+            self.foreground_ready = False
+
+        def _identity_is_current(self, _identity):
+            return True
+
+        def interaction_inventory(self):
+            return []
+
+        def cua_foreground_retry_available(self, _app_session_id, _owner_session_id):
+            return self.foreground_ready
+
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "agent.sqlite"),
+        provider=object(),
+    )
+    fake_computer = FakeComputer()
+    runtime.computer = fake_computer
+    session = {"session_id": "conversation-a", "workspace": None, "mode": "build"}
+
+    before = runtime._protocol_catalog(session)
+    before_ids = {item["id"] for item in before["tools"]}
+    assert "computer.cua_click" in before_ids
+    assert "computer.cua_click_foreground" not in before_ids
+
+    fake_computer.foreground_ready = True
+    after = runtime._protocol_catalog(session)
+    after_ids = {item["id"] for item in after["tools"]}
+    assert "computer.cua_click_foreground" in after_ids
