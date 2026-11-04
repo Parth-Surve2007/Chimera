@@ -40,7 +40,7 @@ The ambition is simple and unapologetic:
 
 Now imagine giving one prompt and moving between **Autodesk Fusion 360, 3ds Max, Maya, Blender, AutoCAD, Cadence, Proteus, Vivado, Word, Excel, PowerPoint, DaVinci Resolve, Photoshop, Illustrator, Premiere Pro, After Effects, VS Code, MATLAB, KiCad** and the rest of your digital toolbox. Build, calculate, design, edit, document, inspect, export.
 
-And that's still just the warm-up. I'm running out of breath listing the apps. The real flex? Imagine describing the outcome once and having one agent coordinate the work across that entire toolbox, from the first design or document to the final render, report or export. **One prompt. One conversation. One coordinated workflow.** That's the scale of the Chimera ambition: not another app-specific copilot, but one agent designed to work across the apps where real work happens.
+And that's still just the warm-up. I'm running out of breath listing the apps. The bigger idea? Imagine describing the outcome once and having one agent coordinate the work across that entire toolbox, from the first design or document to the final render, report or export. **One prompt. One conversation. One coordinated workflow.** That's the scale of the Chimera ambition: not another app-specific copilot, but one agent designed to work across the apps where real work happens.
 
 It is not tied to one model, one vendor, one application or one workflow. Run it with local GGUF models, connect an explicitly selected external provider when you choose, and grow its capabilities through an extensible connector system.
 
