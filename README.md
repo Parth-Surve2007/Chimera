@@ -132,6 +132,8 @@ Chimera's provider registry supports 8 adapter types through a unified interface
 - Recommended persistent mode: configure `CHIMERA_MODEL_PATH` (GGUF) and `CHIMERA_LLAMA_SERVER` (llama.cpp server). Chimera starts the selected server at app launch, binds it to loopback, and keeps the model resident for the session.
 - Explicit one-shot mode: configure `CHIMERA_MODEL_PATH` and `CHIMERA_LLAMA_CLI` without selecting a server. The CLI loads the GGUF for each request and is visibly labelled as one-shot mode.
 - Runtime selection is strict: a selected server failure fails the request. Chimera does not switch to CLI, another local model, or a hosted provider.
+- Agent decisions use a two-branch JSON Schema contract (`message` or `tool_call`) through llama-server's `/completion` `json_schema` field; the CLI path uses the matching `--json-schema` constraint.
+- Local-server HTTP errors preserve the bounded server response body, HTTP status, endpoint and safe request configuration for actionable diagnostics. Conversation prompts are not included in those diagnostics.
 - Tuning: `CHIMERA_MODEL_CONTEXT`, `CHIMERA_MODEL_MAX_TOKENS`, `CHIMERA_MODEL_TIMEOUT`, `CHIMERA_MODEL_THREADS`, `CHIMERA_MODEL_GPU_LAYERS`
 - For a compact 3B model, Q4_K_M is a balanced quality/memory starting point; Q5_K_M may improve fidelity but consumes more memory. Quantization is part of the GGUF file, not a runtime conversion.
 - Model weights are never downloaded automatically. Use the Model Bay to select a model and runtime explicitly.
