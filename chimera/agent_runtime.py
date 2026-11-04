@@ -564,7 +564,36 @@ class AgentRuntime:
             return None
         kwargs = {"session": session, "cancel_event": cancel_event}
         accepted = inspect.signature(provider.decide).parameters
-        return self._decision(provider.decide(messages, self._protocol_catalog(session), **{key: value for key, value in kwargs.items() if key in accepted}))
+        call_kwargs = {key: value for key, value in kwargs.items() if key in accepted}
+        catalog = self._protocol_catalog(session)
+        try:
+            raw = provider.decide(messages, catalog, **call_kwargs)
+            return self._decision(raw)
+        except ValueError as exc:
+            # Small local models occasionally return a fabricated tool-result
+            # envelope ({tool, arguments, status, result}) instead of a
+            # decision. Never execute or trust that payload. Give the model
+            # exactly one schema repair attempt with the registered catalog.
+            if "unsupported decision envelope" not in str(exc):
+                raise
+            repair = AgentMessage(
+                message_id="decision-repair-" + (turn_id or uuid.uuid4().hex),
+                session_id=session["session_id"],
+                role="system",
+                content=(
+                    "FORMAT REPAIR REQUIRED. Your previous output was not an agent "
+                    "decision and no action was executed. A tool result is not a tool "
+                    "call. Return exactly one JSON object with either "
+                    "{\\"type\\":\\"message\\",\\"content\\":\\"...\\"} or "
+                    "{\\"type\\":\\"tool_call\\",\\"tool\\":\\"<exact registered tool id>\\","
+                    "\\"arguments\\":{...},\\"invocation_id\\":\\"optional-id\\"}. "
+                    "Do not include result, status, or error fields. Choose only a tool "
+                    "in the supplied catalog. Do not claim any action has already happened."
+                ),
+                created_at=_now(),
+            )
+            repaired = provider.decide([*messages, repair], catalog, **call_kwargs)
+            return self._decision(repaired)
 
     @staticmethod
     def _is_explicit_new_task(content: str) -> bool:
