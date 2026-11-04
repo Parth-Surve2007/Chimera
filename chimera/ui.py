@@ -319,8 +319,11 @@ class MainWindow:
 
     def _connector_status_cards(self):
         from .applications.registry import get_application_registry
+        manifests = getattr(self, "_application_manifests", None)
+        if manifests is None:
+            manifests = get_application_registry().discover_all()
         cards = []
-        for manifest in get_application_registry().discover_all():
+        for manifest in manifests:
             actions_summary = ", ".join(
                 f"{action.display_name} · L{action.risk_level.value}"
                 for action in manifest.actions if not getattr(action, "unavailable", False)
@@ -555,6 +558,12 @@ class MainWindow:
             self._desktop_inventory_error = None
         except Exception as exc:
             self._desktop_applications, self._desktop_inventory_error = [], str(exc)
+        try:
+            from .applications.registry import get_application_registry
+            self._application_manifests = get_application_registry().discover_all()
+        except Exception as exc:
+            self._application_manifests = []
+            self._connector_inventory_error = str(exc)
         self._render_computer_apps()
 
     def _render_computer_apps(self):
