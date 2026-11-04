@@ -366,6 +366,24 @@ def _is_repeated_assistant_response(response: str, messages) -> bool:
     return False
 
 
+def _is_confirmation_followup(messages) -> bool:
+    """Identify a short affirmative that continues the unresolved prior goal."""
+    history = list(messages)
+    latest_user_index = max(
+        (index for index, item in enumerate(history)
+         if str(getattr(item, "role", "user")).casefold() == "user"),
+        default=-1,
+    )
+    if latest_user_index < 0:
+        return False
+    latest = _normalized_agent_text(getattr(history[latest_user_index], "content", ""))
+    return latest in {
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead",
+        "do it", "please do", "proceed", "continue", "sounds good",
+        "thats right", "correct", "of course",
+    }
+
+
 def _is_stale_user_request_echo(response: str, messages) -> bool:
     """Detect the earlier task being echoed after a short confirmation like 'yes'."""
     history = list(messages)
@@ -374,15 +392,7 @@ def _is_stale_user_request_echo(response: str, messages) -> bool:
          if str(getattr(item, "role", "user")).casefold() == "user"),
         default=-1,
     )
-    if latest_user_index <= 0:
-        return False
-    latest = _normalized_agent_text(getattr(history[latest_user_index], "content", ""))
-    confirmations = {
-        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead",
-        "do it", "please do", "proceed", "continue", "sounds good",
-        "thats right", "correct", "of course",
-    }
-    if latest not in confirmations:
+    if latest_user_index <= 0 or not _is_confirmation_followup(history):
         return False
     answer = _normalized_agent_text(response)
     if len(answer) < 18:
@@ -431,10 +441,7 @@ def _repetition_recovery_message(messages) -> str:
             f"I couldn't complete the latest step because {tool} returned {status}: {detail}. "
             "I did not complete the requested outcome, and I won't claim that I did."
         )
-    if _is_stale_user_request_echo(
-        str(getattr(history[latest_user_index], "content", "")),
-        history,
-    ):
+    if _is_confirmation_followup(history):
         return (
             "Your latest message was a confirmation to continue the earlier task. "
             "I repeated the original request instead of acting on it. No new action was taken, "
