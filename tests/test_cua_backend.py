@@ -686,13 +686,21 @@ def test_cua_mutations_remain_build_mode_only_and_registered_as_approved_actions
     assert operations["computer.cua_draw_path"]["permission"] == "computer.input"
     assert operations["computer.cua_capture_window"]["permission"] == "computer.screenshot"
     assert operations["computer.cua_click_foreground"]["permission"] == "computer.input.foreground"
+    assert operations["computer.cua_draw_path_foreground"]["permission"] == "computer.input.foreground"
 
     with pytest.raises(PermissionError, match="read-only"):
         TaskPolicy.validate(
             "plan", "computer.cua_click_foreground", "computer.input.foreground",
         )
+    with pytest.raises(PermissionError, match="read-only"):
+        TaskPolicy.validate(
+            "plan", "computer.cua_draw_path_foreground", "computer.input.foreground",
+        )
     assert TaskPolicy.validate(
         "build", "computer.cua_click_foreground", "computer.input.foreground",
+    )
+    assert TaskPolicy.validate(
+        "build", "computer.cua_draw_path_foreground", "computer.input.foreground",
     )
 
 
