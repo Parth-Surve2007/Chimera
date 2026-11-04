@@ -130,5 +130,5 @@ def test_ui_removes_verify_controls_and_optional_langflow_setup():
     assert "VERIFY MODEL" not in ui
     assert "VERIFY AGENT PROTOCOL" not in ui
     assert "INSTALL LANGFLOW" not in ui and "LangflowService" not in ui
-    assert "font_family=self.logo_font_family" in ui
+    assert 'font_family=getattr(self, "logo_font_family", "Segoe UI")' in ui
     assert 'tooltip="Return to the Chimera chat"' in ui
