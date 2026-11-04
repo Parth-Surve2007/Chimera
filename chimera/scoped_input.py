@@ -45,7 +45,7 @@ class InputNative(Protocol):
     def send_mouse_move(self, x: int, y: int) -> None: ...
     def send_mouse_button(self, button: str, down: bool) -> None: ...
     def send_mouse_wheel(self, delta: int) -> None: ...
-    def send_unicode(self, text: str) -> None: ...
+    def send_unicode_unit(self, unit: int, down: bool) -> None: ...
     def send_virtual_key(self, key: int, down: bool) -> None: ...
     def capture(self, rect: tuple[int, int, int, int]) -> Any | None: ...
 
@@ -114,7 +114,9 @@ class Win32InputNative:
 
     def _send(self, item):
         array = (self.INPUT * 1)(item)
-        sent = self.user32.SendInput(1, ctypes.byref(array), ctypes.sizeof(self.INPUT))
+        sent = self.user32.SendInput(
+            1, ctypes.cast(array, ctypes.POINTER(self.INPUT)), ctypes.sizeof(self.INPUT)
+        )
         if sent != 1:
             raise OSError(ctypes.get_last_error(), "Windows rejected a scoped input event")
 
@@ -180,18 +182,9 @@ class Win32InputNative:
     def send_mouse_wheel(self, delta: int) -> None:
         self._mouse(0x0800, data=delta * 120)
 
-    def send_unicode(self, text: str) -> None:
-        for character in text:
-            code = ord(character)
-            if code <= 0xFFFF:
-                self._key(scan=code, flags=0x0004)
-                self._key(scan=code, flags=0x0004 | 0x0002)
-            else:
-                # UTF-16 surrogate pairs are sent as Unicode packets.
-                code -= 0x10000
-                for unit in (0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)):
-                    self._key(scan=unit, flags=0x0004)
-                    self._key(scan=unit, flags=0x0004 | 0x0002)
+    def send_unicode_unit(self, unit: int, down: bool) -> None:
+        flags = 0x0004 | (0 if down else 0x0002)  # KEYEVENTF_UNICODE / KEYUP
+        self._key(scan=unit, flags=flags)
 
     def send_virtual_key(self, key: int, down: bool) -> None:
         self._key(vk=key, flags=0 if down else 0x0002)
@@ -440,22 +433,36 @@ class ScopedWindowsInputBackend:
                     native.send_mouse_wheel(scroll_steps if scroll_direction == "down" else -scroll_steps)
                     events += 1
                 elif action == "type_text":
-                    # The observed target element is clicked only after process
-                    # validation and approval; text goes to that foreground app.
-                    center = ((left + right) // 2, (top + bottom) // 2)
-                    move(center)
-                    down()
-                    up()
+                    # The element has already been focused through UIA. Do not
+                    # click its centre: custom edit controls may use that point
+                    # for a destructive action. Type only into the focused element.
                     guard()
-                    native.send_unicode(text)
-                    events += len(text) * 2
                 elif action == "press_key":
-                    guard()
                     for vk in chord:
+                        guard()
                         native.send_virtual_key(vk, True)
                         events += 1
                     for vk in reversed(chord):
+                        guard()
                         native.send_virtual_key(vk, False)
+                        events += 1
+                elif action == "type_text":
+                    # Emit UTF-16 code units one packet at a time. Check the
+                    # exact foreground HWND/PID before both key-down and key-up.
+                    units = []
+                    for character in text:
+                        code = ord(character)
+                        if code <= 0xFFFF:
+                            units.append(code)
+                        else:
+                            code -= 0x10000
+                            units.extend((0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)))
+                    for unit in units:
+                        guard()
+                        native.send_unicode_unit(unit, True)
+                        events += 1
+                        guard()
+                        native.send_unicode_unit(unit, False)
                         events += 1
             except Exception as exc:
                 try:
