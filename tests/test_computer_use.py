@@ -79,3 +79,52 @@ def test_uia_observation_exposes_runtime_generated_references_for_real_window():
         assert element["session_id"] == identity.session_id
         assert element["observation_generation"] == observation.generation
         assert isinstance(element["available_actions"], list)
+
+
+
+def test_application_launch_resolves_word_name_before_approval(tmp_path, monkeypatch):
+    computer = WindowsComputerUse(tmp_path)
+    executable = tmp_path / "WINWORD.EXE"
+    executable.write_bytes(b"MZ")
+    resolved = []
+
+    def resolve(name):
+        resolved.append(name)
+        return executable if name.casefold() == "word" else None
+
+    monkeypatch.setattr(computer, "_resolve_executable", resolve)
+    result = computer.launch("Word")
+
+    assert resolved == ["Word"]
+    assert result["status"] == "awaiting_approval"
+    assert result["application"] == str(executable)
+    assert result["requested_application"] == "Word"
+
+
+def test_application_launch_blocks_unknown_application_name(tmp_path, monkeypatch):
+    computer = WindowsComputerUse(tmp_path)
+    monkeypatch.setattr(computer, "_resolve_executable", lambda _name: None)
+
+    result = computer.launch("DefinitelyNotInstalled")
+
+    assert result["status"] == "blocked"
+    assert "could not resolve" in result["reason"]
+
+
+
+def test_word_alias_resolves_to_registered_app_path_before_launch(tmp_path, monkeypatch):
+    from chimera import computer_use
+
+    executable = tmp_path / "WINWORD.EXE"
+    executable.write_bytes(b"MZ")
+    resolved_names = []
+
+    def fake_which(name):
+        resolved_names.append(name)
+        return str(executable) if name == "WINWORD.EXE" else None
+
+    monkeypatch.setattr(computer_use.shutil, "which", fake_which)
+    result = WindowsComputerUse._resolve_executable("Word")
+
+    assert resolved_names[0] == "WINWORD.EXE"
+    assert result == executable.resolve()

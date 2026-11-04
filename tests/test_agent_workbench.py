@@ -5,11 +5,12 @@ from chimera.local_model import LocalModelConfig
 from chimera.ui import ACCENT, BG, FOCUS, MainWindow
 
 
-def test_dark_emperor_palette_uses_full_black_and_warm_accents():
+def test_black_navy_palette_uses_neutral_focus_and_blue_accent():
     assert BG == "#000000"
-    assert FOCUS == "#E5B35A"
-    assert ACCENT == "#F17857"
-    assert not any(token in (BG + FOCUS + ACCENT).lower() for token in ("#00f", "#0000ff", "#7c3aed", "#6366f1"))
+    assert FOCUS == "#C6D1E2"
+    assert ACCENT == "#6F9FFF"
+    assert "E5B35A" not in (BG + FOCUS + ACCENT).upper()
+    assert "F17857" not in (BG + FOCUS + ACCENT).upper()
 
 
 def test_chat_bubbles_build_with_oxide_chat_treatment():

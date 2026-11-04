@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+from types import SimpleNamespace
 import pytest
 from chimera.local_model import LocalModelConfig, LocalModelProvider, check_status, config_from_env
 
@@ -303,3 +305,68 @@ def test_structured_server_failure_does_not_retry_with_cli(tmp_path, monkeypatch
     with pytest.raises(RuntimeError, match="no CLI or hosted fallback was attempted"):
         provider.decide([], {"version": 1, "tools": []})
     assert calls == []
+
+
+
+def test_agent_echo_guard_retries_and_prioritizes_desktop_tools(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    prompts = []
+    request = "open Word create new document with a cake recipe and save it on Desktop"
+    outputs = iter([
+        json.dumps({"type": "message", "content": request}),
+        json.dumps({
+            "type": "tool_call",
+            "tool": "computer.launch",
+            "arguments": {"executable": "Word"},
+        }),
+    ])
+
+    def runner(prompt, _config):
+        prompts.append(prompt)
+        return next(outputs)
+
+    provider = LocalModelProvider(LocalModelConfig(model, str(cli)), runner)
+    decision = provider.decide(
+        [SimpleNamespace(role="user", content=request)],
+        {"version": 1, "tools": [
+            {"id": "workspace.list_files", "description": "List files", "arguments": {}},
+            {"id": "computer.launch", "description": "Launch an app", "arguments": {"executable": "string"}},
+            {"id": "computer.list_applications", "description": "Find visible apps", "arguments": {}},
+            {"id": "workspace.create_file", "description": "Create file", "arguments": {"path": "string", "content": "string"}},
+            {"id": "workspace.read_text", "description": "Read a text file", "arguments": {"path": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "tool_call"
+    assert decision["tool"] == "computer.launch"
+    assert decision["arguments"] == {"executable": "Word"}
+    assert len(prompts) == 2
+    app_list_position = prompts[0].index('"id":"computer.list_applications"')
+    app_launch_position = prompts[0].index('"id":"computer.launch"')
+    workspace_list_position = prompts[0].index('"id":"workspace.list_files"')
+    assert app_list_position < app_launch_position < workspace_list_position
+    assert "Never echo" in prompts[0]
+    assert "RECOVERY" in prompts[1]
+
+
+def test_agent_echo_guard_fails_closed_after_second_echo(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    request = "open Word create new document with a cake recipe and save it on Desktop"
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: json.dumps({"type": "message", "content": request}),
+    )
+
+    with pytest.raises(ValueError, match="repeated the task"):
+        provider.decide(
+            [SimpleNamespace(role="user", content=request)],
+            {"version": 1, "tools": []},
+            session={"mode": "build", "workspace": str(tmp_path)},
+        )

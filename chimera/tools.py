@@ -37,7 +37,7 @@ OPERATIONS = {
     "computer.inspect_elements": {"description": "Inspect UI Automation elements in an operator-authorized application", "arguments": {"session_id": "string"}, "permission": "computer.observe"},
     "computer.inspect_window": {"description": "Inspect windows belonging to an operator-authorized application", "arguments": {"session_id": "string"}, "permission": "computer.observe"},
     "computer.inspect_pattern_support": {"description": "Inspect supported semantic patterns for an observed element", "arguments": {"session_id": "string", "reference_id": "string"}, "permission": "computer.observe"},
-    "computer.launch": {"description": "Launch an allowlisted Windows application after approval", "arguments": {"executable": "string"}, "permission": "computer.launch"},
+    "computer.launch": {"description": "Launch an installed Windows application after approval. executable accepts an exact .exe path or a known app name such as Word, Excel, PowerPoint, Notepad, Blender, Chrome, or Edge.", "arguments": {"executable": "string"}, "permission": "computer.launch"},
     "computer.screenshot": {"description": "Capture a fresh window observation from an operator-authorized application", "arguments": {"session_id": "string", "hwnd": "integer", "path": "string"}, "permission": "computer.screenshot"},
     "computer.invoke_element": {"description": "Invoke a freshly observed UIA element reference", "arguments": {"session_id": "string", "reference_id": "string"}, "permission": "computer.invoke"},
     "computer.set_value": {"description": "Set a freshly observed UIA value element", "arguments": {"session_id": "string", "reference_id": "string", "value": "string"}, "permission": "computer.input"},

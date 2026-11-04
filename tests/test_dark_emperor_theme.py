@@ -3,9 +3,9 @@ from chimera import ui
 
 def test_dark_emperor_theme_uses_full_black_surfaces():
     assert ui.BG == "#000000"
-    assert ui.SURFACE == "#0B0B0B"
-    assert ui.ELEVATED == "#141414"
-    assert ui.BORDER == "#2B2B2B"
-    assert ui.TEXT == "#F3F3F3"
-    assert ui.FOCUS == "#E5B35A"
-    assert ui.ACCENT == "#F17857"
+    assert ui.SURFACE == "#090C12"
+    assert ui.ELEVATED == "#111722"
+    assert ui.BORDER == "#252D3B"
+    assert ui.TEXT == "#F2F5FA"
+    assert ui.FOCUS == "#C6D1E2"
+    assert ui.ACCENT == "#6F9FFF"

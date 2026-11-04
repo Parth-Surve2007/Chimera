@@ -43,7 +43,7 @@ The desktop UI keeps the main navigation on the left while you move between Chat
 - **Workflow Studio** and **Run History** show persisted workflow activity.
 - **Goals** stores operator-owned outcomes and evidence.
 
-The interface uses a restrained graphite, warm-gold, and ember palette. The goal is to keep useful controls visible and decorative noise on a short leash.
+The interface uses mostly-black and charcoal surfaces with restrained midnight-blue gradients. The goal is to keep useful controls visible and decorative noise on a short leash.
 
 ---
 
