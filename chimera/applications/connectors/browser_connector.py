@@ -310,7 +310,7 @@ class BrowserConnector(BaseApplicationConnector):
                 "radio", "option", "tab", "menuitem", "heading", "switch",
                 "slider", "spinbutton", "listbox", "treeitem",
             }
-            if role not in allowed_roles:
+            if role is not None and role not in allowed_roles:
                 raise ValueError("role selector is not in the supported accessible-role allowlist")
 
     @staticmethod
@@ -470,10 +470,12 @@ class BrowserConnector(BaseApplicationConnector):
                 pass
             raise TimeoutError(f"{browser_name} did not expose its loopback CDP endpoint within 15 seconds")
         try:
+            # Verify the CDP listener belongs to the exact process we launched
+            # before attaching. This closes the ephemeral-port race window.
+            process_info = self._find_browser_process(executable, port, profile)
             playwright, browser, context = self._attach(endpoint)
             if not context.pages:
                 context.new_page()
-            process_info = self._find_browser_process(executable, port, profile)
             browser_pid = int(process_info.pid)
             created = float(process_info.create_time())
             metadata = {
