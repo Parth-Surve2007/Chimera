@@ -31,4 +31,10 @@ New-Item -ItemType Directory -Force -Path (Split-Path $Final) | Out-Null
 if (Test-Path $Final) { Remove-Item $Final -Recurse -Force }
 Move-Item (Join-Path $Stage "Chimera") $Final
 $AbsoluteExe = (Resolve-Path (Join-Path $Final "Chimera.exe")).Path
+$PortableZip = Join-Path $Root "dist\Chimera-Windows-portable.zip"
+if (Test-Path $PortableZip) { Remove-Item $PortableZip -Force }
+Compress-Archive -Path (Join-Path $Final "*") -DestinationPath $PortableZip -CompressionLevel Optimal
+if (-not (Test-Path $PortableZip)) { throw "Portable ZIP was not created: $PortableZip" }
+if ((Get-Item $PortableZip).Length -le 0) { throw "Portable ZIP is empty: $PortableZip" }
 Write-Host "BUILD SUCCESS: $AbsoluteExe"
+Write-Host "PORTABLE ZIP: $PortableZip"
