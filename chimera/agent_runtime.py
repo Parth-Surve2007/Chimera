@@ -465,6 +465,7 @@ class AgentRuntime:
             "computer.select_element": {"session_id": str, "reference_id": str},
             "computer.expand_element": {"session_id": str, "reference_id": str},
             "computer.collapse_element": {"session_id": str, "reference_id": str},
+            "computer.close_window": {"session_id": str, "hwnd": int},
             "computer.visual_action": {
                 "session_id": str, "reference_id": str, "action": str,
                 "points": list, "button": str, "duration_ms": int,
@@ -1311,6 +1312,7 @@ class AgentRuntime:
                     "computer.scroll_element", "computer.scroll_into_view",
                     "computer.toggle_element", "computer.select_element",
                     "computer.expand_element", "computer.collapse_element",
+                    "computer.close_window",
                 }:
                     require_authorized_app(args["session_id"])
                     action = operation.removeprefix("computer.")
@@ -1583,6 +1585,7 @@ class AgentRuntime:
             "computer.toggle_element", "computer.select_element",
             "computer.expand_element", "computer.collapse_element",
             "computer.screenshot", "computer.launch", "computer.visual_action",
+            "computer.close_window",
         }:
             operation = pending["tool"]
             args = pending["arguments"]
@@ -1646,6 +1649,13 @@ class AgentRuntime:
                     raise PermissionError("application is not authorized for this Chimera conversation")
                 self.computer.validate_window(args["session_id"], args["hwnd"])
                 result_data = WindowsComputerUse(workspace).screenshot(args["hwnd"], Path(args["path"]), approved=True)
+            elif operation == "computer.close_window":
+                identity = self.computer.sessions.get(args["session_id"])
+                if not identity or identity.owner_session_id != session_id:
+                    raise PermissionError("application is not authorized for this Chimera conversation")
+                result_data = self.computer.close_window(
+                    args["session_id"], args["hwnd"], approved=True
+                )
             else:
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:
