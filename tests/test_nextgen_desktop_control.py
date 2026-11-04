@@ -123,7 +123,8 @@ def test_local_model_prompt_explains_safe_launch_continuation_and_canvas_strokes
     assert "Otherwise stop and report the authorization blocker" in prompt
     assert "multi_stroke" in prompt
     assert "<=256 total" in prompt
-    assert "verified=true" in prompt
+    assert "one pen-up path per disconnected shape/component" in prompt
+    assert "never repeat the same stroke blindly" in prompt
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path alias behavior is platform-specific")
