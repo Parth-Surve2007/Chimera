@@ -712,3 +712,44 @@ def test_conversation_uses_role_separated_messages_for_local_server(tmp_path):
     assert [item["role"] for item in captured["messages"]] == [
         "system", "assistant", "user",
     ]
+
+
+def test_short_confirmation_continues_prior_goal_instead_of_echoing_earlier_request(tmp_path):
+    earlier_request = "open paint and draw monalisa in it"
+    stale_answer = earlier_request
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    outputs = iter([
+        json.dumps({"type": "message", "content": stale_answer}),
+        json.dumps({"type": "message", "content": stale_answer}),
+    ])
+    prompts = []
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda prompt, _config: prompts.append(prompt) or next(outputs),
+    )
+
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="user", content=earlier_request),
+            SimpleNamespace(role="assistant", content="Can you create a new document in the workspace?"),
+            SimpleNamespace(role="user", content="yes"),
+        ],
+        {"version": 1, "tools": [
+            {"id": "computer.list_installed_applications", "arguments": {}},
+            {"id": "computer.launch", "arguments": {"executable": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert decision["content"] != stale_answer
+    assert "confirmation to continue the earlier task" in decision["content"]
+    assert "task remains incomplete" in decision["content"]
+    assert decision["_metrics"]["decision_recovery_attempted"] is True
+    assert decision["_metrics"]["repeated_assistant_response_blocked"] is True
+    assert len(prompts) == 2
+    assert "short confirmation such as yes" in prompts[0]
+    assert "continue the unresolved goal" in prompts[1]
