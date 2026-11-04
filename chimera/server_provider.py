@@ -243,6 +243,9 @@ class LlamaServerManager:
                 "temperature": 0.2,
                 "structured_output": structured_mode,
                 "prompt_chars": len(prompt),
+                "context": int(self.context),
+                "threads": int(self.threads),
+                "gpu_layers": int(self.gpu_layers),
                 "schema_bytes": (
                     len(json.dumps(json_schema, separators=(",", ":")).encode("utf-8"))
                     if json_schema is not None else 0
