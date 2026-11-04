@@ -49,6 +49,51 @@ def _get(value: Any, name: str, default=None):
     return getattr(value, name, default)
 
 
+def _tool_result_text(value: Any) -> str:
+    """Extract readable text from the CUA SDK MCP ToolResult contract."""
+    direct = _get(value, "text")
+    if isinstance(direct, str) and direct:
+        return direct
+    content = _get(value, "content", []) or []
+    pieces = []
+    for item in content:
+        text_value = _get(item, "text")
+        if isinstance(text_value, str) and text_value:
+            pieces.append(text_value)
+        elif isinstance(item, str) and item:
+            pieces.append(item)
+    return "\\n".join(pieces)
+
+
+def _tool_result_structured(value: Any) -> dict:
+    """Normalize generated Python SDK ToolResult structured fields."""
+    structured = _get(value, "structured_content")
+    result = dict(structured) if isinstance(structured, dict) else {}
+    structured_json = _get(value, "structured_json")
+    if isinstance(structured_json, str) and structured_json.strip():
+        try:
+            decoded = json.loads(structured_json)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            result = {**decoded, **result}
+    error_code = _get(value, "error_code")
+    if isinstance(error_code, str) and error_code.strip():
+        result.setdefault("code", error_code)
+    action = _get(value, "action")
+    if action is not None:
+        effect = _enum_name(_get(action, "effect"))
+        if effect:
+            result.setdefault("effect", effect)
+        escalation = _get(action, "escalation")
+        if escalation is not None:
+            result.setdefault("escalation", {
+                "target": _enum_name(_get(escalation, "target")),
+                "reason": _enum_name(_get(escalation, "reason")),
+            })
+    return result
+
+
 def _enum_name(value: Any) -> str | None:
     name = getattr(value, "name", None)
     if isinstance(name, str):
@@ -583,17 +628,34 @@ class CuaDriverBackend:
 
     @staticmethod
     def _action_summary(result: Any) -> dict:
-        effect = _enum_name(_get(result, "effect")) or "unknown"
+        structured = _tool_result_structured(result)
+        action = _get(result, "action")
+        effect = (
+            _enum_name(_get(result, "effect"))
+            or _enum_name(structured.get("effect"))
+            or _enum_name(_get(action, "effect"))
+            or "unknown"
+        )
         route = _enum_name(_get(result, "route")) or "unknown"
-        escalation = _get(result, "escalation")
+        escalation = _get(result, "escalation") or structured.get("escalation")
+        driver_text = _tool_result_text(result) or str(_get(result, "summary") or "")
+        structured_error = (
+            structured.get("detail")
+            or structured.get("message")
+            or structured.get("error")
+        )
         return {
             "driver_effect": effect,
             "driver_route": route,
-            "driver_summary": str(_get(result, "summary") or "")[:1000],
-            "driver_error": str(_get(result, "error") or "")[:1000] if _get(result, "error") else None,
+            "driver_summary": driver_text[:1000],
+            "driver_error": str(_get(result, "error") or structured_error or "")[:1000]
+                if (_get(result, "error") or structured_error) else None,
             "driver_hint": str(_get(result, "hint") or "")[:800] if _get(result, "hint") else None,
+            "driver_error_code": _find_code(structured),
             "escalation": {
-                "target": _enum_name(_get(escalation, "recommended") or _get(escalation, "target")),
+                "target": _enum_name(
+                    _get(escalation, "recommended") or _get(escalation, "target")
+                ),
                 "reason": _enum_name(_get(escalation, "reason")),
             } if escalation is not None else None,
         }
@@ -969,35 +1031,46 @@ class CuaDriverBackend:
                     )
                     drag_returned = True
                     summary = self._action_summary(drag_result)
-                    drag_error = bool(_get(drag_result, "is_error", False))
-                    drag_text = str(
-                        _get(drag_result, "text")
+                    drag_structured = _tool_result_structured(drag_result)
+                    drag_error = _get(drag_result, "is_error") is True
+                    drag_code = _find_code(drag_structured) or _find_code(drag_result)
+                    drag_text = (
+                        _tool_result_text(drag_result)
                         or summary.get("driver_summary")
                         or summary.get("driver_error")
                         or ""
                     )
-                    driver_effect = summary.get("driver_effect", "unknown")
+                    driver_effect = (
+                        summary.get("driver_effect")
+                        or _enum_name(drag_structured.get("effect"))
+                        or "unknown"
+                    )
                     prior_segments = len(segment_results)
+                    refused = (
+                        drag_error
+                        or drag_code == "background_unavailable"
+                        or driver_effect in {"refused", "suspected_noop", "partial"}
+                    )
                     segment_results.append({
                         "stroke_index": stroke_index,
                         "segment_index": point_index,
                         "is_error": drag_error,
+                        "accepted": not refused,
+                        "error_code": drag_code,
                         "effect": driver_effect,
                         "delivery": "foreground" if foreground else "background",
-                        "text": drag_text[:500],
+                        "text": str(drag_text)[:500],
                     })
-                    recommends_foreground = _find_foreground_recommendation(drag_result)
-                    refused = (
-                        drag_error
-                        or driver_effect in {"refused", "suspected_noop", "partial"}
-                        or "background_unavailable" in drag_text.casefold()
+                    recommends_foreground = (
+                        _find_foreground_recommendation(drag_structured)
+                        or _find_foreground_recommendation(drag_result)
                     )
                     if refused:
                         with self._lock:
                             self._snapshots.pop(current_ref, None)
                         retry_safe = (
                             driver_effect in {"refused", "suspected_noop"}
-                            or "background_unavailable" in drag_text.casefold()
+                            or drag_code == "background_unavailable"
                         )
                         if (
                             not foreground and retry_safe
@@ -1020,7 +1093,13 @@ class CuaDriverBackend:
                                 "retry_strokes": pending_retry_strokes,
                                 "retry_duration_ms": duration_ms,
                                 "retry_steps": steps,
-                                "reason": drag_text[:1000] or "Cua Driver reported that this canvas did not accept background drawing",
+                                "driver_error_code": drag_code,
+                                "driver_effect": driver_effect,
+                                "reason": (
+                                    str(drag_text)[:1000]
+                                    or str(summary.get("driver_error") or "")[:1000]
+                                    or "Cua Driver reported that this canvas did not accept background drawing"
+                                ),
                                 "segment_results": segment_results[-12:],
                                 "next_step": "Take a fresh screenshot snapshot of the same canvas and submit only retry_strokes for separate operator approval.",
                             }
@@ -1029,7 +1108,13 @@ class CuaDriverBackend:
                             "verified": False,
                             "foreground_delivery_used": bool(foreground),
                             "segments_sent": prior_segments,
-                            "reason": drag_text[:1000] or f"Cua Driver reported draw effect: {driver_effect}",
+                            "driver_error_code": drag_code,
+                            "driver_effect": driver_effect,
+                            "reason": (
+                                str(drag_text)[:1000]
+                                or str(summary.get("driver_error") or "")[:1000]
+                                or f"Cua Driver reported draw effect: {driver_effect}"
+                            ),
                             "segment_results": segment_results[-12:],
                             "note": "No automatic retry was attempted. Inspect the current canvas before planning another action.",
                         }
