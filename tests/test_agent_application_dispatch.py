@@ -495,6 +495,7 @@ def test_computer_close_window_requires_agent_approval_and_exact_conversation_sc
     session_id = runtime.create_session(workspace=workspace, mode="build")
     identity = SimpleNamespace(
         pid=4242, executable="C:/Windows/System32/notepad.exe",
+        process_create_time=123.0,
         owner_session_id=session_id, session_id="authorized-notepad",
     )
     runtime.computer.sessions[identity.session_id] = identity
