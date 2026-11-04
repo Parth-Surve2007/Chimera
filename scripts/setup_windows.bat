@@ -25,6 +25,11 @@ if errorlevel 1 (
 )
 
 echo.
+if not exist pyproject.toml (
+    echo Portable release detected. Python runtime dependencies are already bundled.
+    goto :companion_setup
+)
+
 echo [1/2] Installing Chimera, Windows UI automation, test and packaging dependencies...
 python -m pip install --user --upgrade pip
 if errorlevel 1 exit /b 1
@@ -35,6 +40,7 @@ echo.
 echo Python dependencies installed.
 echo.
 
+:companion_setup
 where winget >nul 2>nul
 if errorlevel 1 (
     echo WARNING: winget was not found. Chimera itself is installed, but companion
