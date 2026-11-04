@@ -737,6 +737,16 @@ class LocalModelProvider:
             if isinstance(item, dict)
         ]
         compact_catalog = {"tools": compact_tools}
+        visual_action_available = any(
+            item.get("id") == "computer.visual_action" for item in compact_tools
+        )
+        visual_guidance = (
+            "For custom canvases, inspect elements and target the largest visible enabled canvas-like child, not the title bar or whole window. "
+            "Use its fresh reference_id. Use stroke for one path or multi_stroke for 1-16 pen-up paths, 2-64 points each, <=256 total; "
+            "coordinates are normalized relative to that element (0.02-0.98). Approval is required. Re-observe and require verified=true "
+            "plus changed_fraction>0 before reporting pixel change; pixel change alone does not prove the requested drawing is correct. "
+            if visual_action_available else ""
+        )
 
         def render_prompt():
             return (
@@ -781,7 +791,8 @@ class LocalModelProvider:
                 "Use fresh UI Automation element references and the actions reported for each element. "
                 "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
                 "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. "
-                "When computer.visual_action is available and a custom canvas is requested, inspect elements and target the largest visible enabled canvas-like child (not the title bar or whole window). Use its fresh reference_id. Use stroke for one path or multi_stroke for 1-16 pen-up paths, 2-64 points each, <=256 total; normalized coordinates are relative to that element, 0.02-0.98. Approval is required. Re-observe; require verified=true and changed_fraction>0 before reporting pixel change. Pixel change alone does not prove the semantic drawing is correct. "
+                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. "
+                + visual_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
