@@ -828,7 +828,7 @@ class BrowserConnector(BaseApplicationConnector):
             target.parent.mkdir(parents=True, exist_ok=True)
             payload = page.screenshot(path=str(target), full_page=True, timeout=10_000)
             saved = target.read_bytes()
-            if not saved.startswith(b"\\x89PNG\\r\\n\\x1a\\n") or saved != payload:
+            if not saved.startswith(b"\x89PNG\r\n\x1a\n") or saved != payload:
                 raise RuntimeError("saved browser screenshot failed PNG signature or byte-for-byte verification")
             return {
                 "status": "completed", "path": target.relative_to(runtime.workspace).as_posix(),
