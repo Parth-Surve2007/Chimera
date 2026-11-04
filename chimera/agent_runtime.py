@@ -473,6 +473,13 @@ class AgentRuntime:
             "computer.launch": {"executable": str},
             "computer.screenshot": {"session_id": str, "hwnd": int, "path": str},
             "computer.inspect_visual_target": {"session_id": str, "reference_id": str, "question": str},
+            "computer.cua_list_apps": {},
+            "computer.cua_list_windows": {"session_id": str},
+            "computer.cua_inspect_window": {"session_id": str, "window_id": int},
+            "computer.cua_capture_window": {"session_id": str, "window_id": int},
+            "computer.cua_click": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
+            "computer.cua_click_foreground": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
+            "computer.cua_draw_path": {"session_id": str, "window_id": int, "snapshot_ref": str, "canvas_element_token": str, "strokes": list, "duration_ms": int, "steps": int},
             "computer.inspect_window": {"session_id": str},
             "computer.inspect_pattern_support": {"session_id": str, "reference_id": str},
             "computer.invoke_element": {"session_id": str, "reference_id": str},
@@ -501,7 +508,10 @@ class AgentRuntime:
         # no-argument snapshot; ignore those extras so the model can filter the
         # returned applications in its reasoning. All targeted desktop actions
         # continue to reject unknown arguments.
-        if operation in {"computer.list_applications", "computer.list_installed_applications", "computer.list_windows"}:
+        if operation in {
+            "computer.list_applications", "computer.list_installed_applications",
+            "computer.list_windows", "computer.cua_list_apps",
+        }:
             return
         if set(arguments) - set(expected):
             raise ValueError(f"unsupported arguments for {operation}")
@@ -523,11 +533,71 @@ class AgentRuntime:
             "computer.scroll_element": {"session_id", "reference_id", "direction", "amount"},
             "computer.scroll_into_view": {"session_id", "reference_id"},
             "computer.visual_action": {"session_id", "reference_id", "action"},
+            "computer.cua_list_windows": {"session_id"},
+            "computer.cua_inspect_window": {"session_id", "window_id"},
+            "computer.cua_capture_window": {"session_id", "window_id"},
+            "computer.cua_click": {"session_id", "window_id", "snapshot_ref"},
+            "computer.cua_click_foreground": {"session_id", "window_id", "snapshot_ref"},
+            "computer.cua_draw_path": {"session_id", "window_id", "snapshot_ref", "canvas_element_token", "strokes"},
         }.get(operation)
         if required_arguments:
             missing = required_arguments - set(arguments)
             if missing:
                 raise ValueError(f"missing required arguments for {operation}: {sorted(missing)}")
+        if operation in {"computer.cua_click", "computer.cua_click_foreground"}:
+            has_token = "element_token" in arguments
+            has_x, has_y = "x" in arguments, "y" in arguments
+            if has_token == (has_x or has_y):
+                raise ValueError("CUA click requires either element_token or both x and y, but not both forms")
+            if has_x != has_y:
+                raise ValueError("CUA coordinate click requires both x and y")
+            if has_token and (not isinstance(arguments["element_token"], str) or not arguments["element_token"]):
+                raise ValueError("element_token must be a non-empty string")
+            if "button" in arguments and arguments["button"] not in {"left", "right", "middle"}:
+                raise ValueError("button must be left, right, or middle")
+            if "count" in arguments and not 1 <= arguments["count"] <= 2:
+                raise ValueError("count must be 1 or 2")
+            if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
+                raise ValueError("window_id must be a positive integer")
+        if operation in {
+            "computer.cua_list_windows", "computer.cua_inspect_window",
+            "computer.cua_capture_window", "computer.cua_click",
+            "computer.cua_click_foreground", "computer.cua_draw_path",
+        }:
+            if not arguments["session_id"].strip():
+                raise ValueError("session_id must be non-empty")
+        if operation in {"computer.cua_inspect_window", "computer.cua_capture_window"}:
+            if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
+                raise ValueError("window_id must be a positive integer")
+        if operation == "computer.cua_draw_path":
+            if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
+                raise ValueError("window_id must be a positive integer")
+            strokes = arguments["strokes"]
+            if not isinstance(strokes, list) or not 1 <= len(strokes) <= 16:
+                raise ValueError("CUA drawing requires 1 to 16 paths")
+            total_points = 0
+            for path_points in strokes:
+                if not isinstance(path_points, list) or not 2 <= len(path_points) <= 64:
+                    raise ValueError("each CUA drawing path requires 2 to 64 normalized points")
+                total_points += len(path_points)
+                for point in path_points:
+                    if (
+                        not isinstance(point, list) or len(point) != 2
+                        or any(
+                            isinstance(value, bool)
+                            or not isinstance(value, (int, float))
+                            or not math.isfinite(float(value))
+                            or not 0.02 <= float(value) <= 0.98
+                            for value in point
+                        )
+                    ):
+                        raise ValueError("CUA drawing points must be normalized [x, y] pairs between 0.02 and 0.98")
+            if total_points > 256:
+                raise ValueError("CUA drawing is limited to 256 total points")
+            if "duration_ms" in arguments and not 60 <= arguments["duration_ms"] <= 1200:
+                raise ValueError("duration_ms must be between 60 and 1200")
+            if "steps" in arguments and not 2 <= arguments["steps"] <= 40:
+                raise ValueError("steps must be between 2 and 40")
         if operation == "computer.scroll_element":
             if arguments["direction"] not in {"up", "down", "left", "right"}:
                 raise ValueError("scroll direction must be up, down, left, or right")
