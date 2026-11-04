@@ -742,7 +742,7 @@ class CuaDriverBackend:
                             "segment_results": segment_results[-12:],
                         }
                     x1 = local_live_frame["x"] + path[point_index][0] * local_live_frame["w"]
-                    y1 = local_live_frame["y"] + path[point_index][0] * 0 + path[point_index][1] * local_live_frame["h"]
+                    y1 = local_live_frame["y"] + path[point_index][1] * local_live_frame["h"]
                     x2 = local_live_frame["x"] + path[point_index + 1][0] * local_live_frame["w"]
                     y2 = local_live_frame["y"] + path[point_index + 1][1] * local_live_frame["h"]
                     if not (
