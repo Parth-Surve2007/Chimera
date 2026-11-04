@@ -121,8 +121,9 @@ class FakePage:
 
     def screenshot(self, path, **_kwargs):
         self.screenshot_calls.append(path)
-        Path(path).write_bytes(b"fake-png")
-        return b"fake-png"
+        payload = b"\x89PNG\r\n\x1a\nfake-image-payload"
+        Path(path).write_bytes(payload)
+        return payload
 
 
 class FakeContext:
@@ -300,8 +301,9 @@ def test_browser_screenshot_requires_approval_and_saves_verified_workspace_file(
 
     target = tmp_path / "screenshots" / "page.png"
     assert completed["status"] == "completed"
-    assert completed["bytes"] == len(b"fake-png")
-    assert target.read_bytes() == b"fake-png"
+    assert completed["bytes"] == len(b"\x89PNG\r\n\x1a\nfake-image-payload")
+    assert target.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert completed["independent_verification"] is True
 
 
 def test_browser_manifest_marks_reads_and_mutations_with_distinct_permissions():
