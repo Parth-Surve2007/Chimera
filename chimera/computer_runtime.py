@@ -104,7 +104,13 @@ class ProfileStore:
                     or any(not isinstance(entry, str) or not entry.strip() or len(entry) > 120 for entry in values)
                 ):
                     raise ValueError(f"profile match field {key} must contain 1 to 12 bounded strings")
-                clean_match[key] = [entry.strip() for entry in values]
+                if key == "executable":
+                    clean_match[key] = [
+                        entry.strip().replace("\\\\", "/").rsplit("/", 1)[-1].casefold()
+                        for entry in values
+                    ]
+                else:
+                    clean_match[key] = [entry.strip().casefold() for entry in values]
 
             clean = {
                 "profile_id": profile_id,
