@@ -155,3 +155,51 @@ def test_invalid_agent_envelope_reports_received_shape():
         assert "fields=text, type" in str(exc)
     else:
         raise AssertionError("unsupported provider envelope was accepted")
+
+
+
+def test_agent_tool_catalog_exposes_live_app_discovery_and_approval_gated_launch(tmp_path):
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, DecidingProvider([]))
+    session_id = runtime.create_session(tmp_path, mode="build")
+    session = store.session(session_id)
+
+    tool_ids = {
+        item["id"]
+        for item in runtime._protocol_catalog(session)["tools"]
+    }
+
+    assert "computer.list_applications" in tool_ids
+    assert "computer.launch" in tool_ids
+    assert "computer.inspect_window" not in tool_ids
+
+
+def test_word_launch_is_resolved_before_exact_approval_is_persisted(tmp_path, monkeypatch):
+    from chimera import agent_runtime as runtime_module
+
+    resolved = r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"
+
+    def fake_launch(self, executable, approved=False):
+        assert executable == "Word"
+        assert approved is False
+        return {
+            "status": "awaiting_approval",
+            "application": resolved,
+            "permission": "computer.launch",
+        }
+
+    monkeypatch.setattr(runtime_module.WindowsComputerUse, "launch", fake_launch)
+    provider = DecidingProvider([{
+        "type": "tool_call",
+        "tool": "computer.launch",
+        "arguments": {"executable": "Word"},
+    }])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    result = runtime.send(session_id, "Open Word")
+
+    assert result["status"] == "awaiting_approval"
+    pending = store.pending_tool(session_id)
+    assert pending["arguments"]["executable"] == resolved
