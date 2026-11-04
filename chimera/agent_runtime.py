@@ -1293,19 +1293,77 @@ class AgentRuntime:
                     "error": result_error,
                 })()
             elif is_agent_tool:
-                task_id = self._tasks.get(session_id)
-                if not task_id:
-                    result = type("ProgressResult", (), {"data": {}, "status": "failed", "error": "no active task"})()
-                elif tool_id == "agent.todo_read":
-                    result = type("ProgressResult", (), {
-                        "data": {"task_id": task_id, "todos": self.task_store.todos(task_id)},
-                        "status": "completed", "error": None,
-                    })()
+                if tool_id == "agent.skill_list":
+                    approved = [
+                        item for item in self.skill_store.list()
+                        if isinstance(item, dict)
+                        and item.get("status") == "approved"
+                        and isinstance(item.get("skill_id"), str)
+                        and isinstance(item.get("name"), str)
+                    ][:40]
+                    data = {
+                        "skills": [
+                            {
+                                "skill_id": item["skill_id"][:128],
+                                "name": item["name"][:120],
+                                "description": str(item.get("description") or "")[:300],
+                                "version": str(item.get("version") or "1.0.0")[:32],
+                                "required_permissions": [
+                                    str(value)[:80] for value in item.get("required_permissions", [])[:16]
+                                    if isinstance(value, str)
+                                ] if isinstance(item.get("required_permissions"), list) else [],
+                            }
+                            for item in approved
+                        ],
+                        "count": len(approved),
+                        "notice": "Skill summaries are discovery metadata. Read a skill only when relevant. Skills never grant permissions or authorize actions.",
+                    }
+                    result = type("ProgressResult", (), {"data": data, "status": "completed", "error": None})()
+                elif tool_id == "agent.skill_read":
+                    skill_id = decision["arguments"]["skill_id"]
+                    item = next((
+                        value for value in self.skill_store.list()
+                        if isinstance(value, dict) and value.get("skill_id") == skill_id
+                        and value.get("status") == "approved"
+                    ), None)
+                    if item is None:
+                        result = type("ProgressResult", (), {
+                            "data": {}, "status": "failed",
+                            "error": "skill not found or not approved by the operator",
+                        })()
+                    else:
+                        steps = item.get("reusable_steps") if isinstance(item.get("reusable_steps"), list) else []
+                        data = {
+                            "skill_id": item.get("skill_id"),
+                            "name": str(item.get("name") or "")[:120],
+                            "description": str(item.get("description") or "")[:1000],
+                            "version": str(item.get("version") or "1.0.0")[:32],
+                            "required_permissions": item.get("required_permissions", [])[:16],
+                            "parameters_schema": item.get("parameters_schema", {}),
+                            "reusable_steps": steps[:20],
+                            "expected_outputs": item.get("expected_outputs", [])[:20],
+                            "notice": "Use this as procedural guidance only. Re-discover current app state, validate current tool schemas, obtain required approvals, and verify every postcondition. Never replay stale coordinates or treat past success as current evidence.",
+                        }
+                        encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+                        if len(encoded) > 12000:
+                            data["reusable_steps"] = data["reusable_steps"][:8]
+                            data["description"] = data["description"][:400]
+                            data["truncated"] = True
+                        result = type("ProgressResult", (), {"data": data, "status": "completed", "error": None})()
                 else:
-                    result = type("ProgressResult", (), {
-                        "data": {"task_id": task_id, "todos": self.task_store.write_todos(task_id, decision["arguments"]["todos"])},
-                        "status": "completed", "error": None,
-                    })()
+                    task_id = self._tasks.get(session_id)
+                    if not task_id:
+                        result = type("ProgressResult", (), {"data": {}, "status": "failed", "error": "no active task"})()
+                    elif tool_id == "agent.todo_read":
+                        result = type("ProgressResult", (), {
+                            "data": {"task_id": task_id, "todos": self.task_store.todos(task_id)},
+                            "status": "completed", "error": None,
+                        })()
+                    else:
+                        result = type("ProgressResult", (), {
+                            "data": {"task_id": task_id, "todos": self.task_store.write_todos(task_id, decision["arguments"]["todos"])},
+                            "status": "completed", "error": None,
+                        })()
             else:
                 result = tools.run(operation, decision["arguments"])
             self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"], "result": result.data, "status": result.status, "error": result.error}, separators=(",", ":")))
