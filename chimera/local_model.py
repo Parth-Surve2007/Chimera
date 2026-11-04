@@ -276,17 +276,30 @@ def _plain_completion(raw: str) -> str:
         if marker in text: text = text.split(marker, 1)[0]
     return text.strip()
 
-AGENT_DECISION_GRAMMAR = r'''root ::= message | tool_call
-message ::= "{" ws "\"type\"" ws ":" ws "\"message\"" ws "," ws "\"content\"" ws ":" ws string ws "}" ws
-tool_call ::= "{" ws "\"type\"" ws ":" ws "\"tool_call\"" ws "," ws "\"tool\"" ws ":" ws string ws "," ws "\"arguments\"" ws ":" ws object ws ("," ws "\"invocation_id\"" ws ":" ws string)? ws "}" ws
-object ::= "{" ws (pair ("," ws pair)*)? "}"
-pair ::= string ws ":" ws value
-value ::= object | array | string | number | "true" | "false" | "null"
-array ::= "[" ws (value ("," ws value)*)? "]"
-string ::= "\"" ([^"\\] | "\\" escape)* "\""
-escape ::= "\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t"
-number ::= "-"? ([0-9] | [1-9] [0-9]+) ("." [0-9]+)?
-ws ::= [ \t\n\r]*'''
+AGENT_DECISION_SCHEMA = {
+    "oneOf": [
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "message"},
+                "content": {"type": "string"},
+            },
+            "required": ["type", "content"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "tool_call"},
+                "tool": {"type": "string"},
+                "arguments": {"type": "object", "additionalProperties": True},
+                "invocation_id": {"type": "string"},
+            },
+            "required": ["type", "tool", "arguments"],
+            "additionalProperties": False,
+        },
+    ],
+}
 
 class LocalModelProvider:
     def __init__(self, config: LocalModelConfig, runner: Callable[..., Any] | None = None):
@@ -380,7 +393,7 @@ class LocalModelProvider:
         }
 
     def decide(self, messages, catalog, session=None, cancel_event=None, on_delta=None):
-        """Return one strictly structured next action for the agent runtime."""
+        """Return one JSON-Schema-constrained decision for the agent runtime."""
         transcript = "\n".join(
             f"{getattr(item, 'role', 'user').upper()}: {getattr(item, 'content', '')[:3000]}"
             for item in list(messages)[-10:]
@@ -390,17 +403,15 @@ class LocalModelProvider:
             "workspace_attached": bool((session or {}).get("workspace")),
         }
         prompt = (
-            "You are Chimera's local agent decision engine. Return exactly ONE JSON object. " 
+            "You are Chimera's local agent decision engine. Return exactly ONE JSON object. "
             "Treat the most recent USER message as the current task; earlier turns are context only. "
             "Do not resurrect an unrelated earlier topic or invent a different user request. "
-            'using exactly one supported envelope. A normal answer MUST be '
-            '{"type":"message","content":"..."}. '
-            'A tool action MUST be '
-            '{"type":"tool_call","tool":"<exact tool id>","arguments":{...}} '
-            "with an optional final invocation_id string. "
-            "The first key must be type. For tool calls, keys must appear in the order type, tool, "
-            "arguments, invocation_id. Do not return role/content chat messages, function_call "
-            "objects, arrays, markdown, prose outside JSON, version fields, or any other envelope. "
+            'Use exactly one supported envelope: '
+            '{"type":"message","content":"..."} OR '
+            '{"type":"tool_call","tool":"<exact tool id>","arguments":{...},'
+            '"invocation_id":"optional-id"}. '
+            "Do not return role/content chat messages, function_call objects, arrays, markdown, "
+            "prose outside JSON, version fields, or any other envelope. "
             "Choose only an exact tool id listed below and copy every required argument from its "
             "tool contract. Never invent missing IDs or arguments. "
             "SESSION RULES: If mode is plan, do not request a write or other protected action. "
@@ -414,11 +425,11 @@ class LocalModelProvider:
         )
         parsed, metrics = self.structured_with_metrics(
             prompt,
-            grammar=AGENT_DECISION_GRAMMAR,
+            json_schema=AGENT_DECISION_SCHEMA,
             cancel_event=cancel_event,
             on_delta=on_delta,
         )
-        metrics["grammar_provenance"] = "chimera.agent_decision.v2"
+        metrics["schema_provenance"] = "chimera.agent_decision.v3"
         if not isinstance(parsed, dict):
             raise ValueError(
                 f"local model returned {type(parsed).__name__}; expected a message or tool_call object"
@@ -511,14 +522,23 @@ def structured_with_metrics(self, prompt: str, json_schema: dict | None = None, 
     try:
         if self.runner:
             output = str(self.runner(prompt, self.config)); stderr = ""
-        elif self.server and json_schema is None:
+        elif self.server:
             try:
                 output, metrics = self.server.complete(
-                    prompt, self.config.max_tokens, grammar=grammar,
-                    cancel_event=cancel_event, on_delta=on_delta,
+                    prompt,
+                    self.config.max_tokens,
+                    grammar=grammar,
+                    json_schema=json_schema,
+                    cancel_event=cancel_event,
+                    on_delta=on_delta,
                 )
             except ServerUnavailable as exc:
-                self.last_inference_metrics = {"provider": "llama-server", "status": "failed", "error": str(exc)}
+                self.last_inference_metrics = {
+                    "provider": "llama-server",
+                    "status": "failed",
+                    "error": str(exc),
+                    "diagnostics": getattr(exc, "as_dict", lambda: None)(),
+                }
                 raise RuntimeError(
                     f"the selected llama-server failed; no CLI or hosted fallback was attempted: {exc}"
                 ) from exc
@@ -526,16 +546,12 @@ def structured_with_metrics(self, prompt: str, json_schema: dict | None = None, 
                 "prompt_tokens_estimate": len(prompt.split()),
                 "generated_tokens_estimate": len(output.split()),
                 "reasoning_source": "local_llama_server",
+                "structured_output": "json_schema" if json_schema is not None else "grammar" if grammar else "none",
             })
             self.last_inference_metrics = metrics
             parsed, completion = _json_completion(output)
             metrics["raw_completion"] = completion
             return parsed, metrics
-        elif self.server and json_schema is not None:
-            raise RuntimeError(
-                "the selected persistent llama-server path does not support this JSON-schema request; "
-                "no alternate runtime will be selected"
-            )
         else:
             command = [self.config.cli_path, "-m", str(self.config.model_path), "-n", str(self.config.max_tokens), "-c", str(self.config.context), "-t", str(self.config.threads), "-ngl", str(self.config.gpu_layers), "-st", "--no-display-prompt"]
             if json_schema is not None:
