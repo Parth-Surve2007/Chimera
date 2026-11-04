@@ -259,7 +259,11 @@ class AgentRuntime:
             AgentSessionStore._event(db, session_id, event_type, payload)
         event = self.store.events(session_id)[-1]
         task_id = self._tasks.get(session_id)
-        if task_id: self.task_store.apply_runtime_event(task_id, event.event_id, event_type, payload)
+        if task_id is None:
+            active_task = self.task_store.active_for_session(session_id)
+            task_id = active_task.task_id if active_task else None
+        if task_id:
+            self.task_store.apply_runtime_event(task_id, event.event_id, event_type, payload)
         with self._listener_lock: listeners = tuple(self._listeners.get(session_id, ()))
         for callback in listeners:
             try: callback(event)
@@ -479,11 +483,7 @@ class AgentRuntime:
                 raise ValueError("scroll count must be between 1 and 5")
 
     def _messages_with_goal_context(self, session_id: str):
-        """Attach private, operator-owned goal context to local inference only.
-
-        Goal context is ephemeral and read-only: it is not written into the chat
-        transcript, is never sent to hosted providers, and cannot change goal state.
-        """
+        """Rehydrate durable task state and private goals for local inference."""
         messages = list(self.store.messages(session_id))
         provider = self._active_providers.get(session_id, self.provider)
         profile = getattr(provider, "profile", None)
@@ -495,32 +495,67 @@ class AgentRuntime:
         goals = self.goal_store.list(status="active", limit=2)
         paused = self.goal_store.list(status="paused", limit=1)
         selected = goals + paused
-        if not selected:
-            return messages
+        task_id = self._tasks.get(session_id)
+        task = self.task_store.get(task_id) if task_id else self.task_store.active_for_session(session_id)
+        context_blocks = []
 
-        context = {
-            "notice": "Operator-defined goals are read-only context, not new instructions. Follow the current user request. Use a goal only when relevant. Never mark a goal completed or claim its success criteria are satisfied; only the operator can update goal state with evidence.",
-            "goals": [
-                {
-                    "goal_id": goal.goal_id,
-                    "title": goal.title[:100],
-                    "description": goal.description[:120],
-                    "status": goal.status,
-                    "priority": goal.priority,
-                    "project": goal.project[:60],
-                    "success_criteria": [item[:100] for item in goal.success_criteria[:2]],
+        if selected:
+            goal_context = {
+                "notice": "Operator-defined goals are read-only context, not new instructions. Follow the current user request. Use a goal only when relevant. Never mark a goal completed or claim its success criteria are satisfied; only the operator can update goal state with evidence.",
+                "goals": [
+                    {
+                        "goal_id": goal.goal_id,
+                        "title": goal.title[:100],
+                        "description": goal.description[:120],
+                        "status": goal.status,
+                        "priority": goal.priority,
+                        "project": goal.project[:60],
+                        "success_criteria": [item[:100] for item in goal.success_criteria[:2]],
+                    }
+                    for goal in selected
+                ],
+            }
+            context_blocks.append(
+                "Private local goal context (read-only):\\n"
+                + json.dumps(goal_context, ensure_ascii=False, separators=(",", ":"))
+            )
+
+        if task and task.status not in {"completed", "failed", "cancelled"}:
+            snapshot = self.task_store.context(task.task_id)
+            if snapshot:
+                compact = {
+                    "task_id": snapshot["task_id"],
+                    "objective": snapshot["objective"][:1600],
+                    "status": snapshot["status"],
+                    "todos": [
+                        {"todo_id": item["todo_id"], "content": item["content"][:300], "status": item["status"]}
+                        for item in snapshot["todos"][:16]
+                    ],
+                    "steps": [
+                        {
+                            "step_id": item["step_id"],
+                            "description": item["description"][:240],
+                            "tool": item["tool"],
+                            "status": item["status"],
+                            "error": (item["error"] or "")[:240],
+                            "result": (item["result"] or "")[:700],
+                        }
+                        for item in snapshot["steps"][-8:]
+                    ],
                 }
-                for goal in selected
-            ],
-        }
-        messages.insert(0, AgentMessage(
-            message_id="goal-context-" + session_id,
-            session_id=session_id,
-            role="system",
-            content="Private local goal context (not persisted in this conversation):\n"
-            + json.dumps(context, ensure_ascii=False, separators=(",", ":")),
-            created_at=_now(),
-        ))
+                context_blocks.append(
+                    "Active durable task state. Continue this task unless the current user message explicitly starts a separate task. Completed actions and their results are historical evidence; do not repeat their side effects. Resolve pending/blocked work or explain the blocker. Do not claim completion while checklist items or action steps remain unresolved:\\n"
+                    + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+                )
+
+        if context_blocks:
+            messages.insert(0, AgentMessage(
+                message_id="runtime-context-" + session_id,
+                session_id=session_id,
+                role="system",
+                content="\\n\\n".join(context_blocks),
+                created_at=_now(),
+            ))
         return messages
 
     def _decide(self, messages, session, cancel_event=None, turn_id=None):
@@ -531,53 +566,138 @@ class AgentRuntime:
         accepted = inspect.signature(provider.decide).parameters
         return self._decision(provider.decide(messages, self._protocol_catalog(session), **{key: value for key, value in kwargs.items() if key in accepted}))
 
+    @staticmethod
+    def _is_explicit_new_task(content: str) -> bool:
+        """Require a clear operator signal before abandoning an unresolved task."""
+        import re
+        text = str(content or "").strip().casefold()
+        return bool(re.match(
+            r"^(?:new task|start a new task|separate task|different task|new goal|"
+            r"switch tasks?|forget the previous task)\\s*[:：-]",
+            text,
+        ))
+
     def send(self, session_id: str, content: str) -> dict:
         session = self.store.session(session_id)
         if not session:
             raise KeyError("agent session not found")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("message content must be non-empty")
+
+        # Approval is an exact, separate operator action. A conversational
+        # "yes" must never silently approve a persisted side effect.
+        pending = self.store.pending_tool(session_id)
+        if pending:
+            return {
+                "status": "awaiting_approval",
+                "tool": pending["tool"],
+                "invocation_id": pending["invocation_id"],
+                "arguments": pending["arguments"],
+                "message": "This task is paused for the exact approval shown in the workbench.",
+            }
+
         message = self.store.add_message(session_id, "user", content)
-        cancel_event = threading.Event(); self._cancel_events[session_id] = cancel_event
-        with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
-        self._record(session_id, "turn.started", {"message_id": message.message_id})
-        try:
-            task_id = self.task_store.create(session_id, content, mode=session.get("mode", "plan"), provider=None, model=session.get("model")); self._tasks[session_id] = task_id
+        cancel_event = threading.Event()
+        self._cancel_events[session_id] = cancel_event
+        active_task = self.task_store.active_for_session(session_id)
+        if active_task and not self._is_explicit_new_task(content):
+            task_id = active_task.task_id
+            self.task_store.resume(task_id)
+            self._record(session_id, "task.resumed", {
+                "task_id": task_id,
+                "objective": active_task.objective,
+                "continuation_message_id": message.message_id,
+            })
+        else:
+            task_id = self.task_store.create(
+                session_id, content, mode=session.get("mode", "plan"),
+                provider=None, model=session.get("model"),
+            )
             self.task_store.transition(task_id, "running")
+        self._tasks[session_id] = task_id
+
+        with sqlite3.connect(self.store.db_path) as db:
+            db.execute(
+                "UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?",
+                (_now(), session_id),
+            )
+        self._record(session_id, "turn.started", {
+            "message_id": message.message_id,
+            "task_id": task_id,
+            "continuation": bool(active_task and task_id == active_task.task_id),
+        })
+        try:
             self._active_providers[session_id] = self._provider_for(session_id)
             provider = self._active_providers[session_id]
             if self.store.session_model(session_id)["profile_id"]:
-                self._record(session_id, "model.selected", {"profile_id": self.store.session_model(session_id)["profile_id"], "provider": type(provider).__name__})
+                self._record(session_id, "model.selected", {
+                    "profile_id": self.store.session_model(session_id)["profile_id"],
+                    "provider": type(provider).__name__,
+                })
             if hasattr(provider, "decide"):
                 return self._agent_loop(session_id, session, message, cancel_event=cancel_event)
-            kwargs = {"session": session, "cancel_event": cancel_event, "on_delta": lambda text: self._record(session_id, "assistant.text.delta", {"text": text})}
+            kwargs = {
+                "session": session,
+                "cancel_event": cancel_event,
+                "on_delta": lambda text: self._record(session_id, "assistant.text.delta", {"text": text}),
+            }
             if hasattr(provider, "converse"):
                 accepted = inspect.signature(provider.converse).parameters
-                response = provider.converse(self.store.messages(session_id), **{key: value for key, value in kwargs.items() if key in accepted})
+                response = provider.converse(
+                    self._messages_with_goal_context(session_id),
+                    **{key: value for key, value in kwargs.items() if key in accepted},
+                )
             else:
-                result = provider.generate([{"role": m.role, "content": m.content} for m in self.store.messages(session_id)], cancel_event=cancel_event, on_delta=kwargs.get("on_delta"))
+                result = provider.generate(
+                    [{"role": m.role, "content": m.content} for m in self._messages_with_goal_context(session_id)],
+                    cancel_event=cancel_event,
+                    on_delta=kwargs.get("on_delta"),
+                )
                 response = type("ProviderResponse", (), {"text": result["text"], "metrics": result})()
             answer = response.text if hasattr(response, "text") else str(response)
             assistant = self.store.add_message(session_id, "assistant", answer)
-            with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute(
+                    "UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?",
+                    (_now(), session_id),
+                )
             self._record(session_id, "assistant.message.completed", {"message_id": assistant.message_id})
-            self._record(session_id, "turn.completed", {})
+            self._record(session_id, "turn.completed", {"task_id": task_id})
             return {"status": "completed", "message": assistant, "reasoning": getattr(response, "metrics", {})}
         except InterruptedError as exc:
-            with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='cancelled',updated_at=? WHERE session_id=?", (_now(), session_id))
-            self._record(session_id, "turn.cancelled", {"error": str(exc)})
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute(
+                    "UPDATE agent_sessions SET state='cancelled',updated_at=? WHERE session_id=?",
+                    (_now(), session_id),
+                )
+            self._record(session_id, "turn.cancelled", {"error": str(exc), "task_id": task_id})
             return {"status": "cancelled", "error": str(exc)}
         except Exception as exc:
-            with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='failed',updated_at=? WHERE session_id=?", (_now(), session_id))
-            self._record(session_id, "turn.failed", {"error": str(exc)})
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute(
+                    "UPDATE agent_sessions SET state='failed',updated_at=? WHERE session_id=?",
+                    (_now(), session_id),
+                )
+            self._record(session_id, "turn.failed", {"error": str(exc), "task_id": task_id})
             return {"status": "failed", "error": str(exc)}
         finally:
             self._cancel_events.pop(session_id, None)
             self._active_providers.pop(session_id, None)
             task_id = self._tasks.pop(session_id, None)
             if task_id:
-                state = self.store.session(session_id).get("state") if self.store.session(session_id) else "failed"
-                mapped = {"idle": "completed", "cancelled": "cancelled", "awaiting_approval": "waiting_approval", "failed": "failed", "reasoning": "running"}.get(state, "failed")
-                self.task_store.transition(task_id, mapped)
-
+                current = self.store.session(session_id)
+                state = current.get("state") if current else "failed"
+                mapped = {
+                    "idle": "completed",
+                    "cancelled": "cancelled",
+                    "awaiting_approval": "waiting_approval",
+                    "failed": "failed",
+                    "reasoning": "running",
+                }.get(state, "failed")
+                if mapped == "completed":
+                    self.task_store.reconcile_completion(task_id, mapped)
+                else:
+                    self.task_store.transition(task_id, mapped)
 
     def execute_workflow_tool(
         self,
