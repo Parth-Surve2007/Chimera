@@ -1282,7 +1282,12 @@ class AgentRuntime:
                 # bounded repair is appropriate only for read-only computer
                 # observations, where rejecting extra selector fields cannot
                 # conceal or partially execute a mutation.
-                if not (tool_id.startswith("computer.") and permission == "computer.observe"):
+                safe_preflight_observation = (
+                    tool_id.startswith("computer.")
+                    and permission == "computer.observe"
+                )
+                safe_launch_preflight = tool_id == "computer.launch"
+                if not (safe_preflight_observation or safe_launch_preflight):
                     raise
                 validation_error = (
                     "Tool arguments were rejected before execution: "
