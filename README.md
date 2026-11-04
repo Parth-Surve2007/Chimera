@@ -121,7 +121,15 @@ The control flow is deliberately staged:
 3. Capture a fresh UI Automation observation.
 4. Use supported semantic actions against controls from that observation.
 
-Supported interactions include reading text, invoking controls, setting values, toggling, selecting, expanding, and collapsing UI elements when the target application exposes the corresponding UI Automation patterns.
+Supported interactions depend on the live control patterns and include:
+
+- Read bounded document text through TextPattern, ValuePattern, or accessible names.
+- Read bounded Grid/DataGrid snapshots for tabular controls.
+- Inspect and set sliders/spinners through RangeValuePattern, respecting the control's declared minimum and maximum.
+- Invoke, set values, toggle, select, expand, and collapse semantic controls.
+- Scroll containers by line or page and bring supported list/tree items into view.
+
+Every action uses a fresh element reference and revalidates the authorized process. State-changing actions require explicit operator approval. An accepted InvokePattern call is not treated as proof of the resulting task outcome: Chimera must inspect a fresh observation.
 
 Chimera does **not** currently use global blind keyboard injection, blind focus changes, or remote window closing. Some applications expose very little UI Automation information, so discoverability does not guarantee that every control in that application can be automated.
 

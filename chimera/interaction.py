@@ -41,7 +41,11 @@ class UIABackendDescriptor:
         available = bool(self.manager and getattr(self.manager, "uia", None))
         return InteractionBackendInfo(
             "uia", available,
-            ("read_text", "invoke_element", "set_value", "toggle", "select_item", "expand", "collapse"),
+            (
+                "read_text", "invoke_element", "set_value", "toggle", "select_item",
+                "expand", "collapse", "get_range_value", "set_range_value",
+                "read_grid", "scroll", "scroll_into_view",
+            ),
             ("uia_tree", "control_patterns", "process_identity", "fresh_reference"),
             ("native_windows",),
             () if available else ("UI Automation provider unavailable",),

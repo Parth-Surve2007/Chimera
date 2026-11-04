@@ -497,13 +497,28 @@ class LocalModelProvider:
             "agent.todo_read": 1,
             "computer.list_applications": 2,
             "computer.launch": 3,
-            "workspace.list_files": 4,
-            "workspace.search_files": 5,
-            "workspace.read_text": 6,
-            "workspace.create_document": 7,
-            "workspace.create_file": 8,
-            "workspace.inspect_file": 9,
-            "workspace.search_text": 10,
+            "computer.inspect_window": 4,
+            "computer.inspect_elements": 5,
+            "computer.read_text": 6,
+            "computer.read_grid": 7,
+            "computer.get_range_value": 8,
+            "computer.inspect_pattern_support": 9,
+            "computer.set_value": 10,
+            "computer.set_range_value": 11,
+            "computer.invoke_element": 12,
+            "computer.toggle_element": 13,
+            "computer.select_element": 14,
+            "computer.expand_element": 15,
+            "computer.collapse_element": 16,
+            "computer.scroll_element": 17,
+            "computer.scroll_into_view": 18,
+            "workspace.list_files": 19,
+            "workspace.search_files": 20,
+            "workspace.read_text": 21,
+            "workspace.create_document": 22,
+            "workspace.create_file": 23,
+            "workspace.inspect_file": 24,
+            "workspace.search_text": 25,
         }
         available_tools = [
             (index, item)
@@ -571,7 +586,10 @@ class LocalModelProvider:
                 "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "For explicit app-opening requests, inspect computer.list_applications when useful and call computer.launch "
                 "with a known app name such as Word or Excel, or an exact executable path. Launch requires approval. After launch, request exact "
-                "app authorization in Applications before interacting with its controls. Never claim an app is open until "
+                "app authorization in Applications before interacting with its controls. Use the fresh UI Automation element references and the actions reported for each element. " 
+                "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
+                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. " 
+                "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
                 "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
