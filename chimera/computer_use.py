@@ -85,6 +85,10 @@ class WindowsComputerUse:
                 })
         return list(grouped.values())[:40]
 
+    def list_installed_applications(self) -> list[dict]:
+        """List user-launchable Start-menu apps, including packaged Windows apps."""
+        return self._start_menu_apps()[:100]
+
     def process_path(self, pid: int) -> str | None:
         if os.name != "nt": return None
         access = 0x1000 | 0x0400
@@ -415,7 +419,7 @@ class WindowsComputerUse:
                     "status": "completed",
                     "pid": first.pid,
                     "spawned_pid": process.pid,
-                    "executable": observed_path if False else application,
+                    "executable": application if launch_kind == "executable" else None,
                     "application": application,
                     "display_name": display_name,
                     "launch_kind": launch_kind,
