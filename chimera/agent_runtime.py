@@ -613,7 +613,7 @@ class AgentRuntime:
             self.task_store.paused_for_session(session_id)
             if self._is_explicit_resume_task(content) else None
         )
-        if explicit_new and active_task:
+        if (explicit_new or (resume_task and active_task and resume_task.task_id != active_task.task_id)) and active_task:
             self.task_store.transition(active_task.task_id, "paused")
             active_task = None
 
