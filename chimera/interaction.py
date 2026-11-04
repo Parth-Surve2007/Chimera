@@ -5,6 +5,7 @@ Global keyboard and mouse injection are intentionally unavailable.
 """
 from __future__ import annotations
 import importlib.util
+import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -76,10 +77,15 @@ class GroundedInputBackend:
         self.manager = manager
 
     def describe(self):
+        available = os.name == "nt"
         return InteractionBackendInfo(
-            "grounded_input", False, (), (),
-            ("native_windows", "browser_windows"),
-            ("global keyboard and mouse injection is disabled",), (), (),
+            "grounded_input", available,
+            ("visual_action",) if available else (),
+            ("fresh_uia_element_rectangle", "exact_process_identity", "foreground_pid_guard", "post_action_pixel_diff") if available else (),
+            ("native_windows",),
+            () if available else ("Windows desktop input is unavailable on this platform",),
+            ("computer.observe", "computer.input"),
+            ("foreground_process_match", "input_packet_guard", "before_after_screenshot_hash"),
         )
 
     def send_keys(self, session_id: str, keys: str, approved: bool = False) -> dict:
