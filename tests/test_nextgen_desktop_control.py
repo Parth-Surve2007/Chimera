@@ -94,9 +94,9 @@ def test_local_model_prompt_explains_safe_launch_continuation_and_canvas_strokes
 
     prompt = captured["prompt"]
     assert "control_authorized=true" in prompt
-    assert "do not interact" in prompt
-    assert "action=multi_stroke" in prompt
-    assert "256 points total" in prompt
+    assert "Otherwise stop and report the authorization blocker" in prompt
+    assert "multi_stroke" in prompt
+    assert "<=256 total" in prompt
     assert "verified=true" in prompt
 
 
