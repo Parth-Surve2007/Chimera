@@ -737,11 +737,37 @@ class LocalModelProvider:
             if isinstance(item, dict)
         ]
         compact_catalog = {"tools": compact_tools}
-        visual_action_available = any(
-            item.get("id") == "computer.visual_action" for item in compact_tools
+        tool_ids = {item.get("id") for item in compact_tools}
+        visual_action_available = "computer.visual_action" in tool_ids
+        workspace_available = any(
+            isinstance(tool_id, str) and tool_id.startswith("workspace.")
+            for tool_id in tool_ids
+        )
+        app_control_available = any(
+            tool_id in {
+                "computer.inspect_window", "computer.inspect_elements",
+                "computer.inspect_controls", "computer.read_text",
+                "computer.invoke_element", "computer.set_value",
+                "computer.set_range_value", "computer.toggle_element",
+                "computer.select_element", "computer.expand_element",
+                "computer.collapse_element", "computer.scroll_element",
+                "computer.scroll_into_view", "computer.visual_action",
+            }
+            for tool_id in tool_ids
+        )
+        workspace_guidance = (
+            "Use only workspace-relative paths under WORKSPACE_SCOPE.root. Use the known_folders.desktop alias for Desktop requests. "
+            "Use create_document for real DOCX and create_file for plain text/source; never downgrade formats or overwrite. "
+            "Require exact Build Mode approval and report success only after independent file hash/size verification. "
+            if workspace_available else ""
+        )
+        app_control_guidance = (
+            "Use fresh UIA references from inspect_elements; only invoke actions listed for the observed control. "
+            "State changes require exact approval. Re-observe and verify the intended state after every mutation; Invoke acceptance is not completion. "
+            if app_control_available else ""
         )
         visual_guidance = (
-            "For custom canvases, inspect elements and target the largest visible enabled canvas-like child, not the title bar or whole window. "
+            "For custom canvases, target the largest visible enabled canvas-like child, not the title bar or whole window. "
             "Use its fresh reference_id. Use stroke for one path or multi_stroke for 1-16 pen-up paths, 2-64 points each, <=256 total; "
             "coordinates are normalized relative to that element (0.02-0.98). Approval is required. Re-observe and require verified=true "
             "plus changed_fraction>0 before reporting pixel change; pixel change alone does not prove the requested drawing is correct. "
@@ -773,24 +799,14 @@ class LocalModelProvider:
                 "Mark an item completed only when actual tool evidence supports the outcome; mark it blocked when a real prerequisite is missing. "
                 "A checklist is progress metadata, never permission to execute an action or proof that work succeeded. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
-                "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
-                "Without an active workspace scope, do not call workspace tools; use WORKSPACE_SCOPE.root as the current file boundary. "
-                "Use only workspace-relative paths. Use WORKSPACE_SCOPE.known_folders.desktop for Desktop requests when present; "
-                "never invent Linux paths on Windows or pass an absolute host path to a workspace file tool. "
-                "Choose the file tool from the requested format: use workspace.create_document for a real Microsoft Word .docx file, "
-                "with path, title, and content; use workspace.create_file for a plain .txt or source/text file. "
-                "Never silently downgrade a requested .docx to .txt or describe a text file as a Word document. "
-                "For a requested .docx, the path must end in .docx. Wait for exact Build Mode write approval. "
-                "Do not overwrite existing files. After approval, report success only when the tool result is completed and the file hash/size verification passes. "
+                + workspace_guidance +
                 "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "For explicit app-opening requests, inspect computer.list_applications for already-open apps. "
                 "Use computer.list_installed_applications to discover installed Start-menu apps, including packaged apps, "
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
                 "Never guess an application ID. After an approved computer.launch, continue only when its result has control_authorized=true and computer_session_id; inspect that session. Otherwise stop and report the authorization blocker. Never bypass Applications authorization. "
-                "Use fresh UI Automation element references and the actions reported for each element. "
-                "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
-                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. "
+                + app_control_guidance +
                 + visual_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
