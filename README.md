@@ -45,7 +45,8 @@ And that's still just the warm-up. I'm running out of breath listing the apps. T
 It is not tied to one model, one vendor, one application or one workflow. Run it with local GGUF models, connect an explicitly selected external provider when you choose, and grow its capabilities through an extensible connector system.
 
 <p align="center">
-  <img src="assets/chimera_workbench.jpg" alt="Chimera local agent workbench" width="100%">
+  <img src="assets/chimera_workbench_top.webp" alt="Chimera desktop workbench, upper view" width="800"><br>
+  <img src="assets/chimera_workbench_bottom.webp" alt="Chimera desktop workbench, lower view" width="800">
 </p>
 
 ---
