@@ -337,6 +337,7 @@ def test_browser_connector_is_registered_and_read_actions_are_read_only(tmp_path
 
     registry = ApplicationRegistry()
     connector = BrowserConnector(browser_paths={})
+    connector.manifest.is_installed = True
     registry.register(connector)
     actions = {item["id"]: item for item in application_tool_catalog(registry)}
 
