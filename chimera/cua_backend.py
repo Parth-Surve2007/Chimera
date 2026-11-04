@@ -784,8 +784,13 @@ class CuaDriverBackend:
             )
 
     @staticmethod
-    def _draw_digest(strokes: list[list[list[float]]]) -> str:
-        payload = json.dumps(strokes, separators=(",", ":"), allow_nan=False)
+    def _draw_digest(
+        strokes: list[list[list[float]]], duration_ms: int, steps: int,
+    ) -> str:
+        payload = json.dumps(
+            {"strokes": strokes, "duration_ms": duration_ms, "steps": steps},
+            separators=(",", ":"), allow_nan=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -847,7 +852,7 @@ class CuaDriverBackend:
         signature = self._canvas_signature(initial_element)
         draw_key = (owner_session_id, pid, window_id)
         try:
-            stroke_digest = self._draw_digest(strokes)
+            stroke_digest = self._draw_digest(strokes, duration_ms, steps)
         except (TypeError, ValueError):
             return {"status": "blocked", "verified": False, "reason": "drawing paths must be finite JSON numbers"}
         if foreground:
@@ -976,7 +981,7 @@ class CuaDriverBackend:
                         if not foreground and recommends_foreground and pending_retry_strokes:
                             with self._lock:
                                 self._foreground_draw_escalations[draw_key] = {
-                                    "stroke_digest": self._draw_digest(pending_retry_strokes),
+                                    "stroke_digest": self._draw_digest(pending_retry_strokes, duration_ms, steps),
                                     "canvas_signature": signature,
                                     "expires_at": time.time() + self.SNAPSHOT_TTL_SECONDS,
                                 }
