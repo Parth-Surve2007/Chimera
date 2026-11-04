@@ -720,6 +720,30 @@ class AgentRuntime:
             else:
                 needs_approval = permission not in {"workspace.read", "computer.observe"}
 
+            if tool_id == "workspace.create_file":
+                preflight = tools.run("create_file", decision["arguments"], approved=False)
+                if preflight.status != "awaiting_approval":
+                    error = preflight.error or "The requested file operation did not pass validation."
+                    payload = {
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "arguments": decision["arguments"],
+                        "result": preflight.data,
+                        "status": preflight.status,
+                        "error": error,
+                    }
+                    self.store.add_message(session_id, "tool", json.dumps(payload, separators=(",", ":")))
+                    self._record(session_id, "tool.failed", {
+                        "turn_id": turn_id,
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "status": preflight.status,
+                        "data": preflight.data,
+                        "error": error,
+                    })
+                    max_tools -= 1
+                    continue
+
             if needs_approval:
                 self.store.set_pending_tool(session_id, turn_id, invocation, tool_id, decision["arguments"])
                 with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='awaiting_approval',updated_at=? WHERE session_id=?", (_now(), session_id))
