@@ -34,6 +34,24 @@ _MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 _PAGE_TIMEOUT = 15_000
 
 
+class _PsutilProcessHandle:
+    """Minimal process handle for a browser started by a previous Chimera run."""
+    def __init__(self, process):
+        self._process = process
+
+    def poll(self):
+        try:
+            return None if self._process.is_running() and self._process.status() != "zombie" else 1
+        except Exception:
+            return 1
+
+    def terminate(self):
+        try:
+            self._process.terminate()
+        except Exception:
+            pass
+
+
 @dataclass
 class _BrowserRuntime:
     playwright: Any
@@ -310,21 +328,23 @@ class BrowserConnector(BaseApplicationConnector):
             from playwright.sync_api import sync_playwright
             factory = sync_playwright
         manager = factory()
-        playwright = manager.start() if hasattr(manager, "start") else manager
-        return manager, playwright
+        return manager.start() if hasattr(manager, "start") else manager
 
     def _attach(self, endpoint: str):
-        manager, playwright = self._start_playwright()
-        browser = playwright.chromium.connect_over_cdp(endpoint, timeout=8000)
-        contexts = browser.contexts
-        if not contexts:
-            browser.close()
+        playwright = self._start_playwright()
+        try:
+            browser = playwright.chromium.connect_over_cdp(endpoint, timeout=8000)
+            contexts = browser.contexts
+            if not contexts:
+                browser.close()
+                raise RuntimeError("browser CDP connection exposed no browser context")
+            return playwright, browser, contexts[0]
+        except Exception:
             try:
                 playwright.stop()
             except Exception:
                 pass
-            raise RuntimeError("browser CDP connection exposed no browser context")
-        return manager, playwright, browser, contexts[0]
+            raise
 
     def _load_saved_runtime(self, session_id: str, workspace: Path) -> _BrowserRuntime | None:
         metadata = workspace / ".chimera" / "browser" / self._session_key(session_id) / "session.json"
@@ -345,17 +365,11 @@ class BrowserConnector(BaseApplicationConnector):
             if str(Path(data["profile"]).resolve()).casefold() not in " ".join(command_line).casefold():
                 return None
             endpoint = f"http://127.0.0.1:{int(data['port'])}"
-            manager, playwright, browser, context = self._attach(endpoint)
-            process_handle = subprocess.Popen(
-                [executable],  # handle not used for control; PID identity is verified above
-                shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            process_handle.terminate()
+            playwright, browser, context = self._attach(endpoint)
             runtime = _BrowserRuntime(
-                manager, browser, context, process, int(data["pid"]),
-                float(data["process_create_time"]), executable, int(data["port"]),
-                Path(data["profile"]), workspace,
+                playwright, browser, context, _PsutilProcessHandle(process),
+                int(data["pid"]), float(data["process_create_time"]),
+                executable, int(data["port"]), Path(data["profile"]), workspace,
             )
             self._runtimes[session_id] = runtime
             return runtime
@@ -435,7 +449,7 @@ class BrowserConnector(BaseApplicationConnector):
                 pass
             raise TimeoutError(f"{browser_name} did not expose its loopback CDP endpoint within 15 seconds")
         try:
-            manager, playwright, browser, context = self._attach(endpoint)
+            playwright, browser, context = self._attach(endpoint)
             if not context.pages:
                 context.new_page()
             import psutil
@@ -455,7 +469,7 @@ class BrowserConnector(BaseApplicationConnector):
             temporary.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
             os.replace(temporary, metadata_path)
             self._runtimes[session_id] = _BrowserRuntime(
-                manager, browser, context, process, process.pid, created,
+                playwright, browser, context, process, process.pid, created,
                 str(Path(executable).resolve()), port, profile, workspace,
             )
             return {
@@ -497,7 +511,11 @@ class BrowserConnector(BaseApplicationConnector):
         if not isinstance(selector, str) or not selector.strip() or len(selector) > 300:
             raise ValueError("selector must be a non-empty string of at most 300 characters")
         if kind == "role":
-            return page.get_by_role(role, name=selector, exact=True)
+            if ":" not in selector:
+                raise ValueError("role selectors must use role:name format")
+            role_name, accessible_name = selector.split(":", 1)
+            BrowserConnector._selector_kind(kind, role_name)
+            return page.get_by_role(role_name, name=accessible_name, exact=True)
         if kind == "label":
             return page.get_by_label(selector, exact=True)
         if kind == "placeholder":
@@ -535,6 +553,10 @@ class BrowserConnector(BaseApplicationConnector):
             runtime = self._runtime()
             try:
                 runtime.browser.close()
+                try:
+                    runtime.playwright.stop()
+                except Exception:
+                    pass
             finally:
                 try:
                     runtime.process.terminate()
@@ -591,7 +613,7 @@ class BrowserConnector(BaseApplicationConnector):
                 return {"status": "awaiting_approval", "permission": "browser.input"}
             _runtime, page = self._page(arguments)
             locator = self._unique_visible(self._locator(
-                page, arguments["selector_kind"], arguments["selector"], arguments.get("role")
+                page, arguments["selector_kind"], arguments["selector"]
             ))
             tag_info = locator.evaluate("""el => ({
                 tag: (el.tagName || '').toLowerCase(),
