@@ -108,11 +108,14 @@ class FakeDriver:
     def __init__(
         self, *, refuse_background=False, refuse_background_draw=False,
         unverifiable_background_draw=False, partial_background_draw=False,
+        fail_background_drag_number=None,
     ):
         self.refuse_background = refuse_background
         self.refuse_background_draw = refuse_background_draw
         self.unverifiable_background_draw = unverifiable_background_draw
         self.partial_background_draw = partial_background_draw
+        self.fail_background_drag_number = fail_background_drag_number
+        self.background_drag_count = 0
         self.click_inputs = []
         self.drag_inputs = []
         self.shutdown_called = False
@@ -211,9 +214,14 @@ class FakeDriver:
 
     async def drag(self, request):
         self.drag_inputs.append(request.values)
+        if request.values["delivery_mode"] is DeliveryMode.BACKGROUND:
+            self.background_drag_count += 1
         if (
             request.values["delivery_mode"] is DeliveryMode.BACKGROUND
-            and self.refuse_background_draw
+            and (
+                self.refuse_background_draw
+                or self.background_drag_count == self.fail_background_drag_number
+            )
         ):
             raise FakeToolRefusal()
         if (
@@ -460,6 +468,49 @@ def test_cua_canvas_background_refusal_enables_only_exact_approved_foreground_re
         )
         assert second_retry["status"] == "blocked"
         assert len(driver.drag_inputs) == 2
+    finally:
+        backend.close()
+
+
+def test_cua_retry_after_completed_segment_contains_only_unfinished_strokes():
+    driver = FakeDriver(fail_background_drag_number=2)
+    backend = _backend(driver)
+    strokes = [[[0.1, 0.1], [0.4, 0.4], [0.8, 0.8]]]
+    try:
+        initial = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        result = backend.draw_path(
+            "conversation-a", 4321, 77, initial["snapshot_ref"],
+            initial["elements"][0]["element_token"], strokes,
+        )
+        assert result["status"] == "partial"
+        assert result["segments_sent"] == 1
+        assert result["foreground_retry_available"] is True
+        assert result["retry_strokes"] == [[[0.4, 0.4], [0.8, 0.8]]]
+        assert len(driver.drag_inputs) == 2
+        assert driver.drag_inputs[0]["delivery_mode"] is DeliveryMode.BACKGROUND
+        assert driver.drag_inputs[1]["delivery_mode"] is DeliveryMode.BACKGROUND
+
+        # The refusal invalidated its snapshot; the continuation needs a
+        # screenshot-bearing observation of the same canvas.
+        fresh = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        retry = backend.draw_path(
+            "conversation-a", 4321, 77, fresh["snapshot_ref"],
+            fresh["elements"][0]["element_token"], result["retry_strokes"],
+            foreground=True,
+        )
+        assert retry["status"] == "completed"
+        assert retry["verified"] is True
+        assert retry["semantic_verified"] is False
+        assert driver.drag_inputs[-1]["delivery_mode"] is DeliveryMode.FOREGROUND
+        assert driver.drag_inputs[-1]["from_x"] == 32
+        assert driver.drag_inputs[-1]["from_y"] == 32
+        assert driver.drag_inputs[-1]["to_x"] == 64
+        assert driver.drag_inputs[-1]["to_y"] == 64
+        assert len(driver.drag_inputs) == 3
     finally:
         backend.close()
 
