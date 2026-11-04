@@ -97,7 +97,7 @@ def test_agent_tool_catalog_exposes_file_creation_only_with_workspace(tmp_path):
 
 
 def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
-    provider = LocalModelProvider(LocalModelConfig(None, None, context=2048))
+    provider = LocalModelProvider(LocalModelConfig(None, None, context=2048, max_tokens=256))
     captured = {}
 
     def fake_structured(prompt, **kwargs):
