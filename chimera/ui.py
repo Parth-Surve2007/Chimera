@@ -1395,6 +1395,7 @@ class MainWindow:
     def _conversation_content(self):
         self.live_status_text = None
         content = []
+        workspace_path = getattr(self, "workspace_path", None) or default_workspace_root()
         try:
             messages = self.agent_store.messages(self.agent_session_id)
         except Exception:
@@ -1427,7 +1428,7 @@ class MainWindow:
                         ft.Text("◈", color=ACCENT, size=40),
                         ft.Text("What are we working on?", color=TEXT, size=27, weight=ft.FontWeight.BOLD),
                         ft.Text("A local-first agent for thinking, building and using your tools.", color=SECONDARY, size=13),
-                        ft.Text(f"Chimera can inspect files on {self.workspace_path}. New files require Build Mode and your approval.", color=MUTED, size=11, text_align=ft.TextAlign.CENTER),
+                        ft.Text(f"Chimera can inspect files on {workspace_path}. New files require Build Mode and your approval.", color=MUTED, size=11, text_align=ft.TextAlign.CENTER),
                         ft.Row(chips, wrap=True, spacing=8),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=16),
                     alignment=ft.Alignment(0, 0), expand=True,
