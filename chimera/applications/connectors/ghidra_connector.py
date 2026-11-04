@@ -130,17 +130,21 @@ class GhidraConnector(BaseApplicationConnector):
                 Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
                 if local_app_data else None
             )
+            install_roots = []
+            chimera_install = Path(local_app_data) / "Programs" / "Chimera" / "Ghidra" if local_app_data else None
+            if chimera_install and chimera_install.is_dir():
+                install_roots.append(chimera_install)
             if winget_root and winget_root.is_dir():
-                for package_root in sorted(
-                    winget_root.glob("NationalSecurityAgency.Ghidra_*"),
-                    reverse=True,
-                ):
-                    candidates = list(package_root.glob("**/support/analyzeHeadless.bat"))
-                    if candidates:
-                        headless = candidates[0]
-                        executable = str(headless)
-                        ghidra_home = str(headless.parents[1])
-                        break
+                install_roots.extend(
+                    winget_root.glob("NationalSecurityAgency.Ghidra_*")
+                )
+            for package_root in sorted(install_roots, key=lambda item: str(item), reverse=True):
+                candidates = list(package_root.glob("**/support/analyzeHeadless.bat"))
+                if candidates:
+                    headless = candidates[0]
+                    executable = str(headless)
+                    ghidra_home = str(headless.parents[1])
+                    break
 
         # Check running process
         is_running = False
