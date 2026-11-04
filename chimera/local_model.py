@@ -634,6 +634,106 @@ class LocalModelProvider:
                     content = heading + ":\n" + (
                         "\n".join(lines) if lines else "No matching applications found."
                     )
+                elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_elements":
+                    result = payload.get("result") or {}
+                    data = result.get("items", result) if isinstance(result, dict) else {}
+                    elements = data.get("elements", []) if isinstance(data, dict) else []
+                    if not isinstance(elements, list):
+                        elements = []
+
+                    def element_rank(element):
+                        if not isinstance(element, dict):
+                            return (-1, -1, -1)
+                        control = str(element.get("control_type") or "").casefold()
+                        name = str(element.get("name") or "").casefold()
+                        visible = not bool(element.get("offscreen", False))
+                        enabled = bool(element.get("enabled", False))
+                        rect = element.get("rectangle") or {}
+                        try:
+                            area = max(0, int(rect.get("right", 0)) - int(rect.get("left", 0))) * max(
+                                0, int(rect.get("bottom", 0)) - int(rect.get("top", 0))
+                            )
+                        except (TypeError, ValueError):
+                            area = 0
+                        semantic = (
+                            5 if control in {"canvas", "document"} else
+                            4 if control in {"custom", "pane"} else
+                            3 if any(word in name for word in ("canvas", "document", "editor", "drawing", "sheet", "slide")) else
+                            1 if control not in {"window", "titlebar", "menu"} else 0
+                        )
+                        return (int(visible and enabled), semantic, min(area, 2_000_000))
+
+                    ranked = sorted(
+                        (item for item in elements if isinstance(item, dict)),
+                        key=element_rank,
+                        reverse=True,
+                    )
+                    detail_limit = 20 if self.config.context >= 8192 else 12
+                    lines = []
+                    for element in ranked[:detail_limit]:
+                        rect = element.get("rectangle")
+                        if isinstance(rect, dict):
+                            bounds = ",".join(
+                                str(rect.get(key, "?")) for key in ("left", "top", "right", "bottom")
+                            )
+                        else:
+                            bounds = "unavailable"
+                        patterns = [
+                            str(value)[:32] for value in (element.get("patterns") or [])[:8]
+                        ]
+                        actions = [
+                            str(value)[:32] for value in (element.get("available_actions") or [])[:8]
+                        ]
+                        lines.append(
+                            "- ref={ref} | {type} | {name} | rect={rect} | enabled={enabled} "
+                            "| offscreen={offscreen} | patterns={patterns} | actions={actions}".format(
+                                ref=str(element.get("reference_id") or "")[:40],
+                                type=str(element.get("control_type") or "?")[:32],
+                                name=" ".join(str(element.get("name") or "").split())[:90] or "(unnamed)",
+                                rect=bounds,
+                                enabled=bool(element.get("enabled", False)),
+                                offscreen=bool(element.get("offscreen", False)),
+                                patterns=",".join(patterns) or "-",
+                                actions=",".join(actions) or "-",
+                            )
+                        )
+                    content = (
+                        "Fresh UI Automation observation"
+                        f" | hwnd={((data.get('windows') or [{}])[0].get('hwnd') if isinstance(data.get('windows'), list) and data.get('windows') else '?')}"
+                        f" | backend={data.get('backend', '?')}"
+                        f" | generation={data.get('generation', '?')}"
+                        f" | elements={len(elements)}\n"
+                        + ("\n".join(lines) if lines else "No accessible UIA elements were returned.")
+                        + "\nReferences are short-lived; use only these exact reference IDs from this observation."
+                    )
+                elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_window":
+                    result = payload.get("result") or {}
+                    data = result.get("items", result) if isinstance(result, dict) else {}
+                    windows = data.get("windows", []) if isinstance(data, dict) else []
+                    lines = []
+                    for window in (windows[:12] if isinstance(windows, list) else []):
+                        if isinstance(window, dict):
+                            lines.append(
+                                f"- hwnd={window.get('hwnd')} | title={' '.join(str(window.get('title') or '').split())[:100]} "
+                                f"| pid={window.get('pid')} | class={str(window.get('class_name') or '')[:48]}"
+                            )
+                    content = "Authorized application windows:\n" + (
+                        "\n".join(lines) if lines else "No authorized windows were observed."
+                    ) + "\nChoose the exact visible window HWND before inspecting its controls."
+                elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_visual_target":
+                    result = payload.get("result") or {}
+                    if isinstance(result, dict) and isinstance(result.get("items"), dict):
+                        result = result["items"]
+                    content = (
+                        "Local visual observation (not action proof): "
+                        + json.dumps({
+                            key: result.get(key) for key in (
+                                "status", "description", "reason", "reference_id",
+                                "target_name", "target_control_type", "target_rectangle",
+                                "evidence_scope", "hosted_fallback",
+                            ) if key in result
+                        }, ensure_ascii=False, separators=(",", ":"))[:2600]
+                    ) if isinstance(result, dict) else "Visual inspection returned no structured result."
                 else:
                     content = content[:700]
             elif role == "user":
@@ -681,7 +781,9 @@ class LocalModelProvider:
             "computer.launch": 4,
             "computer.inspect_window": 4,
             "computer.inspect_elements": 5,
-            "computer.read_text": 6,
+            "computer.visual_action": 6,
+            "computer.inspect_visual_target": 7,
+            "computer.read_text": 8,
             "computer.read_grid": 7,
             "computer.get_range_value": 8,
             "computer.inspect_pattern_support": 9,
@@ -736,6 +838,56 @@ class LocalModelProvider:
             if isinstance(item, dict)
         ]
         compact_catalog = {"tools": compact_tools}
+        tool_ids = {item.get("id") for item in compact_tools}
+        visual_action_available = "computer.visual_action" in tool_ids
+        visual_inspection_available = "computer.inspect_visual_target" in tool_ids
+        workspace_available = any(
+            isinstance(tool_id, str) and tool_id.startswith("workspace.")
+            for tool_id in tool_ids
+        )
+        app_control_available = any(
+            tool_id in {
+                "computer.inspect_window", "computer.inspect_elements",
+                "computer.inspect_controls", "computer.read_text",
+                "computer.invoke_element", "computer.set_value",
+                "computer.set_range_value", "computer.toggle_element",
+                "computer.select_element", "computer.expand_element",
+                "computer.collapse_element", "computer.scroll_element",
+                "computer.scroll_into_view", "computer.visual_action",
+            }
+            for tool_id in tool_ids
+        )
+        workspace_guidance = (
+            "Choose by format: use workspace.create_document for a real .docx and workspace.create_file for a plain .txt/source. "
+            "Never silently downgrade a requested .docx to .txt. Use only workspace-relative paths under WORKSPACE_SCOPE.root and "
+            "WORKSPACE_SCOPE.known_folders.desktop for Desktop requests. Never overwrite; require exact Build Mode approval and "
+            "report success only after independent file hash/size verification. "
+            if workspace_available else
+            "No workspace tools are available in this turn: do not call workspace tools or invent host filesystem paths. "
+        )
+        multi_window_guidance = (
+            "If an authorized application has multiple top-level windows, call computer.inspect_window first and select the exact visible hwnd by title/purpose. "
+            "Pass that hwnd to computer.inspect_elements; use depth 4-6 only when the needed controls are deeper, and keep the element limit bounded. "
+            if "computer.inspect_window" in tool_ids and "computer.inspect_elements" in tool_ids else ""
+        )
+        app_control_guidance = (
+            "Use fresh UIA references from inspect_elements; only invoke actions listed for the observed control. "
+            "State changes require exact approval. Re-observe and verify the intended state after every mutation; Invoke acceptance is not completion. "
+            if app_control_available else ""
+        )
+        visual_guidance = (
+            "For custom canvases, target the largest visible enabled canvas-like child, not the title bar or whole window. "
+            "Use its fresh reference_id. Use stroke for one path or multi_stroke for 1-16 pen-up paths, 2-64 points each, <=256 total; "
+            "coordinates are normalized relative to that element (0.02-0.98). Approval is required. Re-observe and require verified=true "
+            "plus changed_fraction>0 before reporting pixel change; pixel change alone does not prove the requested drawing is correct. "
+            if visual_action_available else ""
+        )
+
+        visual_inspection_guidance = (
+            "When semantic correctness of a custom canvas result matters, request computer.inspect_visual_target on the fresh canvas reference with a precise question. "
+            "This screenshot requires operator approval and uses only the configured local vision model. Treat its answer as an observation, not as proof of action completion. "
+            if visual_inspection_available else ""
+        )
 
         def render_prompt():
             return (
@@ -762,24 +914,14 @@ class LocalModelProvider:
                 "Mark an item completed only when actual tool evidence supports the outcome; mark it blocked when a real prerequisite is missing. "
                 "A checklist is progress metadata, never permission to execute an action or proof that work succeeded. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
-                "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
-                "Without an active workspace scope, do not call workspace tools; use WORKSPACE_SCOPE.root as the current file boundary. "
-                "Use only workspace-relative paths. Use WORKSPACE_SCOPE.known_folders.desktop for Desktop requests when present; "
-                "never invent Linux paths on Windows or pass an absolute host path to a workspace file tool. "
-                "Choose the file tool from the requested format: use workspace.create_document for a real Microsoft Word .docx file, "
-                "with path, title, and content; use workspace.create_file for a plain .txt or source/text file. "
-                "Never silently downgrade a requested .docx to .txt or describe a text file as a Word document. "
-                "For a requested .docx, the path must end in .docx. Wait for exact Build Mode write approval. "
-                "Do not overwrite existing files. After approval, report success only when the tool result is completed and the file hash/size verification passes. "
+                + workspace_guidance +
                 "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "For explicit app-opening requests, inspect computer.list_applications for already-open apps. "
                 "Use computer.list_installed_applications to discover installed Start-menu apps, including packaged apps, "
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
-                "Never guess an application ID. Launch requires approval. After launch, request exact "
-                "app authorization in Applications before interacting with its controls. Use the fresh UI Automation element references and the actions reported for each element. " 
-                "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
-                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. " 
+                "Never guess an application ID. After an approved computer.launch, continue only when its result has control_authorized=true and computer_session_id; inspect that session. Otherwise stop and report the authorization blocker. Never bypass Applications authorization. "
+                + multi_window_guidance + app_control_guidance + visual_guidance + visual_inspection_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"

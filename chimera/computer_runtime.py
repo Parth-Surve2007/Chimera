@@ -19,6 +19,7 @@ class ApplicationIdentity:
     process_create_time: float
     owner_session_id: str | None
     session_id: str
+    authorized_hwnds: tuple[int, ...] = ()
 
 @dataclass(frozen=True)
 class ElementReference:
@@ -93,7 +94,8 @@ class WindowsUIABackend:
             except Exception: return default
         try: name = item.window_text()
         except Exception: name = ""
-        return {"backend": "uia", "runtime_id": str(getattr(info, "runtime_id", None)), "parent": parent, "name": name, "automation_id": info.automation_id, "class_name": info.class_name, "control_type": info.control_type, "process_id": info.process_id, "rectangle": bounds, "enabled": safe_bool("is_enabled"), "offscreen": safe_bool("is_offscreen"), "focused": safe_bool("has_focus"), "patterns": patterns}
+        runtime_id = getattr(info, "runtime_id", None)
+        return {"backend": "uia", "runtime_id": str(runtime_id) if runtime_id is not None else None, "parent": parent, "name": name, "automation_id": info.automation_id, "class_name": info.class_name, "control_type": info.control_type, "process_id": info.process_id, "rectangle": bounds, "enabled": safe_bool("is_enabled"), "offscreen": safe_bool("is_offscreen"), "focused": safe_bool("has_focus"), "patterns": patterns}
     def elements(self, hwnd: int, depth=3, limit=250):
         root = self.desktop.window(handle=hwnd); result=[]; pending=[(root,0)]
         while pending and len(result)<limit:
@@ -394,6 +396,11 @@ class ComputerSessionManager:
         try: self.uia = WindowsUIABackend() if self.selector.select().name == "uia" else None
         except Exception: self.uia = None
         self.visual_input = ScopedWindowsInputBackend()
+        try:
+            from .vision import LocalVisionProvider
+            self.visual_perception = LocalVisionProvider.from_env()
+        except Exception:
+            self.visual_perception = None
         self.strategy = InteractionStrategyEngine([
             UIABackendDescriptor(self),
             BrowserBackendDescriptor(),
@@ -409,14 +416,14 @@ class ComputerSessionManager:
     def choose_interaction(self, operation: str, application_type: str = "native_windows", evidence: dict | None = None) -> dict:
         from dataclasses import asdict
         return asdict(self.strategy.choose(operation, application_type, evidence))
-    def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None) -> ApplicationIdentity:
-        """Authorize the exact live process returned by a verified app launch.
+    def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None, authorized_windows: list[dict] | None = None, expected_application_name: str | None = None) -> ApplicationIdentity:
+        """Authorize one live process, optionally restricted to launch-observed HWNDs.
 
-        Packaged Windows apps may be started through an execution alias
-        (WindowsApps\\mspaint.exe) while the window-owning process reports
-        its real package executable (often under WindowsApps\\...\\...exe).
-        Bind authorization to the live PID + creation time + actual executable,
-        and use the alias only as a basename sanity check.
+        A per-user WindowsApps execution alias can resolve to a different final
+        image path. That exception requires the WindowsApps path shape, exact
+        visible HWNDs still owned by the verified PID, and either a matching
+        executable basename or matching app title/class evidence. Later
+        observations and actions are restricted to that HWND set.
         """
         try:
             import psutil
@@ -427,16 +434,66 @@ class ComputerSessionManager:
             raise RuntimeError(f"application process identity could not be verified: {exc}") from exc
         if not actual:
             raise RuntimeError("application executable path is unavailable")
+
+        allowed_hwnds: tuple[int, ...] = ()
+        if authorized_windows is not None:
+            verified_hwnds = []
+            for item in authorized_windows:
+                if not isinstance(item, dict):
+                    continue
+                hwnd, observed_pid = item.get("hwnd"), item.get("pid")
+                if type(hwnd) is not int or hwnd <= 0 or observed_pid != int(pid):
+                    continue
+                if self.backend.window_process_id(hwnd) == int(pid):
+                    verified_hwnds.append(hwnd)
+            allowed_hwnds = tuple(dict.fromkeys(verified_hwnds))
+            if not allowed_hwnds:
+                raise RuntimeError("launch returned no visible window that still belongs to the verified process")
+
         if executable:
-            expected_name = Path(str(executable)).name.casefold()
-            actual_name = Path(actual).name.casefold()
-            if expected_name and actual_name != expected_name:
-                raise RuntimeError(
-                    "launched process does not match the requested application "
-                    f"(expected {expected_name}, observed {actual_name})"
+            expected = str(Path(executable).resolve())
+            if expected.casefold() != actual.casefold():
+                expected_parts = [part.casefold() for part in Path(expected).parts]
+                alias_indexes = [
+                    index for index, part in enumerate(expected_parts)
+                    if part == "appdata"
+                ]
+                is_windows_apps_alias = any(
+                    expected_parts[index:index + 4]
+                    == ["appdata", "local", "microsoft", "windowsapps"]
+                    for index in alias_indexes
                 )
-        # Re-read identity immediately before registering it to close the
-        # PID-reuse / process-exit race during authorization.
+                display_key = "".join(
+                    character for character in str(expected_application_name or "").casefold()
+                    if character.isalnum()
+                )
+                launch_window_title_match = bool(
+                    display_key
+                    and any(
+                        display_key in "".join(
+                            character for character in (
+                                str(item.get("title") or "") + " " + str(item.get("class_name") or "")
+                            ).casefold()
+                            if character.isalnum()
+                        )
+                        for item in (authorized_windows or [])
+                        if isinstance(item, dict) and item.get("hwnd") in allowed_hwnds
+                    )
+                )
+                alias_exception = (
+                    is_windows_apps_alias
+                    and bool(allowed_hwnds)
+                    and (
+                        Path(expected).name.casefold() == Path(actual).name.casefold()
+                        or launch_window_title_match
+                    )
+                )
+                if not alias_exception:
+                    raise RuntimeError(
+                        "application executable changed before authorization "
+                        f"(requested {Path(expected).name}, observed {Path(actual).name})"
+                    )
+
         try:
             current = psutil.Process(int(pid))
             if abs(float(current.create_time()) - created) > 0.01:
@@ -446,10 +503,21 @@ class ComputerSessionManager:
                 raise RuntimeError("application executable changed during authorization")
         except Exception as exc:
             raise RuntimeError(f"application process changed during authorization: {exc}") from exc
-        identity = ApplicationIdentity(int(pid), actual, created, owner_session_id, uuid.uuid4().hex)
+
+        identity = ApplicationIdentity(
+            int(pid), actual, created, owner_session_id, uuid.uuid4().hex, allowed_hwnds
+        )
         self.sessions[identity.session_id] = identity
         return identity
-process.exe()).resolve()).casefold() == identity.executable.casefold()
+
+    @staticmethod
+    def _identity_is_current(identity: ApplicationIdentity) -> bool:
+        try:
+            import psutil
+            process = psutil.Process(identity.pid)
+            if abs(float(process.create_time()) - identity.process_create_time) > 0.01:
+                return False
+            return str(Path(process.exe()).resolve()).casefold() == identity.executable.casefold()
         except Exception:
             return False
 
@@ -460,6 +528,8 @@ process.exe()).resolve()).casefold() == identity.executable.casefold()
         _generation, observation = self.observations.get(session_id, (0, None))
         if observation is None or time.time() - observation.created_at > self.observation_ttl:
             raise ValueError("fresh authorized window observation required")
+        if identity.authorized_hwnds and int(hwnd) not in identity.authorized_hwnds:
+            raise ValueError("window is outside the launch-approved HWND set")
         if not any(int(window.get("hwnd", 0)) == int(hwnd) and int(window.get("pid", 0)) == identity.pid for window in observation.windows):
             raise ValueError("window does not belong to the exact authorized process")
         if self.backend.window_process_id(int(hwnd)) != identity.pid:
@@ -480,32 +550,123 @@ process.exe()).resolve()).casefold() == identity.executable.casefold()
             return {"status": "blocked", "verified": False, "reason": str(exc)}
         return self.backend.close(int(hwnd), approved=True, expected_pid=identity.pid)
 
-    def observe(self, session_id: str) -> ComputerObservation:
+    def observe(
+        self,
+        session_id: str,
+        hwnd: int | None = None,
+        depth: int = 3,
+        limit: int = 250,
+    ) -> ComputerObservation:
+        """Inspect one authorized top-level window using bounded UIA traversal."""
         identity = self.sessions.get(session_id)
-        if not identity: raise KeyError("computer session not found")
-        if not self._identity_is_current(identity): raise RuntimeError("authorized process identity is no longer valid")
-        windows = [item for item in self.backend.list_applications() if item["pid"] == identity.pid and (item.get("executable") or "").casefold() == identity.executable.casefold()]
-        if not windows: raise RuntimeError("authorized application window is no longer available")
-        generation = self.observations.get(session_id, (0, None))[0] + 1; app = windows[0]; elements = []
+        if not identity:
+            raise KeyError("computer session not found")
+        if not self._identity_is_current(identity):
+            raise RuntimeError("authorized process identity is no longer valid")
+        if type(depth) is not int or not 0 <= depth <= 8:
+            raise ValueError("UI Automation depth must be an integer from 0 to 8")
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("UI Automation element limit must be an integer from 1 to 500")
+
+        expected_executable = str(Path(identity.executable).expanduser().resolve()).casefold()
+        applications = [
+            item for item in self.backend.list_applications()
+            if item["pid"] == identity.pid
+            and bool(item.get("executable"))
+            and str(Path(item.get("executable")).expanduser().resolve()).casefold() == expected_executable
+        ]
+        if not applications:
+            raise RuntimeError("authorized application process is no longer visible")
+        app = dict(applications[0])
+        available_windows = [
+            window for window in app.get("windows", [])
+            if isinstance(window, dict)
+            and int(window.get("pid", 0)) == identity.pid
+            and (
+                not identity.authorized_hwnds
+                or int(window.get("hwnd", 0)) in identity.authorized_hwnds
+            )
+        ]
+        if not available_windows:
+            raise RuntimeError("authorized application window is no longer available")
+
+        if hwnd is not None:
+            if type(hwnd) is not int or hwnd <= 0:
+                raise ValueError("hwnd must be a positive integer")
+            if identity.authorized_hwnds and hwnd not in identity.authorized_hwnds:
+                raise PermissionError("window is outside the launch-approved HWND set")
+            selected = next(
+                (window for window in available_windows if int(window.get("hwnd", 0)) == hwnd),
+                None,
+            )
+            if selected is None or self.backend.window_process_id(hwnd) != identity.pid:
+                raise PermissionError("selected window does not belong to the exact authorized process")
+            app["windows"] = [selected]
+        else:
+            app["windows"] = available_windows
+
+        target_hwnd = int(app["windows"][0]["hwnd"])
+        generation = self.observations.get(session_id, (0, None))[0] + 1
+        uia_elements = []
+        uia_error = None
         if self.uia:
-            try: elements = self.uia.elements(app["windows"][0]["hwnd"])
-            except Exception: self.uia = None
-        if not elements:
-            for window in app["windows"][:8]: elements.extend(self.backend.controls(window["hwnd"])[:100])
-        backend = "uia" if self.uia else "win32"
-        if self.uia:
-            enriched = []
-            for element in elements:
-                runtime_id = element.get("runtime_id")
-                if not runtime_id: continue
-                reference = ElementReference(uuid.uuid4().hex, session_id, element.get("parent") or app["windows"][0]["hwnd"], runtime_id, generation, time.time() + self.observation_ttl)
+            try:
+                uia_elements = self.uia.elements(target_hwnd, depth=depth, limit=limit)
+            except Exception as exc:
+                # Provider failures are window/app-specific. Preserve the
+                # backend for other sessions and retry it on later observations.
+                uia_error = str(exc)[:240]
+                uia_elements = []
+
+        # A successful provider query returning no usable runtime IDs is not
+        # a semantic observation. Fall back to read-only Win32 controls rather
+        # than labelling an empty Win32 tree as UIA.
+        uia_elements = [
+            item for item in uia_elements
+            if isinstance(item, dict) and item.get("runtime_id")
+        ]
+        backend = "uia" if self.uia is not None and uia_elements else "win32"
+        elements = []
+        if backend == "uia":
+            for element in uia_elements:
+                reference = ElementReference(
+                    uuid.uuid4().hex,
+                    session_id,
+                    int(element.get("parent") or target_hwnd),
+                    str(element["runtime_id"]),
+                    generation,
+                    time.time() + self.observation_ttl,
+                )
                 self.references[reference.reference_id] = reference
-                item = dict(element); item["reference_id"] = reference.reference_id; item["session_id"] = session_id; item["observation_generation"] = generation
-                item["available_actions"] = self._available_actions(item); enriched.append(item)
-            elements = enriched
-        observation = ComputerObservation(uuid.uuid4().hex, session_id, generation, time.time(), backend, app, app["windows"], elements, limitation=None if backend == "uia" else "UIA unavailable or provider query failed; Win32 fallback used")
+                item = dict(element)
+                item["reference_id"] = reference.reference_id
+                item["session_id"] = session_id
+                item["observation_generation"] = generation
+                item["available_actions"] = self._available_actions(item)
+                elements.append(item)
+            if not elements:
+                backend = "win32"
+        if backend == "win32":
+            elements = self.backend.controls(target_hwnd)[:min(limit, 250)]
+
+        observation = ComputerObservation(
+            uuid.uuid4().hex,
+            session_id,
+            generation,
+            time.time(),
+            backend,
+            app,
+            app["windows"],
+            elements,
+            limitation=(
+                None if backend == "uia" else
+                "UIA unavailable or returned no usable elements; Win32 fallback used"
+                + (f" (UIA error: {uia_error})" if uia_error else "")
+            ),
+        )
         self.observations[session_id] = (generation, observation)
         return observation
+
     def element_reference(self, session_id: str, hwnd: int) -> ElementReference:
         generation, observation = self.observations.get(session_id, (0, None))
         if observation is None: raise ValueError("fresh observation required")
@@ -538,6 +699,97 @@ process.exe()).resolve()).casefold() == identity.executable.casefold()
         if element.get("rectangle") and not element.get("offscreen", False):
             actions.append("visual_action")
         return actions
+
+    def inspect_visual_target(
+        self,
+        session_id: str,
+        reference_id: str,
+        question: str,
+        *,
+        approved: bool = False,
+        cancel_event=None,
+    ) -> dict:
+        """Inspect a fresh visible element with an explicitly configured local vision model."""
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "verified": False,
+                "permission": "computer.screenshot",
+                "reason": "operator approval is required before capturing application pixels",
+            }
+        if self.visual_perception is None:
+            return {
+                "status": "unavailable",
+                "verified": False,
+                "reason": (
+                    "no local vision model is configured; set CHIMERA_VISION_MODEL_PATH and "
+                    "CHIMERA_VISION_SERVER to user-supplied local assets"
+                ),
+                "hosted_fallback": False,
+            }
+        reference = self.references.get(reference_id)
+        if reference is None or reference.session_id != session_id:
+            return {
+                "status": "blocked", "verified": False,
+                "reason": "unknown or cross-session visual target reference",
+            }
+        try:
+            self.validate_reference(reference)
+            if self.uia is None:
+                raise RuntimeError("UI Automation is unavailable; screenshot target cannot be grounded")
+            identity = self.sessions.get(session_id)
+            if identity is None:
+                raise RuntimeError("authorized application session no longer exists")
+            target = self.uia.visual_target(
+                reference.hwnd, reference.runtime_id, identity.pid
+            )
+            rectangle = target["rectangle"]
+            window_rectangle = self.backend.window_rect(reference.hwnd)
+            if not isinstance(window_rectangle, dict):
+                raise RuntimeError("authorized application window geometry is unavailable")
+            if not (
+                window_rectangle["left"] <= rectangle["left"] < rectangle["right"] <= window_rectangle["right"]
+                and window_rectangle["top"] <= rectangle["top"] < rectangle["bottom"] <= window_rectangle["bottom"]
+            ):
+                raise PermissionError("visual target is outside the exact authorized window")
+            native = self.visual_input._native()
+            if not native.window_exists(reference.hwnd) or native.window_pid(reference.hwnd) != identity.pid:
+                raise PermissionError("authorized application window identity changed")
+            if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                return {
+                    "status": "awaiting_operator_focus", "verified": False,
+                    "reason": "bring the exact authorized application window to the foreground before screenshot analysis",
+                    "hwnd": reference.hwnd, "pid": identity.pid,
+                }
+            image = native.capture((
+                int(rectangle["left"]), int(rectangle["top"]),
+                int(rectangle["right"]), int(rectangle["bottom"]),
+            ))
+            if image is None:
+                raise RuntimeError("Windows could not capture the target element pixels")
+            if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                raise PermissionError("foreground application changed during screenshot capture")
+            result = self.visual_perception.inspect_image(
+                image, question, cancel_event=cancel_event
+            )
+            return {
+                **result,
+                "session_id": session_id,
+                "reference_id": reference_id,
+                "hwnd": reference.hwnd,
+                "target_name": target.get("name"),
+                "target_control_type": target.get("control_type"),
+                "target_rectangle": rectangle,
+                "evidence_scope": "fresh_uia_target_inside_authorized_window",
+                "verified": False,
+                "note": "Visual descriptions are observations, not proof that an action succeeded.",
+            }
+        except Exception as exc:
+            return {
+                "status": "failed", "verified": False,
+                "reason": f"visual target inspection failed: {exc}",
+                "hosted_fallback": False,
+            }
 
     def act_reference(
         self, session_id: str, reference_id: str, operation: str,
@@ -611,6 +863,18 @@ process.exe()).resolve()).casefold() == identity.executable.casefold()
                         "reason": "UI Automation target rectangle is not fully contained by the authorized HWND",
                         "backend": "scoped_win32_input",
                     }
+                strategy = self.choose_interaction(
+                    "visual_action",
+                    "native_windows",
+                    evidence={"fresh_window": True, "geometry": True},
+                )
+                if strategy.get("selected") != "grounded_input":
+                    return {
+                        "status": "blocked", "verified": False,
+                        "backend": "strategy",
+                        "reason": strategy.get("reason"),
+                        "selected_backend": strategy.get("selected"),
+                    }
                 action = (options or {}).get("action")
                 if action == "type_text":
                     control_type = str(target.get("control_type") or "").casefold()
@@ -644,13 +908,14 @@ process.exe()).resolve()).casefold() == identity.executable.casefold()
                             "reason": focus_result.get("reason") or "UI Automation could not focus the observed target",
                             "backend": "uia",
                         }
-                return self.visual_input.execute(
+                input_result = self.visual_input.execute(
                     hwnd=reference.hwnd,
                     expected_pid=identity.pid,
                     element_pid=target["process_id"],
                     rectangle=target["rectangle"],
                     action=action,
                     points=(options or {}).get("points"),
+                    strokes=(options or {}).get("strokes"),
                     button=(options or {}).get("button", "left"),
                     duration_ms=(options or {}).get("duration_ms", 250),
                     text=(options or {}).get("text"),
@@ -659,8 +924,21 @@ process.exe()).resolve()).casefold() == identity.executable.casefold()
                     scroll_steps=(options or {}).get("steps", 3),
                     approved=True,
                 )
+                return {**input_result, "strategy": strategy.get("selected")}
             except Exception as exc:
                 return {"status": "failed", "verified": False, "backend": "scoped_win32_input", "reason": str(exc)}
+        strategy = self.choose_interaction(
+            operation,
+            "native_windows",
+            evidence={"fresh_window": True, "geometry": True, "semantic_control": True},
+        )
+        if strategy.get("selected") != "uia":
+            return {
+                "status": "blocked", "verified": False,
+                "backend": "strategy",
+                "reason": strategy.reason,
+                "selected_backend": strategy.get("selected"),
+            }
         try:
             result = self.uia.action(
                 reference.hwnd, reference.runtime_id, operation, value,
@@ -673,6 +951,7 @@ process.exe()).resolve()).casefold() == identity.executable.casefold()
             "session_id": reference.session_id,
             "reference_id": reference.reference_id,
             "hwnd": reference.hwnd,
+            "strategy": strategy.get("selected"),
         }
 
     def validate_reference(self, reference: ElementReference) -> None:

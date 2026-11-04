@@ -675,10 +675,10 @@ def test_visual_action_manager_requires_fresh_target_and_operator_approval(tmp_p
     class VisualInput:
         def __init__(self):
             self.calls = []
-            self._native_backend = VisualNative()
+            self.native = VisualNative()
 
         def _native(self):
-            return self._native_backend
+            return self.native
 
         def execute(self, **kwargs):
             self.calls.append(kwargs)
@@ -741,8 +741,11 @@ def test_visual_action_blocks_noneditable_text_targets(tmp_path, monkeypatch):
             assert hwnd == 99
 
     class VisualInput:
+        def __init__(self):
+            self.native = VisualNative()
+
         def _native(self):
-            return VisualNative()
+            return self.native
 
     manager.backend.window_rect = lambda _hwnd: {
         "left": 0, "top": 0, "right": 800, "bottom": 800,

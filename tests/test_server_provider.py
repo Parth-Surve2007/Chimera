@@ -289,3 +289,96 @@ def test_server_manager_defaults_to_adaptive_gpu_offload():
     manager = make_manager()
 
     assert manager.gpu_layers == "auto"
+
+
+def test_chat_completion_accepts_only_bounded_inline_multimodal_images(monkeypatch):
+    manager = make_manager()
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse([
+            b'data: {"choices":[{"delta":{"content":"A house is visible."}}]}\n',
+            b'data: [DONE]\n',
+        ])
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    messages = [
+        {"role": "system", "content": "Describe visual evidence only."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is visible?"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}},
+            ],
+        },
+    ]
+
+    output, metrics = manager.complete(
+        prompt="What is visible?",
+        max_tokens=128,
+        messages=messages,
+    )
+
+    assert output == "A house is visible."
+    assert metrics["chat_template"] is True
+    assert captured["payload"]["messages"] == messages
+
+
+def test_multimodal_server_start_includes_configured_projector(tmp_path, monkeypatch):
+    model = tmp_path / "vision.gguf"
+    projector = tmp_path / "vision-mmproj.gguf"
+    executable = tmp_path / "llama-server.exe"
+    for item in (model, projector, executable):
+        item.write_bytes(b"fixture")
+    commands = []
+
+    class FakeProcess:
+        pid = 9876
+        returncode = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda command, **kwargs: (commands.append(command) or FakeProcess()),
+    )
+    manager = LlamaServerManager(
+        executable=str(executable),
+        model=model,
+        mmproj=projector,
+        timeout=2,
+        port=12345,
+    )
+    manager._health = lambda: True
+    manager.start()
+
+    assert "--mmproj" in commands[0]
+    assert str(projector) in commands[0]
+    assert manager.status()["state"] == "ready"
+
+
+def test_missing_multimodal_projector_fails_before_server_process_starts(tmp_path, monkeypatch):
+    model = tmp_path / "vision.gguf"
+    executable = tmp_path / "llama-server.exe"
+    model.write_bytes(b"fixture")
+    executable.write_bytes(b"fixture")
+    launched = []
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *args, **kwargs: (launched.append(True) or pytest.fail("server must not start")),
+    )
+    manager = LlamaServerManager(
+        executable=str(executable),
+        model=model,
+        mmproj=tmp_path / "missing-mmproj.gguf",
+        timeout=2,
+        port=12345,
+    )
+
+    with pytest.raises(Exception, match="multimodal projector"):
+        manager.start()
+
+    assert launched == []
+    assert manager.state == "stopped"

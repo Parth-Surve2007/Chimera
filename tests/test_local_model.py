@@ -792,3 +792,118 @@ def test_native_chat_recovery_instructions_are_added_to_system_message(tmp_path)
     assert "RECOVERY:" in captured[1][0]["content"]
     assert "repeated an earlier assistant answer" in captured[1][0]["content"]
     assert [item["role"] for item in captured[1][1:]] == ["assistant", "user"]
+
+
+def test_compact_local_agent_preserves_ranked_canvas_reference_from_ui_automation_tree():
+    provider = LocalModelProvider(
+        LocalModelConfig(None, None, context=8192, max_tokens=256)
+    )
+    captured = {}
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "I found the drawing surface."}, {"context": 8192}
+
+    provider.structured_with_metrics = fake_structured
+    elements = []
+    for index in range(40):
+        elements.append({
+            "reference_id": f"ordinary-control-{index}",
+            "name": f"Toolbar control {index}",
+            "control_type": "Button",
+            "rectangle": {"left": index, "top": 10, "right": index + 40, "bottom": 40},
+            "enabled": True,
+            "offscreen": False,
+            "patterns": ["Invoke"],
+            "available_actions": ["invoke_element"],
+        })
+    elements.append({
+        "reference_id": "paint-canvas-reference-0123456789",
+        "name": "Drawing Canvas",
+        "control_type": "Custom",
+        "rectangle": {"left": 100, "top": 140, "right": 1400, "bottom": 980},
+        "enabled": True,
+        "offscreen": False,
+        "patterns": ["Text"],
+        "available_actions": ["read_text", "visual_action"],
+    })
+    tool_payload = {
+        "tool": "computer.inspect_elements",
+        "status": "completed",
+        "result": {"items": {
+            "observation_id": "observation-1",
+            "session_id": "paint-session",
+            "generation": 7,
+            "backend": "uia",
+            "windows": [{"hwnd": 77, "pid": 4321, "title": "Paint"}],
+            "elements": elements,
+        }},
+    }
+
+    provider.decide(
+        [
+            SimpleNamespace(role="user", content="Open Paint and draw a house."),
+            SimpleNamespace(role="tool", content=json.dumps(tool_payload)),
+        ],
+        {"tools": [{
+            "id": "computer.inspect_elements",
+            "description": "Inspect a fresh UI Automation tree",
+            "arguments": {
+                "session_id": "string", "hwnd": "integer",
+                "depth": "integer", "limit": "integer",
+            },
+            "permission": "computer.observe",
+        }], "authorized_applications": []},
+        session={"mode": "build", "workspace": None},
+    )
+
+    prompt = captured["prompt"]
+    assert "paint-canvas-reference-0123456789" in prompt
+    assert "Drawing Canvas" in prompt
+    assert "100,140,1400,980" in prompt
+    assert "Custom" in prompt
+    assert "visual_action" in prompt
+    assert "generation=7" in prompt
+
+
+def test_compact_local_agent_preserves_each_authorized_top_level_window():
+    provider = LocalModelProvider(
+        LocalModelConfig(None, None, context=8192, max_tokens=256)
+    )
+    captured = {}
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "Choose the document window."}, {"context": 8192}
+
+    provider.structured_with_metrics = fake_structured
+    payload = {
+        "tool": "computer.inspect_window",
+        "status": "completed",
+        "result": {"items": {
+            "session_id": "editor-session",
+            "windows": [
+                {"hwnd": 77, "pid": 4321, "title": "Project A - Editor", "class_name": "EditorWindow"},
+                {"hwnd": 88, "pid": 4321, "title": "Project B - Editor", "class_name": "EditorWindow"},
+            ],
+        }},
+    }
+    provider.decide(
+        [
+            SimpleNamespace(role="user", content="Inspect Project B."),
+            SimpleNamespace(role="tool", content=json.dumps(payload)),
+        ],
+        {"tools": [{
+            "id": "computer.inspect_window", "description": "Inspect authorized windows",
+            "arguments": {"session_id": "string"}, "permission": "computer.observe",
+        }, {
+            "id": "computer.inspect_elements", "description": "Inspect selected window",
+            "arguments": {"session_id": "string", "hwnd": "integer"}, "permission": "computer.observe",
+        }], "authorized_applications": []},
+        session={"mode": "plan", "workspace": None},
+    )
+
+    assert "hwnd=77" in captured["prompt"]
+    assert "hwnd=88" in captured["prompt"]
+    assert "Project B - Editor" in captured["prompt"]
+    assert "Choose the exact visible window HWND" in captured["prompt"]

@@ -60,9 +60,10 @@ class Win32BackendDescriptor:
         self.manager = manager
 
     def describe(self):
+        available = os.name == "nt" and self.manager is not None
         return InteractionBackendInfo(
-            "win32", True,
-            ("inspect_controls", "screenshot"),
+            "win32", available,
+            ("inspect_controls", "screenshot") if available else (),
             ("window_identity", "window_geometry"),
             ("native_windows",),
             ("read-only observation fallback; no keyboard or mouse injection",),
@@ -77,13 +78,20 @@ class GroundedInputBackend:
         self.manager = manager
 
     def describe(self):
-        available = os.name == "nt"
+        visual_input = getattr(self.manager, "visual_input", None) if self.manager else None
+        injected_native = getattr(visual_input, "native", None) is not None
+        available = bool(
+            (os.name == "nt" or injected_native)
+            and self.manager is not None
+            and getattr(self.manager, "uia", None) is not None
+            and visual_input is not None
+        )
         return InteractionBackendInfo(
             "grounded_input", available,
             ("visual_action",) if available else (),
-            ("fresh_uia_element_rectangle", "exact_process_identity", "foreground_pid_guard", "post_action_pixel_diff") if available else (),
+            ("fresh_uia_element_rectangle", "exact_process_identity", "foreground_hwnd_pid_guard", "post_action_pixel_diff") if available else (),
             ("native_windows",),
-            () if available else ("Windows desktop input is unavailable on this platform",),
+            () if available else ("a live Windows UIA provider and scoped input backend are required",),
             ("computer.observe", "computer.input"),
             ("foreground_process_match", "input_packet_guard", "before_after_screenshot_hash"),
         )
@@ -115,12 +123,20 @@ class BrowserBackendDescriptor:
 
 
 class VisualPerceptionProvider(Protocol):
-    def inspect(self, image_path: str) -> dict[str, Any]: ...
+    def inspect_image(self, image: Any, question: str, cancel_event=None) -> dict[str, Any]: ...
 
 
 class UnavailableVisualProvider:
+    def inspect_image(self, image: Any, question: str = "", cancel_event=None) -> dict[str, Any]:
+        return {
+            "status": "unavailable",
+            "reason": "no compatible local vision provider configured",
+            "hosted_fallback": False,
+        }
+
     def inspect(self, image_path: str) -> dict[str, Any]:
-        return {"status": "unavailable", "reason": "no compatible local vision provider configured", "image": image_path}
+        """Backward-compatible inventory probe; never reads or sends the path."""
+        return self.inspect_image(image_path, "Describe the supplied image.")
 
 
 class InteractionStrategyEngine:

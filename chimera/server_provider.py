@@ -108,6 +108,46 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def validate_chat_messages(messages: list[dict]) -> None:
+    """Validate text-only chat and strictly bounded local inline image blocks."""
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("chat messages must be a non-empty list")
+    for item in messages:
+        if (
+            not isinstance(item, dict)
+            or item.get("role") not in {"system", "user", "assistant"}
+        ):
+            raise ValueError("chat messages must contain supported roles")
+        content = item.get("content")
+        if isinstance(content, str):
+            if len(content) > 100_000:
+                raise ValueError("chat message text exceeds the 100000-character limit")
+            continue
+        if not isinstance(content, list) or not 1 <= len(content) <= 4:
+            raise ValueError("multimodal content must be a list of 1 to 4 bounded text/image blocks")
+        for block in content:
+            if not isinstance(block, dict):
+                raise ValueError("multimodal content blocks must be objects")
+            block_type = block.get("type")
+            if block_type == "text":
+                text_value = block.get("text")
+                if not isinstance(text_value, str) or len(text_value) > 8000:
+                    raise ValueError("multimodal text blocks must contain at most 8000 characters")
+            elif block_type == "image_url":
+                image_url = block.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else None
+                if (
+                    not isinstance(url, str)
+                    or not url.startswith(("data:image/jpeg;base64,", "data:image/png;base64,"))
+                    or len(url) > 12 * 1024 * 1024
+                ):
+                    raise ValueError(
+                        "images must be bounded inline JPEG/PNG data URLs; remote image URLs are disabled"
+                    )
+            else:
+                raise ValueError("unsupported multimodal block type")
+
+
 class LlamaServerManager:
     def __init__(
         self,
@@ -119,9 +159,11 @@ class LlamaServerManager:
         timeout=60,
         port=None,
         idle_timeout=0,
+        mmproj: Path | None = None,
     ):
         self.executable, self.model, self.context, self.threads = executable, model, context, threads
         self.gpu_layers, self.timeout, self.port = gpu_layers, timeout, port or free_port()
+        self.mmproj = Path(mmproj).expanduser().resolve() if mmproj else None
         self.process = None
         self.state = "stopped"
         self.started_at = None
@@ -154,6 +196,8 @@ class LlamaServerManager:
                 raise ServerUnavailable("llama-server executable is unavailable")
             if not self.model or not self.model.is_file():
                 raise ServerUnavailable("GGUF model is unavailable")
+            if self.mmproj is not None and not self.mmproj.is_file():
+                raise ServerUnavailable("configured multimodal projector file is unavailable")
             self.state = "starting"
             self.last_error = None
             command = [
@@ -162,6 +206,8 @@ class LlamaServerManager:
                 "--threads", str(self.threads), "--n-gpu-layers", str(self.gpu_layers),
                 "--parallel", "1", "--no-webui",
             ]
+            if self.mmproj is not None:
+                command.extend(["--mmproj", str(self.mmproj)])
             # Never leave an unread PIPE attached to the long-lived inference process.
             kwargs = {
                 "stdout": subprocess.DEVNULL,
@@ -220,15 +266,7 @@ class LlamaServerManager:
         if grammar is not None and json_schema is not None:
             raise ValueError("provide either grammar or json_schema, not both")
         if messages is not None:
-            if not isinstance(messages, list) or not messages:
-                raise ValueError("chat messages must be a non-empty list")
-            for item in messages:
-                if (
-                    not isinstance(item, dict)
-                    or item.get("role") not in {"system", "user", "assistant"}
-                    or not isinstance(item.get("content"), str)
-                ):
-                    raise ValueError("chat messages must contain supported roles and string content")
+            validate_chat_messages(messages)
             if grammar is not None:
                 raise ValueError("chat-template requests currently support JSON Schema, not GBNF grammar")
         with self.request_lock:

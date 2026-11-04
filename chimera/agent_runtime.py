@@ -306,6 +306,23 @@ class AgentRuntime:
         session_workspace = session.get("workspace") if session else None
         if not session_workspace or not Path(session_workspace).is_dir():
             aliases = {key: value for key, value in aliases.items() if not key.startswith("workspace.")}
+        # Do not advertise UIA actions when no semantic provider is installed.
+        # Win32 child-window inspection remains read-only and is exposed separately.
+        if self.computer.uia is None:
+            uia_only = {
+                "computer.inspect_elements", "computer.inspect_pattern_support",
+                "computer.invoke_element", "computer.set_value", "computer.read_text",
+                "computer.get_range_value", "computer.set_range_value", "computer.read_grid",
+                "computer.scroll_element", "computer.scroll_into_view",
+                "computer.toggle_element", "computer.select_element",
+                "computer.expand_element", "computer.collapse_element",
+                "computer.visual_action",
+            }
+            aliases = {key: value for key, value in aliases.items() if key not in uia_only}
+        # Visual perception is opt-in and local. Never advertise it without a
+        # configured vision GGUF, llama-server executable and UIA target support.
+        if self.computer.visual_perception is None or self.computer.uia is None:
+            aliases.pop("computer.inspect_visual_target", None)
         authorized_applications = [
             {
                 "session_id": identity.session_id,
@@ -448,9 +465,10 @@ class AgentRuntime:
             "computer.list_installed_applications": {},
             "computer.list_windows": {},
             "computer.inspect_controls": {"session_id": str, "hwnd": int},
-            "computer.inspect_elements": {"session_id": str},
+            "computer.inspect_elements": {"session_id": str, "hwnd": int, "depth": int, "limit": int},
             "computer.launch": {"executable": str},
             "computer.screenshot": {"session_id": str, "hwnd": int, "path": str},
+            "computer.inspect_visual_target": {"session_id": str, "reference_id": str, "question": str},
             "computer.inspect_window": {"session_id": str},
             "computer.inspect_pattern_support": {"session_id": str, "reference_id": str},
             "computer.invoke_element": {"session_id": str, "reference_id": str},
@@ -468,7 +486,7 @@ class AgentRuntime:
             "computer.close_window": {"session_id": str, "hwnd": int},
             "computer.visual_action": {
                 "session_id": str, "reference_id": str, "action": str,
-                "points": list, "button": str, "duration_ms": int,
+                "points": list, "strokes": list, "button": str, "duration_ms": int,
                 "text": str, "key": str, "direction": str, "steps": int,
             },
         }
@@ -514,28 +532,68 @@ class AgentRuntime:
 
         if operation == "computer.visual_action":
             action = arguments["action"]
-            if action not in {"click", "double_click", "stroke", "type_text", "press_key", "scroll"}:
-                raise ValueError("visual action must be click, double_click, stroke, type_text, press_key, or scroll")
+            if action not in {"click", "double_click", "stroke", "multi_stroke", "type_text", "press_key", "scroll"}:
+                raise ValueError("visual action must be click, double_click, stroke, multi_stroke, type_text, press_key, or scroll")
+
+            coordinate_groups = []
             if action in {"click", "double_click", "scroll"}:
                 points = arguments.get("points")
                 if not isinstance(points, list) or len(points) != 1:
                     raise ValueError(f"{action} requires exactly one normalized point")
+                coordinate_groups.append(points)
             elif action == "stroke":
                 points = arguments.get("points")
                 if not isinstance(points, list) or not 2 <= len(points) <= 64:
                     raise ValueError("stroke requires between 2 and 64 normalized points")
-            if "points" in arguments:
-                for point in arguments["points"]:
+                coordinate_groups.append(points)
+            elif action == "multi_stroke":
+                strokes = arguments.get("strokes")
+                if not isinstance(strokes, list) or not 1 <= len(strokes) <= 16:
+                    raise ValueError("multi_stroke requires between 1 and 16 paths")
+                if any(not isinstance(path, list) or not 2 <= len(path) <= 64 for path in strokes):
+                    raise ValueError("each multi_stroke path requires 2 to 64 normalized points")
+                if sum(len(path) for path in strokes) > 256:
+                    raise ValueError("multi_stroke is limited to 256 total points")
+                coordinate_groups.extend(strokes)
+
+            # Validate every coordinate before an approval card is created.
+            # A multi-path action is one approval unit, but each path is fully
+            # checked so malformed coordinates never reach the operator.
+            for group in coordinate_groups:
+                for point in group:
                     if (
                         not isinstance(point, list) or len(point) != 2
-                        or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or not 0.02 <= float(v) <= 0.98 for v in point)
+                        or any(
+                            isinstance(value, bool)
+                            or not isinstance(value, (int, float))
+                            or not math.isfinite(float(value))
+                            or not 0.02 <= float(value) <= 0.98
+                            for value in point
+                        )
                     ):
                         raise ValueError("each point must be a normalized [x, y] pair between 0.02 and 0.98")
+
+            if "points" in arguments and action == "multi_stroke":
+                raise ValueError("multi_stroke uses strokes, not points")
+            if "strokes" in arguments and action != "multi_stroke":
+                raise ValueError("strokes are only valid with action=multi_stroke")
+            if "text" in arguments and action != "type_text":
+                raise ValueError("text is only valid with action=type_text")
+            if "key" in arguments and action != "press_key":
+                raise ValueError("key is only valid with action=press_key")
+            if ("direction" in arguments or "steps" in arguments) and action != "scroll":
+                raise ValueError("direction and steps are only valid with action=scroll")
             if "button" in arguments and arguments["button"] not in {"left", "right", "middle"}:
                 raise ValueError("button must be left, right, or middle")
-            if "duration_ms" in arguments and not 0 <= arguments["duration_ms"] <= 2000:
-                raise ValueError("duration_ms must be between 0 and 2000")
-            if action == "type_text" and (not isinstance(arguments.get("text"), str) or not 1 <= len(arguments["text"]) <= 4000):
+            if "duration_ms" in arguments and (
+                type(arguments["duration_ms"]) is not int
+                or not 0 <= arguments["duration_ms"] <= 2000
+            ):
+                raise ValueError("duration_ms must be an integer between 0 and 2000")
+            if action == "type_text" and (
+                not isinstance(arguments.get("text"), str)
+                or not 1 <= len(arguments["text"]) <= 4000
+            ):
                 raise ValueError("type_text requires 1 to 4000 characters")
             if action == "press_key" and not isinstance(arguments.get("key"), str):
                 raise ValueError("press_key requires a key name or chord")
@@ -1280,13 +1338,21 @@ class AgentRuntime:
                     result_status, result_error = "completed", None
                 elif operation == "computer.inspect_elements":
                     require_authorized_app(args["session_id"])
-                    observation = self.computer.observe(args["session_id"])
+                    observation = self.computer.observe(
+                        args["session_id"],
+                        hwnd=args.get("hwnd"),
+                        depth=args.get("depth", 3),
+                        limit=args.get("limit", 250),
+                    )
                     result_data = {
                         "observation_id": observation.observation_id,
                         "session_id": observation.session_id,
                         "generation": observation.generation,
                         "backend": observation.backend,
-                        "elements": observation.elements[:250],
+                        "selected_window": observation.windows[0] if observation.windows else None,
+                        "windows": observation.windows[:12],
+                        "elements": observation.elements[:args.get("limit", 250)],
+                        "element_count": len(observation.elements),
                         "limitation": observation.limitation,
                     }
                     result_status, result_error = "completed", None
@@ -1584,7 +1650,8 @@ class AgentRuntime:
             "computer.scroll_element", "computer.scroll_into_view",
             "computer.toggle_element", "computer.select_element",
             "computer.expand_element", "computer.collapse_element",
-            "computer.screenshot", "computer.launch", "computer.visual_action",
+            "computer.screenshot", "computer.inspect_visual_target",
+            "computer.launch", "computer.visual_action",
             "computer.close_window",
         }:
             operation = pending["tool"]
@@ -1616,6 +1683,7 @@ class AgentRuntime:
                     and result_data.get("verification") in {
                         "visible_window_executable_match",
                         "visible_window_process_match",
+                        "visible_window_title_match",
                     }
                 ):
                     try:
@@ -1623,6 +1691,8 @@ class AgentRuntime:
                             result_data["pid"],
                             result_data.get("executable"),
                             owner_session_id=session_id,
+                            authorized_windows=result_data.get("windows"),
+                            expected_application_name=result_data.get("display_name"),
                         )
                         result_data = {
                             **result_data,
@@ -1643,6 +1713,16 @@ class AgentRuntime:
                         "control_authorized": False,
                         "next_step": "The window appeared, but its process could not be matched strongly enough for automatic authorization. Confirm the exact process on the Applications page.",
                     }
+            elif operation == "computer.inspect_visual_target":
+                identity = self.computer.sessions.get(args["session_id"])
+                if not identity or identity.owner_session_id != session_id:
+                    raise PermissionError("application is not authorized for this Chimera conversation")
+                result_data = self.computer.inspect_visual_target(
+                    args["session_id"],
+                    args["reference_id"],
+                    args["question"],
+                    approved=True,
+                )
             elif operation == "computer.screenshot":
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:
