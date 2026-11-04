@@ -1416,6 +1416,46 @@ class AgentRuntime:
         task = self.task_store.active_for_session(session_id)
         if task:
             self._tasks[session_id] = task.task_id
+
+        # A crash can occur after tool.started is durable but before the
+        # pending-approval row is removed. Never execute that invocation twice.
+        if approve and task:
+            started_step = next(
+                (
+                    step for step in self.task_store.steps(task.task_id)
+                    if step.get("invocation_id") == pending["invocation_id"]
+                ),
+                None,
+            )
+            if started_step and started_step["status"] in {"running", "completed", "failed", "blocked"}:
+                reason = (
+                    "This exact approved invocation was already marked as started or finished. "
+                    "Its side-effect outcome must be verified from current application/file state; "
+                    "it will not be replayed from the stale approval card."
+                )
+                if started_step["status"] == "running":
+                    self.task_store.step_transition(
+                        started_step["step_id"], "blocked",
+                        result=started_step.get("result"),
+                        error="Process restart interrupted this action after it started. " + reason,
+                        invocation_id=pending["invocation_id"],
+                    )
+                self.store.clear_pending_tool(session_id)
+                with sqlite3.connect(self.store.db_path) as db:
+                    db.execute(
+                        "UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?",
+                        (_now(), session_id),
+                    )
+                self._record(session_id, "tool.failed", {
+                    "invocation_id": pending["invocation_id"],
+                    "tool": pending["tool"],
+                    "status": "blocked",
+                    "error": reason,
+                })
+                self.task_store.transition(task.task_id, "blocked")
+                self._tasks.pop(session_id, None)
+                return {"status": "blocked", "error": reason, "invocation_id": pending["invocation_id"]}
+
         if not approve:
             self.store.clear_pending_tool(session_id)
             self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "status": "denied", "error": "user denied approval"}))
@@ -1461,6 +1501,9 @@ class AgentRuntime:
                 "invocation_id": pending["invocation_id"], "tool": pending["tool"],
                 "arguments": pending["arguments"],
             })
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
             res_status = act_res.get("status", "completed")
             res_err = act_res.get("error")
@@ -1481,6 +1524,9 @@ class AgentRuntime:
             self._record(session_id, "tool.started", {
                 "invocation_id": pending["invocation_id"], "tool": operation, "arguments": args,
             })
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             if operation == "computer.launch":
                 result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
             elif operation == "computer.screenshot":
@@ -1524,6 +1570,19 @@ class AgentRuntime:
             TaskPolicy.validate(session.get("mode", "plan"), pending["tool"], spec["permission"])
             if spec["permission"] == "workspace.read":
                 raise PermissionError("workspace reads do not require approval")
+            self._record(session_id, "tool.permission.granted", {
+                "invocation_id": pending["invocation_id"],
+                "tool": pending["tool"],
+                "source": "operator",
+            })
+            self._record(session_id, "tool.started", {
+                "invocation_id": pending["invocation_id"],
+                "tool": pending["tool"],
+                "arguments": pending["arguments"],
+            })
+            self.store.clear_pending_tool(session_id)
+            with sqlite3.connect(self.store.db_path) as db:
+                db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             result = WorkspaceTools(
                 workspace, self._artifact_output_dir(workspace, session_id)
             ).run(operation, pending["arguments"], approved=True)
