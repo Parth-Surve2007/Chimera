@@ -323,6 +323,10 @@ class AgentRuntime:
         # configured vision GGUF, llama-server executable and UIA target support.
         if self.computer.visual_perception is None or self.computer.uia is None:
             aliases.pop("computer.inspect_visual_target", None)
+        # Cua Driver is an optional extra. Its discovery tool is safe
+        # without an authorized app; all target-window tools remain gated.
+        if self.computer.cua is None:
+            aliases = {key: value for key, value in aliases.items() if not key.startswith("computer.cua_")}
         authorized_applications = [
             {
                 "session_id": identity.session_id,
@@ -363,7 +367,7 @@ class AgentRuntime:
             # explicitly authorized for this conversation.
             if key.startswith("computer.") and key not in {
                 "computer.launch", "computer.list_applications",
-                "computer.list_installed_applications",
+                "computer.list_installed_applications", "computer.cua_list_apps",
             } and not authorized_applications:
                 continue
             catalog_tools.append({"id": key, **tool_catalog()["operations"][value]})
