@@ -75,51 +75,83 @@ class ExperienceLearningEngine:
         messages: list[Any],
         events: list[dict[str, Any]],
     ) -> ProposedSkill:
-        """Inspect execution trace, redact task-specific secrets, and synthesize a ProposedSkill."""
+        """Extract reusable action schemas from successful tool traces.
+
+        New runtime messages persist arguments and explicit status. Older
+        traces may omit both; they remain readable for backwards compatibility,
+        but their result payload is retained only as redacted historical data.
+        """
         reusable_steps = []
         permissions_needed = set()
 
-        for m in messages:
-            role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else "")
-            content = getattr(m, "content", "") if not isinstance(m, dict) else m.get("content", "")
+        for message in messages:
+            role = getattr(message, "role", None) or (message.get("role") if isinstance(message, dict) else "")
+            if role != "tool":
+                continue
+            content = getattr(message, "content", "") if not isinstance(message, dict) else message.get("content", "")
+            try:
+                data = json.loads(content) if isinstance(content, str) else content
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
 
-            if role == "tool":
+            # Missing status means an older persisted success-shaped result.
+            # An explicit non-completed status is never learned as a skill step.
+            if data.get("status") not in (None, "completed"):
+                continue
+            tool_name = data.get("tool", "")
+            if not isinstance(tool_name, str) or not tool_name or tool_name.startswith("agent."):
+                continue
+
+            permission = None
+            if tool_name.startswith("application."):
                 try:
-                    data = json.loads(content) if isinstance(content, str) else content
-                    tool_name = data.get("tool", "")
-                    if tool_name:
-                        # Extract permission from registry if application action, or fall back to heuristic
-                        perm = None
-                        if tool_name.startswith("application."):
-                            from .applications.registry import get_application_registry
-                            from .applications.dispatch import decode_tool_id
-                            decoded = decode_tool_id(tool_name)
-                            if decoded:
-                                conn = get_application_registry().get(decoded[0])
-                                if conn:
-                                    act = next((a for a in conn.manifest.actions if a.action_id == decoded[1]), None)
-                                    if act:
-                                        perm = act.permission
-                        if not perm and ("." in tool_name):
-                            app_part = tool_name.replace("application.", "")
-                            if "." in app_part:
-                                a_id, act_name = app_part.split(".", 1)
-                                from .applications.registry import get_application_registry
-                                conn = get_application_registry().get(a_id)
-                                if conn:
-                                    act = next((a for a in conn.manifest.actions if a.action_id == act_name), None)
-                                    if act:
-                                        perm = act.permission
-                        if not perm:
-                            read_indicators = ("list", "read", "extract", "inspect", "enumerate", "scan", "get", "query", "search", "find")
-                            perm = f"{tool_name.split('.')[0]}.read" if any(k in tool_name for k in read_indicators) else f"{tool_name.split('.')[0]}.write"
-                        permissions_needed.add(perm)
-                        reusable_steps.append({
-                            "action": tool_name,
-                            "sanitized_arguments": self._redact_secrets(data.get("result", {})),
-                        })
+                    from .applications.registry import get_application_registry
+                    from .applications.dispatch import decode_tool_id
+                    decoded = decode_tool_id(tool_name)
+                    if decoded:
+                        connector = get_application_registry().get(decoded[0])
+                        if connector:
+                            action = next((item for item in connector.manifest.actions if item.action_id == decoded[1]), None)
+                            if action:
+                                permission = action.permission
                 except Exception:
-                    pass
+                    permission = None
+
+            if not permission and "." in tool_name:
+                app_part = tool_name.replace("application.", "")
+                if "." in app_part:
+                    app_id, action_name = app_part.split(".", 1)
+                    try:
+                        from .applications.registry import get_application_registry
+                        connector = get_application_registry().get(app_id)
+                        if connector:
+                            action = next((item for item in connector.manifest.actions if item.action_id == action_name), None)
+                            if action:
+                                permission = action.permission
+                    except Exception:
+                        permission = None
+
+            if not permission:
+                read_indicators = ("list", "read", "extract", "inspect", "enumerate", "scan", "get", "query", "search", "find")
+                permission = f"{tool_name.split('.')[0]}.read" if any(token in tool_name for token in read_indicators) else f"{tool_name.split('.')[0]}.write"
+            permissions_needed.add(permission)
+
+            result_data = data.get("result")
+            result_fields = sorted(str(key)[:80] for key in result_data)[:20] if isinstance(result_data, dict) else []
+            if isinstance(data.get("arguments"), dict):
+                # Prefer sanitized argument shapes, never prior task-specific values.
+                sanitized_arguments = self._argument_schema(self._redact_secrets(data["arguments"]))
+            else:
+                # Legacy records have no arguments. Preserve only redacted historical evidence.
+                sanitized_arguments = self._redact_secrets(result_data or {})
+
+            reusable_steps.append({
+                "action": tool_name,
+                "sanitized_arguments": sanitized_arguments,
+                "expected_result_fields": result_fields,
+            })
 
         skill = ProposedSkill(
             skill_id=f"skill_{uuid.uuid4().hex[:8]}",
@@ -127,14 +159,32 @@ class ExperienceLearningEngine:
             description=f"Extracted procedure for: {task_objective}",
             version="1.0.0",
             source_session_id=session_id,
-            required_permissions=sorted(list(permissions_needed)),
+            required_permissions=sorted(permissions_needed),
             parameters_schema={"workspace_relative": "string"},
             reusable_steps=reusable_steps,
             expected_outputs=["verified_inspection_summary"],
         )
-
         self.skill_store.save(skill)
         return skill
+
+    @staticmethod
+    def _argument_schema(data: Any) -> Any:
+        """Keep argument shapes while removing run-specific values from learned skills."""
+        if isinstance(data, dict):
+            return {str(key): ExperienceLearningEngine._argument_schema(value) for key, value in data.items()}
+        if isinstance(data, list):
+            return {"type": "array", "items": ExperienceLearningEngine._argument_schema(data[0]) if data else "any"}
+        if isinstance(data, bool):
+            return "boolean"
+        if isinstance(data, int):
+            return "integer"
+        if isinstance(data, float):
+            return "number"
+        if isinstance(data, str):
+            return "string"
+        if data is None:
+            return "null"
+        return "any"
 
     @staticmethod
     def _redact_secrets(data: Any) -> Any:
