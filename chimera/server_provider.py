@@ -247,11 +247,7 @@ class LlamaServerManager:
                 if json_schema is not None:
                     payload["response_format"] = {
                         "type": "json_schema",
-                        "json_schema": {
-                            "name": "chimera_agent_decision",
-                            "strict": True,
-                            "schema": json_schema,
-                        },
+                        "schema": json_schema,
                     }
                 structured_mode = "json_schema" if json_schema is not None else "none"
             else:
