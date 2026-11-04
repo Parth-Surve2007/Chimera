@@ -493,15 +493,17 @@ class LocalModelProvider:
         }
 
         tool_priority = {
-            "computer.list_applications": 0,
-            "computer.launch": 1,
-            "workspace.list_files": 2,
-            "workspace.search_files": 3,
-            "workspace.read_text": 4,
-            "workspace.create_document": 5,
-            "workspace.create_file": 6,
-            "workspace.inspect_file": 7,
-            "workspace.search_text": 8,
+            "agent.todo_write": 0,
+            "agent.todo_read": 1,
+            "computer.list_applications": 2,
+            "computer.launch": 3,
+            "workspace.list_files": 4,
+            "workspace.search_files": 5,
+            "workspace.read_text": 6,
+            "workspace.create_document": 7,
+            "workspace.create_file": 8,
+            "workspace.inspect_file": 9,
+            "workspace.search_text": 10,
         }
         available_tools = [
             (index, item)
@@ -550,6 +552,11 @@ class LocalModelProvider:
                 "do not invent a python, code, shell, or execution tool. Only call a tool when the user explicitly asks "
                 "you to create/edit a file, run something, or interact with an application. "
                 "Treat the latest USER message as the task; earlier messages are context. "
+                "For multiple meaningful steps, first call agent.todo_write with a concise checklist of 2-8 outcome steps. "
+                "Set exactly one next item to in_progress and the rest to pending. Do not create a checklist for greetings, simple answers, or one-step requests. "
+                "After real tool results or verified milestones, update the checklist. Use agent.todo_read when resuming or when progress is unclear. "
+                "Mark an item completed only when actual tool evidence supports the outcome; mark it blocked when a real prerequisite is missing. "
+                "A checklist is progress metadata, never permission to execute an action or proof that work succeeded. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
                 "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
                 "Without an active workspace scope, do not call workspace tools; use WORKSPACE_SCOPE.root as the current file boundary. "
