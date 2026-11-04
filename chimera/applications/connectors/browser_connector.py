@@ -765,6 +765,8 @@ class BrowserConnector(BaseApplicationConnector):
                 value = arguments.get("value")
                 if not isinstance(value, str) or not value or len(value) > 500:
                     raise ValueError("option value must be a non-empty string of at most 500 characters")
+                if not locator.is_enabled():
+                    raise ValueError("selected dropdown is disabled")
                 selected = locator.select_option(value=value, timeout=5000)
                 if value not in selected:
                     raise RuntimeError("dropdown selection did not verify")
@@ -825,8 +827,12 @@ class BrowserConnector(BaseApplicationConnector):
             target = self._workspace_file(runtime.workspace, arguments["relative_path"], suffix=".png")
             target.parent.mkdir(parents=True, exist_ok=True)
             payload = page.screenshot(path=str(target), full_page=True, timeout=10_000)
+            saved = target.read_bytes()
+            if not saved.startswith(b"\\x89PNG\\r\\n\\x1a\\n") or saved != payload:
+                raise RuntimeError("saved browser screenshot failed PNG signature or byte-for-byte verification")
             return {
                 "status": "completed", "path": target.relative_to(runtime.workspace).as_posix(),
-                "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+                "bytes": len(saved), "sha256": hashlib.sha256(saved).hexdigest(),
+                "independent_verification": True,
             }
         raise ValueError(f"unknown browser action: {action_id}")
