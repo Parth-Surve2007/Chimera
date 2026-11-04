@@ -456,10 +456,28 @@ class ComputerSessionManager:
                     == ["appdata", "local", "microsoft", "windowsapps"]
                     for index in alias_indexes
                 )
+                display_key = "".join(
+                    character for character in str(expected_application_name or "").casefold()
+                    if character.isalnum()
+                )
+                launch_window_title_match = bool(
+                    display_key
+                    and any(
+                        display_key in "".join(
+                            character for character in str(item.get("title") or "").casefold()
+                            if character.isalnum()
+                        )
+                        for item in (authorized_windows or [])
+                        if isinstance(item, dict) and item.get("hwnd") in allowed_hwnds
+                    )
+                )
                 alias_exception = (
                     is_windows_apps_alias
-                    and Path(expected).name.casefold() == Path(actual).name.casefold()
                     and bool(allowed_hwnds)
+                    and (
+                        Path(expected).name.casefold() == Path(actual).name.casefold()
+                        or launch_window_title_match
+                    )
                 )
                 if not alias_exception:
                     raise RuntimeError(
