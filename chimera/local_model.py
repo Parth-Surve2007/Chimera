@@ -612,7 +612,7 @@ class LocalModelProvider:
         if recovery_reason:
             retry_prompt = (
                 prompt
-                + "\\n\\nRECOVERY: " + recovery_reason + " "
+                + "\n\nRECOVERY: " + recovery_reason + " "
                 "Re-evaluate the request from scratch. You may return a message with a useful direct answer, "
                 "or select exactly one tool ID from the valid tool IDs in the schema. "
                 "For a code-writing or programming question that asks for code in chat, return the code directly "
