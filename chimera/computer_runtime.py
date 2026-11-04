@@ -464,7 +464,9 @@ class ComputerSessionManager:
                     display_key
                     and any(
                         display_key in "".join(
-                            character for character in str(item.get("title") or "").casefold()
+                            character for character in (
+                                str(item.get("title") or "") + " " + str(item.get("class_name") or "")
+                            ).casefold()
                             if character.isalnum()
                         )
                         for item in (authorized_windows or [])
