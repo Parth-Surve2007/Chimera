@@ -745,3 +745,145 @@ def test_repeated_invalid_desktop_arguments_are_blocked_after_one_retry(tmp_path
         event.event_type == "tool.call.requested"
         for event in store.events(session_id)
     )
+
+
+
+def test_packaged_notepad_launch_authorizes_actual_windowsapps_process_before_inspection(tmp_path, monkeypatch):
+    class LaunchAndInspectProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+            self.inspection_was_advertised = False
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            ids = {item["id"] for item in catalog["tools"]}
+            if self.calls == 1:
+                assert "computer.launch" in ids
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.launch",
+                    "arguments": {"executable": "Notepad"},
+                    "invocation_id": "launch-packaged-notepad",
+                }
+            if self.calls == 2:
+                self.inspection_was_advertised = "computer.inspect_window" in ids
+                assert self.inspection_was_advertised
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.inspect_window",
+                    "arguments": {"session_id": "packaged-notepad-session"},
+                    "invocation_id": "inspect-packaged-notepad",
+                }
+            observed = [
+                item.content for item in messages
+                if getattr(item, "role", None) == "tool"
+            ]
+            assert any("Untitled - Notepad" in item for item in observed)
+            return {
+                "type": "message",
+                "content": "Notepad was opened, authorized, and its window was inspected.",
+            }
+
+    import chimera.agent_runtime as agent_runtime_module
+
+    packaged_application = "appsfolder:Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+    launch_calls = []
+
+    def fake_launch(self, executable, approved=False):
+        launch_calls.append((executable, approved))
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "application": packaged_application,
+                "requested_application": "Notepad",
+                "display_name": "Notepad",
+                "launch_kind": "appsfolder",
+                "permission": "computer.launch",
+            }
+        return {
+            "status": "completed",
+            "pid": 456,
+            "spawned_pid": 111,
+            "executable": None,
+            "application": packaged_application,
+            "display_name": "Notepad",
+            "launch_kind": "appsfolder",
+            "verification": "visible_window_process_match",
+            "windows": [
+                {"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"},
+            ],
+        }
+
+    monkeypatch.setattr(agent_runtime_module.WindowsComputerUse, "launch", fake_launch)
+    provider = LaunchAndInspectProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    authorization_calls = []
+
+    def authorize_actual_process(
+        pid,
+        executable=None,
+        owner_session_id=None,
+        authorized_windows=None,
+        expected_application_name=None,
+    ):
+        authorization_calls.append({
+            "pid": pid,
+            "executable": executable,
+            "owner_session_id": owner_session_id,
+            "authorized_windows": authorized_windows,
+            "expected_application_name": expected_application_name,
+        })
+        identity = SimpleNamespace(
+            session_id="packaged-notepad-session",
+            owner_session_id=session_id,
+            pid=pid,
+            executable=r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad\Notepad.exe",
+            process_create_time=1.0,
+            authorized_hwnds=(77,),
+        )
+        runtime.computer.sessions[identity.session_id] = identity
+        return identity
+
+    monkeypatch.setattr(runtime.computer, "create", authorize_actual_process)
+    monkeypatch.setattr(
+        runtime.computer,
+        "_identity_is_current",
+        lambda identity: identity is runtime.computer.sessions.get(identity.session_id),
+    )
+    monkeypatch.setattr(
+        runtime.computer,
+        "observe",
+        lambda app_session_id: SimpleNamespace(
+            session_id=app_session_id,
+            windows=[{"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"}],
+            backend="uia",
+            application={"profile": {"display_name": "Windows Notepad"}},
+        ),
+    )
+
+    pending = runtime.send(
+        session_id,
+        "Open Notepad and inspect its window.",
+    )
+    assert pending["status"] == "awaiting_approval"
+    assert pending["tool"] == "computer.launch"
+
+    result = runtime.approve_pending(session_id, True)
+
+    assert result["status"] == "completed"
+    assert "Notepad was opened, authorized, and its window was inspected." in result["message"].content
+    assert provider.calls == 3
+    assert provider.inspection_was_advertised is True
+    assert launch_calls == [("C:\\Windows\\System32\\notepad.exe", False), (packaged_application, True)] or launch_calls == [("Notepad", False), (packaged_application, True)]
+    assert authorization_calls == [{
+        "pid": 456,
+        "executable": None,
+        "owner_session_id": session_id,
+        "authorized_windows": [
+            {"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"},
+        ],
+        "expected_application_name": "Notepad",
+    }]
