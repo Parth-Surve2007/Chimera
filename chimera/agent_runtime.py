@@ -468,7 +468,7 @@ class AgentRuntime:
             "computer.close_window": {"session_id": str, "hwnd": int},
             "computer.visual_action": {
                 "session_id": str, "reference_id": str, "action": str,
-                "points": list, "button": str, "duration_ms": int,
+                "points": list, "strokes": list, "button": str, "duration_ms": int,
                 "text": str, "key": str, "direction": str, "steps": int,
             },
         }
@@ -514,8 +514,8 @@ class AgentRuntime:
 
         if operation == "computer.visual_action":
             action = arguments["action"]
-            if action not in {"click", "double_click", "stroke", "type_text", "press_key", "scroll"}:
-                raise ValueError("visual action must be click, double_click, stroke, type_text, press_key, or scroll")
+            if action not in {"click", "double_click", "stroke", "multi_stroke", "type_text", "press_key", "scroll"}:
+                raise ValueError("visual action must be click, double_click, stroke, multi_stroke, type_text, press_key, or scroll")
             if action in {"click", "double_click", "scroll"}:
                 points = arguments.get("points")
                 if not isinstance(points, list) or len(points) != 1:
@@ -524,6 +524,14 @@ class AgentRuntime:
                 points = arguments.get("points")
                 if not isinstance(points, list) or not 2 <= len(points) <= 64:
                     raise ValueError("stroke requires between 2 and 64 normalized points")
+            elif action == "multi_stroke":
+                strokes = arguments.get("strokes")
+                if not isinstance(strokes, list) or not 1 <= len(strokes) <= 16:
+                    raise ValueError("multi_stroke requires between 1 and 16 paths")
+                if any(not isinstance(path, list) or not 2 <= len(path) <= 64 for path in strokes):
+                    raise ValueError("each multi_stroke path requires 2 to 64 normalized points")
+                if sum(len(path) for path in strokes) > 256:
+                    raise ValueError("multi_stroke is limited to 256 total points")
             if "points" in arguments:
                 for point in arguments["points"]:
                     if (
