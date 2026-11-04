@@ -1386,7 +1386,26 @@ class AgentRuntime:
                         raise PermissionError("authorized application process identity has changed")
                     return identity
 
-                if operation == "computer.list_applications":
+                if operation == "computer.cua_list_apps":
+                    cua_result = self.computer.cua_list_apps()
+                    result_data = cua_result
+                    result_status = cua_result.get("status", "failed")
+                    result_error = cua_result.get("reason")
+                elif operation == "computer.cua_list_windows":
+                    cua_result = self.computer.cua_list_windows(
+                        args["session_id"], session_id
+                    )
+                    result_data = cua_result
+                    result_status = cua_result.get("status", "failed")
+                    result_error = cua_result.get("reason")
+                elif operation == "computer.cua_inspect_window":
+                    cua_result = self.computer.cua_inspect_window(
+                        args["session_id"], session_id, args["window_id"],
+                    )
+                    result_data = cua_result
+                    result_status = cua_result.get("status", "failed")
+                    result_error = cua_result.get("reason")
+                elif operation == "computer.list_applications":
                     result_data = computer.list_applications()
                     result_status, result_error = "completed", None
                 elif operation == "computer.list_installed_applications":
@@ -1730,7 +1749,9 @@ class AgentRuntime:
             "computer.expand_element", "computer.collapse_element",
             "computer.screenshot", "computer.inspect_visual_target",
             "computer.launch", "computer.visual_action",
-            "computer.close_window",
+            "computer.close_window", "computer.cua_capture_window",
+            "computer.cua_click", "computer.cua_click_foreground",
+            "computer.cua_draw_path",
         }:
             operation = pending["tool"]
             args = pending["arguments"]
@@ -1791,6 +1812,30 @@ class AgentRuntime:
                         "control_authorized": False,
                         "next_step": "The window appeared, but its process could not be matched strongly enough for automatic authorization. Confirm the exact process on the Applications page.",
                     }
+            elif operation == "computer.cua_capture_window":
+                result_data = self.computer.cua_inspect_window(
+                    args["session_id"], session_id, args["window_id"],
+                    include_screenshot=True,
+                )
+            elif operation in {"computer.cua_click", "computer.cua_click_foreground"}:
+                result_data = self.computer.cua_click(
+                    args["session_id"], session_id, args["window_id"],
+                    args["snapshot_ref"],
+                    element_token=args.get("element_token"),
+                    x=args.get("x"),
+                    y=args.get("y"),
+                    foreground=operation == "computer.cua_click_foreground",
+                    button=args.get("button", "left"),
+                    count=args.get("count", 1),
+                )
+            elif operation == "computer.cua_draw_path":
+                result_data = self.computer.cua_draw_path(
+                    args["session_id"], session_id, args["window_id"],
+                    args["snapshot_ref"], args["canvas_element_token"],
+                    args["strokes"],
+                    duration_ms=args.get("duration_ms", 240),
+                    steps=args.get("steps", 12),
+                )
             elif operation == "computer.inspect_visual_target":
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:
