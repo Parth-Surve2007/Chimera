@@ -34,6 +34,7 @@ datas = [
     ("fonts", "fonts"),
     ("chimera", "chimera"),
     ("scripts/setup_windows.bat", "scripts"),
+    ("scripts/install_ghidra.ps1", "scripts"),
     (str(client_archive), "flet_desktop/app"),
 ]
 datas.extend(flet_datas)
