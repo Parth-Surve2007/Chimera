@@ -7,6 +7,7 @@ to an unobserved window.
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import re
 import shutil
@@ -127,6 +128,7 @@ class WindowsComputerUse:
             "notepad++": "notepad++.exe",
             "calculator": "calc.exe",
             "paint": "mspaint.exe",
+            "mspaint": "mspaint.exe",
             "blender": "blender.exe",
             "chrome": "chrome.exe",
             "google chrome": "chrome.exe",
@@ -174,6 +176,14 @@ class WindowsComputerUse:
                 except ImportError:
                     pass
 
+        if os.name == "nt":
+            system_root = Path(os.environ.get("SystemRoot", r"C:\\Windows"))
+            for root in (system_root / "System32", system_root / "SysWOW64"):
+                for executable_name in dict.fromkeys(executable_names):
+                    candidate = root / executable_name
+                    if candidate.is_file() and candidate.suffix.casefold() == ".exe":
+                        return candidate.resolve()
+
         if os.name == "nt" and executable_names[0].casefold() == "winword.exe":
             roots = [
                 Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
@@ -188,65 +198,243 @@ class WindowsComputerUse:
                         return office_path.resolve()
         return None
 
+    @staticmethod
+    def _normalise_app_name(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold().removesuffix(".exe"))
+
+    @staticmethod
+    def _start_menu_apps() -> list[dict]:
+        """Read Start-menu application names and AUMIDs without executing user input."""
+        if os.name != "nt":
+            return []
+        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        candidates = [
+            Path(shutil.which("powershell.exe") or ""),
+            system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+        ]
+        powershell = next((item for item in candidates if str(item) and item.is_file()), None)
+        if powershell is None:
+            return []
+        # This is a fixed, read-only inventory command. The requested app name
+        # is never interpolated into PowerShell or passed to a shell parser.
+        script = "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress"
+        try:
+            result = subprocess.run(
+                [str(powershell), "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                shell=False,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return []
+            payload = json.loads(result.stdout)
+        except (OSError, subprocess.TimeoutExpired, TypeError, ValueError, json.JSONDecodeError):
+            return []
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            return []
+        entries = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name") or "").strip()
+            app_id = str(item.get("AppID") or "").strip()
+            if (
+                name
+                and app_id
+                and len(app_id) <= 260
+                and re.fullmatch(r"[A-Za-z0-9_.-]+![A-Za-z0-9_.-]+", app_id)
+            ):
+                entries.append({"name": name, "app_id": app_id})
+        return entries
+
+    @classmethod
+    def _resolve_start_menu_target(cls, application: str) -> dict | None:
+        """Resolve a Start-menu entry to a validated AppsFolder activation target."""
+        raw = str(application or "").strip().strip('"')
+        if not raw or os.name != "nt":
+            return None
+        requested_aumid = None
+        if raw.casefold().startswith("appsfolder:"):
+            requested_aumid = raw[len("appsfolder:"):].strip()
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+![A-Za-z0-9_.-]+", requested_aumid):
+                return None
+        aliases = {
+            "paint": {"paint", "microsoftpaint", "mspaint"},
+            "mspaint": {"paint", "microsoftpaint", "mspaint"},
+            "calculator": {"calculator", "calc", "windowscalculator"},
+            "calc": {"calculator", "calc", "windowscalculator"},
+            "notepad": {"notepad", "windowsnotepad"},
+            "photos": {"photos", "microsoftphotos"},
+            "camera": {"camera", "windowscamera"},
+            "snippingtool": {"snippingtool", "snippingtool"},
+            "clock": {"clock", "windowsclock", "alarmsclock"},
+            "terminal": {"terminal", "windowsterminal"},
+            "windowsterminal": {"terminal", "windowsterminal"},
+        }
+        key = cls._normalise_app_name(raw)
+        expected_names = aliases.get(key, {key})
+        entries = cls._start_menu_apps()
+        match = next(
+            (
+                item for item in entries
+                if (
+                    item["app_id"].casefold() == requested_aumid.casefold()
+                    if requested_aumid
+                    else cls._normalise_app_name(item["name"]) in expected_names
+                )
+            ),
+            None,
+        )
+        if match is None:
+            return None
+        name = match["name"]
+        process_aliases = {
+            "paint": ["mspaint.exe"],
+            "microsoftpaint": ["mspaint.exe"],
+            "calculator": ["calculator.exe", "calc.exe"],
+            "calc": ["calculator.exe", "calc.exe"],
+            "notepad": ["notepad.exe"],
+            "photos": ["Microsoft.Photos.exe"],
+            "camera": ["WindowsCamera.exe"],
+            "snippingtool": ["ScreenClippingHost.exe", "SnippingTool.exe"],
+            "clock": ["Time.exe"],
+            "terminal": ["WindowsTerminal.exe"],
+            "windowsterminal": ["WindowsTerminal.exe"],
+        }
+        normalized_name = cls._normalise_app_name(name)
+        expected_processes = process_aliases.get(normalized_name, [])
+        return {
+            "kind": "appsfolder",
+            "application": "appsfolder:" + match["app_id"],
+            "aumid": match["app_id"],
+            "display_name": name,
+            "expected_process_names": expected_processes,
+        }
+
+    @classmethod
+    def _resolve_launch_target(cls, application: str) -> dict | None:
+        raw = str(application or "").strip().strip('"')
+        if raw.casefold().startswith("appsfolder:"):
+            return cls._resolve_start_menu_target(raw)
+        path = cls._resolve_executable(raw)
+        if path is not None:
+            return {
+                "kind": "executable",
+                "application": str(path),
+                "path": path,
+                "display_name": path.stem,
+                "expected_process_names": [path.name],
+            }
+        return cls._resolve_start_menu_target(raw)
+
     def launch(self, executable: str, approved: bool = False) -> dict:
-        path = self._resolve_executable(executable)
-        if path is None:
+        target = self._resolve_launch_target(executable)
+        if target is None:
             return {
                 "status": "blocked",
-                "reason": f"could not resolve an installed application executable for {executable!r}",
+                "reason": f"could not resolve an installed executable or Start-menu app for {executable!r}",
             }
-        if path.suffix.casefold() != ".exe":
-            return {"status": "blocked", "reason": "only executable applications may be launched"}
+        launch_kind = target["kind"]
+        if launch_kind == "executable":
+            path = Path(target["path"])
+            if path.suffix.casefold() != ".exe" or not path.is_file():
+                return {"status": "blocked", "reason": "resolved application executable is no longer available"}
+            application = str(path)
+        elif launch_kind == "appsfolder":
+            aumid = str(target.get("aumid") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+![A-Za-z0-9_.-]+", aumid):
+                return {"status": "blocked", "reason": "resolved Windows application ID is invalid"}
+            application = str(target["application"])
+        else:
+            return {"status": "blocked", "reason": "unsupported Windows application launch target"}
+
         if not approved:
             return {
                 "status": "awaiting_approval",
-                "application": str(path),
+                "application": application,
                 "requested_application": str(executable),
+                "display_name": target.get("display_name"),
+                "launch_kind": launch_kind,
                 "permission": "computer.launch",
             }
-        process = subprocess.Popen([str(path)], shell=False)
+
+        if launch_kind == "executable":
+            command = [application]
+        else:
+            system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            explorer = system_root / "explorer.exe"
+            if not explorer.is_file():
+                explorer_value = shutil.which("explorer.exe")
+                if not explorer_value:
+                    return {"status": "failed", "reason": "Windows Explorer is unavailable for AppsFolder activation"}
+                explorer = Path(explorer_value)
+            command = [str(explorer), "shell:AppsFolder\\" + str(target["aumid"])]
+
+        process = subprocess.Popen(command, shell=False)
         self._processes[process.pid] = process
-        expected_path = os.path.normcase(os.path.normpath(str(path))).casefold()
-        expected_name = path.name.casefold()
-        # Modern Windows apps (notably packaged Notepad) can hand a launch
-        # request to an already-running process. The PID returned by Popen may
-        # exit immediately while the visible window belongs to that process.
-        known_app_images = {
-            "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe",
-            "notepad.exe", "notepad++.exe", "calc.exe", "mspaint.exe",
-            "blender.exe", "chrome.exe", "msedge.exe", "firefox.exe", "code.exe",
+        expected_path = (
+            os.path.normcase(os.path.normpath(application)).casefold()
+            if launch_kind == "executable" else None
+        )
+        expected_process_names = {
+            str(value).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+            for value in target.get("expected_process_names", [])
         }
-        deadline = time.monotonic() + 5
+        display_name = str(target.get("display_name") or Path(application).stem)
+        normalized_display_name = self._normalise_app_name(display_name)
+        deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             matched = []
             for item in self._windows():
                 observed_path = self.process_path(item.pid)
-                if not observed_path:
-                    continue
-                normalized = os.path.normcase(os.path.normpath(str(observed_path))).casefold()
-                image_name = str(observed_path).replace("\\", "/").rsplit("/", 1)[-1].casefold()
-                if normalized == expected_path or (
-                    expected_name in known_app_images and image_name == expected_name
-                ):
-                    matched.append(item)
+                image_name = (
+                    str(observed_path).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+                    if observed_path else ""
+                )
+                normalized = (
+                    os.path.normcase(os.path.normpath(str(observed_path))).casefold()
+                    if observed_path else ""
+                )
+                process_match = bool(
+                    (expected_path and normalized == expected_path)
+                    or (image_name and image_name in expected_process_names)
+                )
+                title_match = bool(
+                    normalized_display_name
+                    and normalized_display_name in self._normalise_app_name(item.title)
+                )
+                if process_match or title_match:
+                    matched.append((item, process_match))
             if matched:
+                matched.sort(key=lambda value: not value[1])
+                first, process_match = matched[0]
                 return {
                     "status": "completed",
-                    "pid": matched[0].pid,
+                    "pid": first.pid,
                     "spawned_pid": process.pid,
-                    "executable": str(path),
-                    "windows": [asdict(item) for item in matched[:5]],
-                    "verification": "visible_window_executable_match",
+                    "executable": observed_path if False else application,
+                    "application": application,
+                    "display_name": display_name,
+                    "launch_kind": launch_kind,
+                    "windows": [asdict(item) for item, _ in matched[:5]],
+                    "verification": (
+                        "visible_window_process_match" if process_match
+                        else "visible_window_title_match"
+                    ),
                 }
             time.sleep(.05)
         return {
             "status": "failed",
             "pid": process.pid,
             "reason": (
-                "application process was started, but no visible window with a "
-                "matching executable identity appeared within 5 seconds"
+                f"{display_name} launch was requested, but no matching application window "
+                "appeared within 8 seconds"
             ),
-            "executable": str(path),
+            "application": application,
+            "launch_kind": launch_kind,
         }
 
     def window_process_id(self, hwnd: int) -> int | None:
