@@ -346,7 +346,7 @@ class AgentRuntime:
             actual_path = Path(identity.executable).expanduser()
             if launch_kind == "executable":
                 try:
-                    if actual_path.resolve().casefold() != expected_path.casefold():
+                    if str(actual_path.resolve()).casefold() != str(expected_path).casefold():
                         continue
                 except (OSError, ValueError):
                     continue
