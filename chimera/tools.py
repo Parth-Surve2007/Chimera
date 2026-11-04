@@ -224,7 +224,7 @@ class WorkspaceTools:
                 content = arguments.get("content")
                 if not isinstance(relative, str) or not relative.strip():
                     raise ValueError("document path must be a non-empty workspace-relative path")
-                normalized_path = relative.replace("\\\\", "/")
+                normalized_path = relative.replace("\\", "/")
                 windows_drive, _ = ntpath.splitdrive(relative)
                 if normalized_path.startswith("/") or Path(relative).is_absolute() or windows_drive:
                     raise ValueError("document path must be workspace-relative; use a name such as Desktop/Report.docx")
