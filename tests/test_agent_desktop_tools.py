@@ -106,7 +106,7 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
 
     provider.structured_with_metrics = fake_structured
     messages = [
-        SimpleNamespace(role="tool", content='{"tool":"computer.list_applications","result":[{"pid":1,"executable":"notepad.exe","windows":[{"title":"Untitled"}]}]}'),
+        SimpleNamespace(role="tool", content='{"tool":"computer.list_applications","result":{"items":[{"pid":1,"executable":"notepad.exe","windows":[{"title":"Untitled"}]}]}}'),
         SimpleNamespace(role="user", content="Create a text file."),
     ]
     inventory = [{"backend": "win32", "description": "unused inventory payload " * 100} for _ in range(40)]
@@ -122,6 +122,8 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
     assert "interaction_inventory" not in captured["prompt"]
     assert "unused inventory payload" not in captured["prompt"]
     assert "Desktop inventory summary" in captured["prompt"]
+    assert "- notepad.exe: Untitled" in captured["prompt"]
+    assert "No user-facing applications found" not in captured["prompt"]
 
 
 def test_new_local_model_context_default_is_four_k():
@@ -447,3 +449,27 @@ def test_terminal_file_creation_detection_preserves_requested_follow_up_work():
     assert AgentRuntime._is_terminal_file_creation_request("Create a Word document with a recipe.")
     assert not AgentRuntime._is_terminal_file_creation_request("Create a file and then open it.")
     assert not AgentRuntime._is_terminal_file_creation_request("Create a file, then email it.")
+
+
+def test_local_model_prompt_routes_docx_requests_to_document_tool():
+    provider = LocalModelProvider(LocalModelConfig(None, None, context=4096))
+    captured = {}
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "Please confirm the document title."}, {"context": 4096}
+
+    provider.structured_with_metrics = fake_structured
+    result = provider.decide(
+        [SimpleNamespace(role="user", content="Create a Word document on my Desktop.")],
+        {"tools": [
+            {"id": "workspace.create_document", "description": "Create a Word DOCX document", "arguments": {"path": "string", "title": "string", "content": "string"}, "permission": "execution.write"},
+            {"id": "workspace.create_file", "description": "Create plain text files", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
+        ]},
+        session={"mode": "build", "workspace": r"C:\\Users\\Parth"},
+    )
+
+    assert result["type"] == "message"
+    assert "workspace.create_document" in captured["prompt"]
+    assert "Never silently downgrade a requested .docx to .txt" in captured["prompt"]
+    assert "workspace.create_file for a plain .txt" in captured["prompt"]
