@@ -21,6 +21,7 @@ if not client_archive.is_file():
 flet_datas, flet_binaries, flet_hiddenimports = collect_all("flet_desktop")
 reportlab_datas, reportlab_binaries, reportlab_hiddenimports = collect_all("reportlab")
 pypdf_datas, pypdf_binaries, pypdf_hiddenimports = collect_all("pypdf")
+pillow_datas, pillow_binaries, pillow_hiddenimports = collect_all("PIL")
 
 # Flet resolves icon names lazily from package JSON at runtime. These are not
 # included by collect_all("flet_desktop"), so mirror Flet's own PyInstaller
@@ -43,6 +44,7 @@ datas.extend(flet_datas)
 datas.extend(flet_icon_datas)
 datas.extend(reportlab_datas)
 datas.extend(pypdf_datas)
+datas.extend(pillow_datas)
 
 hiddenimports = [
     "flet",
@@ -95,15 +97,17 @@ hiddenimports = [
     "chimera.providers.adapters",
     "chimera.providers.adapters.local_adapter",
     "chimera.learning",
+    "chimera.scoped_input",
 ]
 hiddenimports.extend(flet_hiddenimports)
 hiddenimports.extend(reportlab_hiddenimports)
 hiddenimports.extend(pypdf_hiddenimports)
+hiddenimports.extend(pillow_hiddenimports)
 
 a = Analysis(
     ["launcher.py"],
     pathex=[],
-    binaries=flet_binaries + reportlab_binaries + pypdf_binaries,
+    binaries=flet_binaries + reportlab_binaries + pypdf_binaries + pillow_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
