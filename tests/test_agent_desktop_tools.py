@@ -1235,6 +1235,7 @@ def test_notepad_launch_handoff_types_and_verifies_text_in_observed_editor(tmp_p
     monkeypatch.setattr(agent_runtime_module.WindowsComputerUse, "launch", fake_launch)
     provider = TextEntryProvider()
     runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    runtime.computer.uia = object()
     session_id = runtime.create_session(tmp_path, mode="build")
 
     identity = SimpleNamespace(
