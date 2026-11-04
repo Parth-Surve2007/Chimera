@@ -13,6 +13,7 @@ from .tools import CAPABILITY
 from .agent_runtime import AgentRuntime, AgentSessionStore
 from .goals import GoalStore
 from .workflow_integration import AgenticWorkflowOrchestrator
+from .builtin_capabilities import BUILTIN_CAPABILITIES
 try: import flet as ft
 except ImportError: ft = None
 
@@ -39,6 +40,15 @@ def validate_workspace_path(selected):
     if not os.access(path, os.R_OK):
         raise ValueError("workspace directory is not readable")
     return path
+
+
+def default_workspace_root(system_drive=None, platform=None, home=None):
+    """Use the Windows system drive by default, or the home directory elsewhere."""
+    platform = platform or os.name
+    if platform == "nt":
+        drive = (system_drive or os.environ.get("SystemDrive") or "C:").rstrip("\\/")
+        return Path(drive + "\\")
+    return Path(home or Path.home()).expanduser().resolve()
 
 def persisted_evaluation(candidate, audit):
     """Read-only projection of persisted workflow evidence; never evaluates or recomputes it."""
@@ -99,9 +109,8 @@ class MainWindow:
         self.model_picker = ft.FilePicker(on_result=self._model_picked)
         self.runtime_picker = ft.FilePicker(on_result=self._runtime_picked)
         self.server_picker = ft.FilePicker(on_result=self._server_picked)
-        self.workspace_picker = ft.FilePicker(on_result=self._workspace_picked)
-        self.workspace_path = None
-        page.services.extend([self.model_picker, self.runtime_picker, self.server_picker, self.workspace_picker])
+        self.workspace_path = validate_workspace_path(default_workspace_root())
+        page.services.extend([self.model_picker, self.runtime_picker, self.server_picker])
         self.model_path_field = ft.TextField(label="GGUF MODEL PATH", color=TEXT, border_color=BORDER, value=str(initial_config.model_path or ""), expand=True)
         self.runtime_path_field = ft.TextField(label="LLAMA.CPP CLI (EXPLICIT ONE-SHOT MODE)", color=TEXT, border_color=BORDER, value=str(initial_config.cli_path or ""), expand=True)
         self.server_path_field = ft.TextField(label="LLAMA-SERVER (PERSISTENT MODEL MODE)", color=TEXT, border_color=BORDER, value=str(initial_config.server_path or ""), expand=True)
@@ -116,12 +125,12 @@ class MainWindow:
         self.task_busy = False; self.model_verifying = False; self.local_verification = None; self.model_boot_status = "checking"; self.last_turn_notice = None; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""
         self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=8, expand=True)
         self.task_field = ft.TextField(multiline=True, min_lines=3, max_lines=8, hint_text="Give Chimera the outcome. Keep talking as it works...", hint_style=ft.TextStyle(color=MUTED), bgcolor="#101010", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=11, expand=True, text_size=14)
-        self.workspace_path_field = ft.TextField(label="WORKSPACE DIRECTORY", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, value="", expand=True)
         self.agent_store = AgentSessionStore(registry.data_dir / "chimera.db")
         self.goal_store = GoalStore(registry.data_dir / "chimera.db")
         self.profile_store = ModelProfileStore(registry.data_dir / "model_profiles.json")
         self.local_provider = LocalModelProvider(config_from_env())
         self.agent_runtime = AgentRuntime(self.agent_store, self.local_provider, self.profile_store)
+        self.active_page = "chat"
         self.agent_session_id = self.agent_runtime.create_session(self.workspace_path)
         self.conversation_messages = []
         self.pending_agent_approval = None; self.live_events = []
@@ -213,19 +222,22 @@ class MainWindow:
         self.current_view = "other"
         content = ft.Column(
             controls, expand=True, scroll=ft.ScrollMode.AUTO,
-            horizontal_alignment=ft.CrossAxisAlignment.START, spacing=18,
+            horizontal_alignment=ft.CrossAxisAlignment.START, spacing=16,
         )
         centered = ft.Row(
             [ft.Container(
                 content=content, width=1000,
-                padding=ft.Padding.symmetric(horizontal=26, vertical=26),
+                padding=ft.Padding.symmetric(horizontal=24, vertical=22),
             )],
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.START,
             expand=True,
         )
         self.body.padding = ft.Padding.all(0)
-        self.body.content = ft.Container(content=centered, expand=True, bgcolor=BG)
+        self.body.content = ft.Row([
+            self._chat_sidebar(),
+            ft.Container(content=centered, expand=True, bgcolor=BG),
+        ], expand=True, spacing=0)
         self.page.update()
 
     def _page_heading(self, title, subtitle, eyebrow="CHIMERA  /  WORKSPACE"):
@@ -252,10 +264,87 @@ class MainWindow:
     def _button(self, label, handler): return ft.FilledButton(label, on_click=handler, style=ft.ButtonStyle(bgcolor=FOCUS, color=BG, overlay_color=ACCENT))
 
 
+    def _builtin_capability_cards(self):
+        try:
+            from .applications.registry import get_application_registry
+            manifests = {
+                manifest.application_id: manifest
+                for manifest in get_application_registry().discover_all()
+            }
+        except Exception:
+            manifests = {}
+
+        cards = []
+        for capability in BUILTIN_CAPABILITIES:
+            capability_id = capability["capability_id"]
+            status = "BUILT IN"
+            note = capability["description"]
+            if capability_id == "computer.windows":
+                status = "READY" if os.name == "nt" else "WINDOWS ONLY"
+                note += " UI Automation support is installed by the Windows dependency setup."
+            elif capability_id.endswith(".blender"):
+                manifest = manifests.get("blender")
+                status = "INSTALLED" if manifest and manifest.is_installed else "OPTIONAL APP MISSING"
+                note += " Blender is a separate application; install it from Applications."
+            elif capability_id.endswith(".ghidra"):
+                manifest = manifests.get("ghidra")
+                if manifest and manifest.is_installed:
+                    status = "INSTALLED"
+                    if not manifest.metadata.get("jdk_available"):
+                        status = "INSTALLED · JDK 25 NEEDED FOR HEADLESS"
+                else:
+                    status = "OPTIONAL APP MISSING"
+                note += " Built-in static inspection remains available; Ghidra headless features need Ghidra and JDK 25+."
+            actions = capability.get("actions", ())
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Row([
+                        ft.Text(capability["name"], color=TEXT, size=14, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Text(status, color=FOCUS if status in {"BUILT IN", "READY", "INSTALLED"} else SECONDARY, size=8, weight=ft.FontWeight.BOLD),
+                    ]),
+                    ft.Text(capability["domain"].upper(), color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
+                    ft.Text(note, color=SECONDARY, size=10),
+                    ft.Text(f"{len(actions)} registered action(s)" if actions else "Native service / workflow", color=MUTED, size=9),
+                ], spacing=6),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9,
+                padding=ft.Padding.all(13), width=940,
+            ))
+        return cards
+
+    def _connector_status_cards(self):
+        from .applications.registry import get_application_registry
+        cards = []
+        for manifest in get_application_registry().discover_all():
+            actions_summary = ", ".join(
+                f"{action.display_name} · L{action.risk_level.value}"
+                for action in manifest.actions if not getattr(action, "unavailable", False)
+            ) or "Connector registered; no executable actions currently available"
+            if manifest.application_id == "ghidra" and manifest.is_installed and not manifest.metadata.get("jdk_available"):
+                status = "APP FOUND · JDK 25 NEEDED FOR HEADLESS"
+            else:
+                status = "INSTALLED" if manifest.is_installed else "CONNECTOR READY · APP NOT INSTALLED"
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Row([
+                        ft.Text(manifest.display_name, color=TEXT, size=13, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Text(status, color=FOCUS if manifest.is_installed else SECONDARY, size=8, weight=ft.FontWeight.BOLD),
+                    ]),
+                    ft.Text(f"{manifest.vendor} · Connector {manifest.connector_version}", color=MUTED, size=9),
+                    ft.Text(actions_summary, color=SECONDARY, size=10),
+                ], spacing=6),
+                bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=9,
+                padding=ft.Padding.all(13), width=940,
+            ))
+        return cards
+
     def _show_capabilities(self, e=None):
+        self.active_page = "capabilities"
         self._set([
-            self._page_heading("Capabilities", "Review proposed capabilities, inspect their evidence, and approve only what has passed review."),
-            self._panel("Capability review queue", "Proposals remain inert until they are verified and explicitly accepted.", [self._candidate_list()]),
+            self._page_heading("Capabilities", "What Chimera can do out of the box, plus optional specialist applications."),
+            self._page_heading("Built-in toolkit", f"{len(BUILTIN_CAPABILITIES)} first-party capability groups are registered with the app.", eyebrow="READY WITHOUT EXTRA INSTALLS"),
+            *self._builtin_capability_cards(),
+            self._page_heading("Capability review queue", "Custom proposals stay separate from built-in tools. Nothing is silently promoted or marked accepted.", eyebrow="CUSTOM CAPABILITIES"),
+            self._candidate_list(),
         ])
 
 
@@ -352,29 +441,6 @@ class MainWindow:
             padding=ft.Padding.all(18), width=940,
         )
 
-        connector_cards = []
-        try:
-            from .applications.registry import get_application_registry
-            for manifest in get_application_registry().discover_all():
-                actions_summary = ", ".join(
-                    f"{action.display_name} · L{action.risk_level.value}"
-                    for action in manifest.actions if not getattr(action, "unavailable", False)
-                ) or "No currently available actions"
-                connector_cards.append(ft.Container(
-                    ft.Column([
-                        ft.Row([
-                            ft.Text(manifest.display_name, color=TEXT, size=14, weight=ft.FontWeight.BOLD, expand=True),
-                            ft.Text("INSTALLED" if manifest.is_installed else "NOT INSTALLED", color=FOCUS if manifest.is_installed else MUTED, size=9, weight=ft.FontWeight.BOLD),
-                        ]),
-                        ft.Text(f"{manifest.vendor}  ·  Connector {manifest.connector_version}", color=SECONDARY, size=10),
-                        ft.Text(actions_summary, color=MUTED, size=10),
-                    ], spacing=6),
-                    bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=9,
-                    padding=ft.Padding.all(13), width=940,
-                ))
-        except Exception as exc:
-            connector_cards.append(ft.Text(f"Connector discovery unavailable: {exc}", color=ACCENT, size=11))
-
         self._set([
             self._page_heading("Model hub", "Choose the reasoning provider for this conversation, then inspect its declared capabilities."),
             form,
@@ -384,8 +450,6 @@ class MainWindow:
                 bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10,
                 padding=ft.Padding.all(18), width=940,
             )]),
-            self._page_heading("Specialist connectors", "These built-in connectors provide app-specific actions. They are not a desktop allowlist: open Windows applications are discovered live on the Applications page.", eyebrow="APPLICATION ECOSYSTEM"),
-            *(connector_cards or [ft.Text("No specialist connectors registered.", color=MUTED)]),
         ])
 
     def _run_compat_lab(self, profile_id):
