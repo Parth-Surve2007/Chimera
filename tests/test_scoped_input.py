@@ -298,3 +298,52 @@ def test_scroll_up_encodes_negative_wheel_delta_for_win32():
     native.send_mouse_wheel(-3)
 
     assert seen == [(0x0800, 0, 0, (-360) & 0xFFFFFFFF)]
+
+
+def test_multi_stroke_draws_disconnected_paths_under_one_bounded_action():
+    native = FakeNative()
+    backend = ScopedWindowsInputBackend(native=native)
+    strokes = [
+        [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8], [0.2, 0.2]],
+        [[0.35, 0.55], [0.35, 0.8], [0.5, 0.8], [0.5, 0.55]],
+        [[0.62, 0.48], [0.72, 0.48], [0.72, 0.58], [0.62, 0.58], [0.62, 0.48]],
+    ]
+
+    result = backend.execute(
+        hwnd=99, expected_pid=4321, element_pid=4321, rectangle=RECT,
+        action="multi_stroke", strokes=strokes, duration_ms=350, approved=True,
+    )
+
+    assert result["status"] == "completed"
+    assert result["accepted"] is True
+    assert result["verified"] is True
+    assert result["changed_fraction"] > 0
+    assert len([event for event in native.events if event == ("button", "left", True)]) == 3
+    assert len([event for event in native.events if event == ("button", "left", False)]) == 3
+
+
+def test_multi_stroke_rejects_oversized_or_invalid_path_sets():
+    native = FakeNative()
+    backend = ScopedWindowsInputBackend(native=native)
+
+    too_many_strokes = backend.execute(
+        hwnd=99, expected_pid=4321, element_pid=4321, rectangle=RECT,
+        action="multi_stroke", strokes=[[[0.1, 0.1], [0.2, 0.2]]] * 17,
+        approved=True,
+    )
+    invalid_point = backend.execute(
+        hwnd=99, expected_pid=4321, element_pid=4321, rectangle=RECT,
+        action="multi_stroke", strokes=[[[0.1, 0.1], [1.1, 0.2]]],
+        approved=True,
+    )
+    too_many_points = backend.execute(
+        hwnd=99, expected_pid=4321, element_pid=4321, rectangle=RECT,
+        action="multi_stroke",
+        strokes=[[[0.1 + (i % 4) * 0.1, 0.1 + (i % 5) * 0.1] for i in range(64)] for _ in range(5)],
+        approved=True,
+    )
+
+    assert too_many_strokes["status"] == "blocked"
+    assert invalid_point["status"] == "blocked"
+    assert too_many_points["status"] == "blocked"
+    assert native.events == []
