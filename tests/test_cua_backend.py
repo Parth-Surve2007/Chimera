@@ -20,6 +20,7 @@ class DeliveryMode(Enum):
 class Effect(Enum):
     CONFIRMED = "confirmed"
     UNVERIFIABLE = "unverifiable"
+    PARTIAL = "partial"
     REFUSED = "refused"
 
 
@@ -106,11 +107,12 @@ class FakeToolRefusal(Exception):
 class FakeDriver:
     def __init__(
         self, *, refuse_background=False, refuse_background_draw=False,
-        unverifiable_background_draw=False,
+        unverifiable_background_draw=False, partial_background_draw=False,
     ):
         self.refuse_background = refuse_background
         self.refuse_background_draw = refuse_background_draw
         self.unverifiable_background_draw = unverifiable_background_draw
+        self.partial_background_draw = partial_background_draw
         self.click_inputs = []
         self.drag_inputs = []
         self.shutdown_called = False
@@ -214,6 +216,20 @@ class FakeDriver:
             and self.refuse_background_draw
         ):
             raise FakeToolRefusal()
+        if (
+            request.values["delivery_mode"] is DeliveryMode.BACKGROUND
+            and self.partial_background_draw
+        ):
+            return SimpleNamespace(
+                effect=Effect.PARTIAL,
+                route=Route.ACCESSIBILITY,
+                summary="The canvas drag may have been partially applied.",
+                error=None,
+                hint="Foreground delivery may be required by this canvas.",
+                escalation=SimpleNamespace(
+                    recommended="foreground", reason="partial delivery is ambiguous",
+                ),
+            )
         if (
             request.values["delivery_mode"] is DeliveryMode.BACKGROUND
             and self.unverifiable_background_draw
@@ -478,6 +494,28 @@ def test_cua_unverifiable_noop_uses_fresh_pixel_evidence_and_retries_only_remain
         assert retry["verified"] is True
         assert retry["foreground_delivery_used"] is True
         assert driver.drag_inputs[-1]["delivery_mode"] is DeliveryMode.FOREGROUND
+    finally:
+        backend.close()
+
+
+def test_cua_partial_background_delivery_never_offers_foreground_replay():
+    driver = FakeDriver(partial_background_draw=True)
+    backend = _backend(driver)
+    try:
+        state = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        result = backend.draw_path(
+            "conversation-a", 4321, 77, state["snapshot_ref"],
+            state["elements"][0]["element_token"],
+            [[[0.1, 0.1], [0.9, 0.9]]],
+        )
+        assert result["status"] == "blocked"
+        assert result["verified"] is False
+        assert result["foreground_retry_available"] is not True
+        assert backend.can_foreground_draw_retry("conversation-a", 4321) is False
+        assert len(driver.drag_inputs) == 1
+        assert driver.drag_inputs[0]["delivery_mode"] is DeliveryMode.BACKGROUND
     finally:
         backend.close()
 
