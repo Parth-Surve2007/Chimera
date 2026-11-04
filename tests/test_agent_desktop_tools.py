@@ -474,3 +474,105 @@ def test_local_model_prompt_routes_docx_requests_to_document_tool():
     assert "workspace.create_document" in captured["prompt"]
     assert "Never silently downgrade a requested .docx to .txt" in captured["prompt"]
     assert "workspace.create_file for a plain .txt" in captured["prompt"]
+
+
+def test_authorized_notepad_text_flows_through_approval_into_verified_pdf(tmp_path, monkeypatch):
+    import json
+
+    note_text = "Meeting Notes\n\n1. Review the Chimera desktop workflow.\n2. Export the verified notes."
+    store = AgentSessionStore(tmp_path / "notepad-export.db")
+
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.decisions = iter([
+                {
+                    "type": "tool_call",
+                    "tool": "computer.read_text",
+                    "arguments": {
+                        "session_id": "authorized-notepad",
+                        "reference_id": "notepad-document-element",
+                    },
+                    "invocation_id": "read-notepad-text",
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "workspace.create_pdf",
+                    "arguments": {
+                        "path": "Desktop/Notepad-Notes.pdf",
+                        "title": "Notepad Meeting Notes",
+                        "content": note_text,
+                    },
+                    "invocation_id": "export-notepad-pdf",
+                },
+                {
+                    "type": "message",
+                    "content": "The Notepad text was exported and independently verified as a PDF.",
+                },
+            ])
+
+        def decide(self, messages, catalog, session=None):
+            return next(self.decisions)
+
+    provider = DecidingProvider()
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    identity = SimpleNamespace(
+        session_id="authorized-notepad",
+        owner_session_id=session_id,
+        pid=4242,
+        executable="C:/Windows/System32/notepad.exe",
+        process_create_time=1.0,
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    monkeypatch.setattr(runtime.computer, "_identity_is_current", lambda current: current is identity)
+    monkeypatch.setattr(
+        runtime.computer,
+        "choose_interaction",
+        lambda operation, application_type="native_windows", evidence=None: {
+            "selected": "uia", "reason": "fresh UIA document element",
+            "evidence": ["semantic_control"],
+        },
+    )
+    monkeypatch.setattr(
+        runtime.computer,
+        "act_reference",
+        lambda app_session_id, reference_id, operation, value=None, approved=False, options=None: {
+            "status": "completed",
+            "verified": True,
+            "backend": "uia",
+            "value": note_text,
+            "source": "TextPattern",
+        },
+    )
+
+    pending = runtime.send(
+        session_id,
+        "Read the current Notepad document and create a PDF copy on the Desktop.",
+    )
+    assert pending["status"] == "awaiting_approval"
+    tool_messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    read_result = next(item for item in tool_messages if item.get("tool") == "computer.read_text")
+    assert read_result["status"] == "completed"
+    assert read_result["result"]["items"]["value"] == note_text
+    pending_tool = store.pending_tool(session_id)
+    assert pending_tool["tool"] == "workspace.create_pdf"
+    assert pending_tool["arguments"]["content"] == note_text
+
+    approved = runtime.approve_pending(session_id, True)
+    target = tmp_path / "Desktop" / "Notepad-Notes.pdf"
+    assert approved["status"] == "completed"
+    assert target.is_file()
+
+    from pypdf import PdfReader
+    extracted = "\n".join(page.extract_text() or "" for page in PdfReader(str(target), strict=True).pages)
+    assert "Meeting Notes" in extracted
+    assert "Review the Chimera desktop workflow" in extracted
+    assert "Export the verified notes" in extracted
+
+    final_messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    export_result = next(item for item in final_messages if item.get("tool") == "workspace.create_pdf")
+    assert export_result["status"] == "completed"
+    assert export_result["result"]["independent_verification"] is True
+    assert export_result["result"]["text_verified"] is True
