@@ -404,3 +404,26 @@ def test_cua_discovery_contract_returns_bounded_application_and_exact_window_met
         assert windows["windows"][0]["pid"] == 4321
     finally:
         backend.close()
+
+
+def test_cua_snapshot_image_is_available_only_for_the_exact_fresh_screenshot():
+    driver = FakeDriver()
+    backend = _backend(driver)
+    try:
+        state = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        image, error = backend.snapshot_image(
+            "conversation-a", 4321, 77, state["snapshot_ref"],
+        )
+        assert error is None
+        assert image is not None
+        assert image.size == (100, 100)
+
+        foreign, foreign_error = backend.snapshot_image(
+            "conversation-b", 4321, 77, state["snapshot_ref"],
+        )
+        assert foreign is None
+        assert "different conversation" in foreign_error
+    finally:
+        backend.close()
