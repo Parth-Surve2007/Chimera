@@ -145,6 +145,20 @@ class BrowserConnector(BaseApplicationConnector):
                 requires_approval=True,
             ),
             ApplicationAction(
+                action_id="select_option",
+                display_name="Select web dropdown option",
+                description="Select one exact option from a uniquely matched native HTML select or accessible combobox, then verify the selected value.",
+                risk_level=ActionRiskLevel.LEVEL_3_PROTECTED,
+                permission="browser.input",
+                arguments_schema={
+                    "page_index": "integer", "expected_url": "string",
+                    "selector_kind": "string", "selector": "string",
+                    "value": "string",
+                },
+                expected_side_effects=["Changes one dropdown selection"],
+                requires_approval=True,
+            ),
+            ApplicationAction(
                 action_id="press",
                 display_name="Press key in web control",
                 description="Press a bounded application-level key on one uniquely matched web control. System-switching shortcuts are rejected.",
@@ -685,7 +699,13 @@ class BrowserConnector(BaseApplicationConnector):
                 text: (el.innerText || el.textContent || '').trim().slice(0, 240),
                 disabled: !!el.disabled,
                 visible: !!(el.getClientRects().length),
-                password: (el.getAttribute('type') || '').toLowerCase() === 'password'
+                password: (el.getAttribute('type') || '').toLowerCase() === 'password',
+                options: (el.tagName || '').toLowerCase() === 'select'
+                    ? Array.from(el.options || []).slice(0, 100).map(option => ({
+                        label: option.label || option.textContent || '',
+                        value: option.value || ''
+                    }))
+                    : []
             }))""")
             return {
                 "status": "completed", "url": page.url, "title": page.title(),
@@ -705,7 +725,7 @@ class BrowserConnector(BaseApplicationConnector):
                 "status": "completed", "url": page.url, "title": page.title(),
                 "http_status": response.status if response else None,
             }
-        if action_id in {"click", "fill", "press"}:
+        if action_id in {"click", "fill", "press", "select_option"}:
             if not approved:
                 return {"status": "awaiting_approval", "permission": "browser.input"}
             _runtime, page = self._page(arguments)
@@ -715,11 +735,43 @@ class BrowserConnector(BaseApplicationConnector):
             tag_info = locator.evaluate("""el => ({
                 tag: (el.tagName || '').toLowerCase(),
                 type: (el.getAttribute('type') || '').toLowerCase(),
+                role: (el.getAttribute('role') || '').toLowerCase(),
                 disabled: !!el.disabled,
                 readOnly: !!el.readOnly
             })""")
-            if tag_info["type"] == "password":
-                raise PermissionError("password fields are not filled or manipulated by the agent; enter credentials manually")
+            if action_id == "fill" and tag_info["type"] == "password":
+                raise PermissionError("password fields are not filled by the agent; enter credentials manually")
+            if action_id == "fill":
+                if tag_info["type"] in {"hidden", "checkbox", "radio", "file", "button", "submit", "reset", "image"}:
+                    raise ValueError("selected control is not a plain-text field")
+                if not locator.is_editable() or tag_info["readOnly"]:
+                    raise ValueError("selected web control is not an editable field")
+                value = arguments.get("value")
+                if not isinstance(value, str) or len(value) > 8000:
+                    raise ValueError("fill value must be a string no longer than 8000 characters")
+                locator.fill(value, timeout=5000)
+                observed = locator.evaluate(
+                    "el => el.isContentEditable ? el.innerText : (typeof el.value === 'string' ? el.value : '')"
+                )
+                if observed != value:
+                    raise RuntimeError("the field accepted input but its value did not verify")
+                return {
+                    "status": "completed", "verified": True,
+                    "field_value_matches": True, "url": page.url,
+                }
+            if action_id == "select_option":
+                if tag_info["tag"] != "select" and (tag_info.get("role") or "").casefold() != "combobox":
+                    raise ValueError("select_option requires a native select or combobox control")
+                value = arguments.get("value")
+                if not isinstance(value, str) or not value or len(value) > 500:
+                    raise ValueError("option value must be a non-empty string of at most 500 characters")
+                selected = locator.select_option(value=value, timeout=5000)
+                if value not in selected:
+                    raise RuntimeError("dropdown selection did not verify")
+                return {
+                    "status": "completed", "verified": True,
+                    "selected_value": value, "url": page.url,
+                }
             if action_id == "click":
                 if not locator.is_enabled():
                     raise ValueError("selected page element is disabled")
@@ -728,20 +780,6 @@ class BrowserConnector(BaseApplicationConnector):
                     "status": "completed", "accepted": True,
                     "url": page.url, "title": page.title(),
                     "note": "Click was delivered. Inspect the page again to verify the requested outcome.",
-                }
-            if action_id == "fill":
-                if not locator.is_editable() or tag_info["readOnly"]:
-                    raise ValueError("selected web control is not an editable field")
-                value = arguments.get("value")
-                if not isinstance(value, str) or len(value) > 8000:
-                    raise ValueError("fill value must be a string no longer than 8000 characters")
-                locator.fill(value, timeout=5000)
-                observed = locator.input_value(timeout=3000)
-                if observed != value:
-                    raise RuntimeError("the field accepted input but its value did not verify")
-                return {
-                    "status": "completed", "verified": True,
-                    "field_value_matches": True, "url": page.url,
                 }
             key = str(arguments.get("key") or "").upper()
             key_map = {
