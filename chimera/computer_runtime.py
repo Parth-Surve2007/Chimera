@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, asdict
@@ -49,20 +50,105 @@ class BackendChoice:
     available: bool
     reason: str
 
+def application_profile_path() -> Path:
+    """Return the user-local path for optional advisory desktop profiles."""
+    override = os.environ.get("CHIMERA_APP_PROFILES_PATH")
+    if override:
+        return Path(override).expanduser().resolve()
+    data_root = os.environ.get("CHIMERA_DATA_DIR")
+    if data_root:
+        root = Path(data_root).expanduser()
+    elif os.environ.get("LOCALAPPDATA"):
+        root = Path(os.environ["LOCALAPPDATA"]) / "Chimera"
+    else:
+        root = Path(".chimera")
+    return (root / "application_profiles.json").resolve()
+
+
 class ProfileStore:
-    """Validated declarative profiles; profiles never grant permissions."""
-    def __init__(self, path: Path): self.path = Path(path); self.path.parent.mkdir(parents=True, exist_ok=True)
-    def load(self) -> list[dict]:
-        if not self.path.is_file(): return []
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        if not isinstance(data, list): raise ValueError("application profiles must be an array")
-        for item in data:
-            if not isinstance(item, dict) or not isinstance(item.get("profile_id"), str) or not isinstance(item.get("version"), int) or not isinstance(item.get("match"), dict): raise ValueError("profile schema is invalid")
-        return data
-    def save(self, profiles: list[dict]):
+    """Validated, atomic storage for advisory profiles; profiles grant no permissions."""
+
+    MATCH_KEYS = {"executable", "title_contains", "class_name_contains"}
+
+    def __init__(self, path: Path):
+        self.path = Path(path).expanduser().resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def validate(cls, profiles: list[dict]) -> list[dict]:
+        if not isinstance(profiles, list) or len(profiles) > 100:
+            raise ValueError("application profiles must be an array containing at most 100 items")
+        sanitized = []
+        seen = set()
         for item in profiles:
-            if not isinstance(item, dict) or not isinstance(item.get("profile_id"), str) or not isinstance(item.get("version"), int) or not isinstance(item.get("match"), dict): raise ValueError("profile schema is invalid")
-        self.path.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+            if not isinstance(item, dict):
+                raise ValueError("each application profile must be an object")
+            profile_id = item.get("profile_id")
+            version = item.get("version")
+            match = item.get("match")
+            if not isinstance(profile_id, str) or not profile_id.strip() or len(profile_id) > 100:
+                raise ValueError("profile_id must contain 1 to 100 characters")
+            if profile_id in seen:
+                raise ValueError(f"duplicate application profile id: {profile_id}")
+            seen.add(profile_id)
+            if type(version) is not int or not 1 <= version <= 10000:
+                raise ValueError("profile version must be an integer from 1 to 10000")
+            if not isinstance(match, dict) or not match or set(match) - cls.MATCH_KEYS:
+                raise ValueError("profile match must use executable, title_contains or class_name_contains")
+
+            clean_match = {}
+            for key, value in match.items():
+                values = [value] if isinstance(value, str) else value
+                if (
+                    not isinstance(values, list) or not 1 <= len(values) <= 12
+                    or any(not isinstance(entry, str) or not entry.strip() or len(entry) > 120 for entry in values)
+                ):
+                    raise ValueError(f"profile match field {key} must contain 1 to 12 bounded strings")
+                clean_match[key] = [entry.strip() for entry in values]
+
+            clean = {
+                "profile_id": profile_id,
+                "version": version,
+                "display_name": str(item.get("display_name") or profile_id)[:120],
+                "match": clean_match,
+            }
+            for field, maximum, item_limit in (
+                ("target_hints", 500, 12),
+                ("preferred_operations", 80, 16),
+                ("limitations", 500, 12),
+            ):
+                values = item.get(field, [])
+                if not isinstance(values, list) or len(values) > item_limit:
+                    raise ValueError(f"{field} must be an array with at most {item_limit} items")
+                if any(not isinstance(value, str) or len(value) > maximum for value in values):
+                    raise ValueError(f"{field} entries must be strings no longer than {maximum} characters")
+                clean[field] = list(values)
+            # Unknown metadata is intentionally discarded, especially
+            # permissions, executable actions and coordinate recipes.
+            sanitized.append(clean)
+        return sanitized
+
+    def load(self) -> list[dict]:
+        if not self.path.is_file():
+            return []
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        return self.validate(data)
+
+    def save(self, profiles: list[dict]) -> Path:
+        sanitized = self.validate(profiles)
+        temporary = self.path.with_name(self.path.name + f".{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps(sanitized, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            os.replace(temporary, self.path)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return self.path
 
 _BUILTIN_DESKTOP_PROFILES = [
     {
@@ -216,34 +302,26 @@ class DesktopApplicationProfileRegistry:
 
     def __init__(self, custom_profiles: list[dict] | None = None):
         self.profiles = list(_BUILTIN_DESKTOP_PROFILES)
-        for item in custom_profiles or []:
-            if not isinstance(item, dict):
+        known_ids = {item["profile_id"] for item in self.profiles}
+        try:
+            sanitized = ProfileStore.validate(custom_profiles or [])
+        except (TypeError, ValueError):
+            sanitized = []
+        for item in sanitized:
+            profile_id = item["profile_id"]
+            # Custom profiles cannot shadow a shipped profile or another
+            # custom profile. They only influence target ranking/guidance.
+            if profile_id in known_ids:
                 continue
-            if not isinstance(item.get("profile_id"), str) or not isinstance(item.get("match"), dict):
-                continue
-            # Operator profile guidance is limited to descriptive fields. Any
-            # permissions, executable actions or coordinates are discarded.
+            known_ids.add(profile_id)
             self.profiles.append({
-                "profile_id": item["profile_id"][:100],
-                "version": int(item.get("version", 1)),
-                "display_name": str(item.get("display_name") or item["profile_id"])[:120],
-                "match": {
-                    key: item["match"].get(key)
-                    for key in ("executable", "title_contains", "class_name_contains")
-                    if key in item["match"]
-                },
-                "target_hints": [
-                    str(value)[:500] for value in item.get("target_hints", [])[:12]
-                    if isinstance(value, str)
-                ] if isinstance(item.get("target_hints"), list) else [],
-                "preferred_operations": [
-                    str(value)[:80] for value in item.get("preferred_operations", [])[:16]
-                    if isinstance(value, str)
-                ] if isinstance(item.get("preferred_operations"), list) else [],
-                "limitations": [
-                    str(value)[:500] for value in item.get("limitations", [])[:12]
-                    if isinstance(value, str)
-                ] if isinstance(item.get("limitations"), list) else [],
+                "profile_id": profile_id,
+                "version": item["version"],
+                "display_name": item["display_name"],
+                "match": dict(item["match"]),
+                "target_hints": list(item["target_hints"]),
+                "preferred_operations": list(item["preferred_operations"]),
+                "limitations": list(item["limitations"]),
             })
 
     @staticmethod
@@ -255,7 +333,7 @@ class DesktopApplicationProfileRegistry:
         return []
 
     def match(self, executable: str | None, windows: list[dict] | None = None) -> dict | None:
-        exe_name = Path(str(executable or "")).name.casefold()
+        exe_name = str(executable or "").replace("\\", "/").rsplit("/", 1)[-1].casefold()
         titles = [
             str(item.get("title") or "").casefold()
             for item in (windows or []) if isinstance(item, dict)
@@ -628,12 +706,29 @@ class WindowsUIABackend:
 
 
 class ComputerSessionManager:
-    def __init__(self, workspace: Path | None = None, observation_ttl: float = 30.0):
-        self.backend = WindowsComputerUse(workspace); self.selector = ComputerBackendSelector(); self.observation_ttl = max(.5, observation_ttl); self.sessions = {}; self.observations = {}; self.references = {}
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        observation_ttl: float = 30.0,
+        profile_store_path: Path | None = None,
+    ):
+        self.backend = WindowsComputerUse(workspace)
+        self.selector = ComputerBackendSelector()
+        self.observation_ttl = max(.5, observation_ttl)
+        self.sessions = {}
+        self.observations = {}
+        self.references = {}
+        self.profile_store = ProfileStore(profile_store_path or application_profile_path())
+        self.profile_store_error = None
+        try:
+            custom_profiles = self.profile_store.load()
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            custom_profiles = []
+            self.profile_store_error = str(exc)[:240]
         try: self.uia = WindowsUIABackend() if self.selector.select().name == "uia" else None
         except Exception: self.uia = None
         self.visual_input = ScopedWindowsInputBackend()
-        self.application_profiles = DesktopApplicationProfileRegistry()
+        self.application_profiles = DesktopApplicationProfileRegistry(custom_profiles)
         try:
             from .vision import LocalVisionProvider
             self.visual_perception = LocalVisionProvider.from_env()
