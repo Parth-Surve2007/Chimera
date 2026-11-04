@@ -161,3 +161,33 @@ def test_local_server_timeout_is_reported_without_retry_or_fallback(monkeypatch)
 
     assert calls == ["http://127.0.0.1:12345/completion"]
     assert manager.state == "failed"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message"),
+    [
+        (400, "invalid request payload"),
+        (500, "internal server failure"),
+    ],
+)
+def test_http_4xx_and_5xx_are_reported_with_server_body(monkeypatch, status_code, message):
+    manager = make_manager()
+    body = json.dumps({
+        "error": {"code": status_code, "message": message, "type": "server_error"}
+    }).encode("utf-8")
+
+    def reject_request(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            status_code,
+            "Request failed",
+            hdrs=None,
+            fp=io.BytesIO(body),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", reject_request)
+    with pytest.raises(ServerRequestError) as captured:
+        manager.complete("prompt", 16, json_schema={"type": "object"})
+
+    assert captured.value.status_code == status_code
+    assert message in str(captured.value)
