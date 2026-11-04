@@ -186,9 +186,10 @@ def test_agent_decision_envelope_is_strict_and_includes_session_state(tmp_path):
     assert decision["type"] == "message"
     assert "SESSION: {\"mode\":\"plan\",\"workspace_attached\":false}" in prompts[0]
     assert "do not call workspace tools" in prompts[0]
-    assert "root ::= message | tool_call" in __import__(
-        "chimera.local_model", fromlist=["AGENT_DECISION_GRAMMAR"]
-    ).AGENT_DECISION_GRAMMAR
+    from chimera.local_model import AGENT_DECISION_SCHEMA
+    assert len(AGENT_DECISION_SCHEMA["oneOf"]) == 2
+    assert AGENT_DECISION_SCHEMA["oneOf"][0]["properties"]["type"]["const"] == "message"
+    assert AGENT_DECISION_SCHEMA["oneOf"][1]["properties"]["type"]["const"] == "tool_call"
 
 
 def test_local_agent_decision_rejects_unsupported_envelopes(tmp_path):
@@ -219,3 +220,40 @@ def test_local_agent_tool_call_requires_tool_and_arguments(tmp_path):
 
     assert decision["type"] == "tool_call"
     assert decision["arguments"]["name"] == "note.txt"
+
+
+def test_persistent_server_uses_json_schema_for_agent_decisions(tmp_path):
+    from chimera.local_model import AGENT_DECISION_SCHEMA
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    server_exe = tmp_path / "llama-server.exe"
+    server_exe.write_bytes(b"fixture")
+    provider = LocalModelProvider(LocalModelConfig(model, None, server_path=str(server_exe)))
+
+    class FakeServer:
+        def __init__(self):
+            self.received = None
+
+        def status(self):
+            return {"state": "ready", "url": "http://127.0.0.1:1234", "pid": 10}
+
+        def complete(self, *args, **kwargs):
+            self.received = kwargs
+            return (
+                '{"type":"message","content":"Hello from the local server."}',
+                {"provider": "llama-server"},
+            )
+
+    fake = FakeServer()
+    provider.server = fake
+    parsed, metrics = provider.structured_with_metrics(
+        "Return a message decision.",
+        json_schema=AGENT_DECISION_SCHEMA,
+    )
+
+    assert parsed["type"] == "message"
+    assert parsed["content"] == "Hello from the local server."
+    assert fake.received["json_schema"] == AGENT_DECISION_SCHEMA
+    assert fake.received["grammar"] is None
+    assert metrics["structured_output"] == "json_schema"
