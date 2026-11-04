@@ -791,7 +791,6 @@ class LocalModelProvider:
                 "Use fresh UI Automation element references and the actions reported for each element. "
                 "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
                 "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. "
-                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. "
                 + visual_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
