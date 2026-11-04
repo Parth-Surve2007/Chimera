@@ -1,7 +1,10 @@
 # 🐉 CHIMERA
 
 <p align="center">
-  <img src="assets/chimera_logo_white.png" alt="Chimera" width="660">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/chimera_logo_white.png">
+    <img src="assets/chimera_logo_black.png" alt="Chimera" width="660">
+  </picture>
 </p>
 
 <h3 align="center">One local-first AI. Your whole digital workspace.</h3>
