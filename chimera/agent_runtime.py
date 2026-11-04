@@ -275,7 +275,17 @@ class AgentRuntime:
             if identity.owner_session_id == (session.get("session_id") if session else None)
             and self.computer._identity_is_current(identity)
         ]
-        catalog_tools = [{"id": key, **tool_catalog()["operations"][value]} for key, value in aliases.items()]
+        catalog_tools = []
+        for key, value in aliases.items():
+            # The Applications page performs live inventory discovery itself.
+            # Never waste model context on OS helper windows or raw process dumps.
+            if key in {"computer.list_applications", "computer.list_windows"}:
+                continue
+            # Desktop actions are offered only after an exact process has been
+            # explicitly authorized for this conversation.
+            if key.startswith("computer.") and key != "computer.launch" and not authorized_applications:
+                continue
+            catalog_tools.append({"id": key, **tool_catalog()["operations"][value]})
         try:
             from .applications.registry import get_application_registry
             from .applications.dispatch import application_tool_catalog
@@ -335,6 +345,7 @@ class AgentRuntime:
             "search_text": {"query": str},
             "read_text": {"path": str},
             "create_artifact": {"name": str, "content": str},
+            "create_file": {"path": str, "content": str},
             "computer.list_applications": {},
             "computer.list_windows": {},
             "computer.inspect_controls": {"session_id": str, "hwnd": int},

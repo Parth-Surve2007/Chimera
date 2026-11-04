@@ -50,17 +50,37 @@ class WindowsComputerUse:
             if not self.user32.IsWindowVisible(hwnd): return True
             pid = wintypes.DWORD(); self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             title_buf = ctypes.create_unicode_buffer(512); self.user32.GetWindowTextW(hwnd, title_buf, 512)
+            if not title_buf.value.strip():
+                return True
             class_buf = ctypes.create_unicode_buffer(256); self.user32.GetClassNameW(hwnd, class_buf, 256)
             result.append(WindowObservation(int(hwnd), int(pid.value), title_buf.value, class_buf.value, True)); return True
         self.user32.EnumWindows(enum_proc(callback), 0)
         return result
 
+
     def list_applications(self) -> list[dict]:
+        """Discover a compact inventory of visible, user-facing Windows apps.
+
+        Discovery is live, not a hard-coded application allowlist. Only the
+        process identity needed for explicit authorization and a few window
+        titles are returned.
+        """
         grouped = {}
         for item in self._windows():
-            entry = grouped.setdefault(item.pid, {"pid": item.pid, "executable": self.process_path(item.pid), "windows": []})
-            entry["windows"].append(asdict(item))
-        return list(grouped.values())
+            title = str(item.title or "").strip()
+            if not title:
+                continue
+            executable = self.process_path(item.pid)
+            if not executable:
+                continue
+            entry = grouped.setdefault(item.pid, {
+                "pid": item.pid, "executable": executable, "windows": [],
+            })
+            if len(entry["windows"]) < 3:
+                entry["windows"].append({
+                    "hwnd": item.hwnd, "pid": item.pid, "title": title[:180],
+                })
+        return list(grouped.values())[:40]
 
     def process_path(self, pid: int) -> str | None:
         if os.name != "nt": return None
