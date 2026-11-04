@@ -259,7 +259,8 @@ def test_chat_completion_parses_split_streamed_content_and_reasoning(monkeypatch
     manager = make_manager()
     pieces = []
 
-    def fake_urlopen(_request, _timeout):
+    def fake_urlopen(_request, timeout):
+        assert timeout == manager.timeout
         return FakeResponse([
             b'data: {"choices":[{"delta":{"reasoning_content":"inspect "}}]}\n',
             b'data: {"choices":[{"delta":{"content":"{\"type\":"}}]}\n',
