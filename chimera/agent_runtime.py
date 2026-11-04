@@ -1631,6 +1631,7 @@ class AgentRuntime:
                             result_data["pid"],
                             result_data.get("executable"),
                             owner_session_id=session_id,
+                            authorized_windows=result_data.get("windows"),
                         )
                         result_data = {
                             **result_data,
