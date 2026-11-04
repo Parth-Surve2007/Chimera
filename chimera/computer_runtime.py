@@ -446,9 +446,18 @@ class ComputerSessionManager:
         if executable:
             expected = str(Path(executable).resolve())
             if expected.casefold() != actual.casefold():
-                expected_normalized = expected.replace("/", "\\\\").casefold()
+                expected_parts = [part.casefold() for part in Path(expected).parts]
+                alias_indexes = [
+                    index for index, part in enumerate(expected_parts)
+                    if part == "appdata"
+                ]
+                is_windows_apps_alias = any(
+                    expected_parts[index:index + 4]
+                    == ["appdata", "local", "microsoft", "windowsapps"]
+                    for index in alias_indexes
+                )
                 alias_exception = (
-                    "\\\\appdata\\\\local\\\\microsoft\\\\windowsapps\\\\" in expected_normalized
+                    is_windows_apps_alias
                     and Path(expected).name.casefold() == Path(actual).name.casefold()
                     and bool(allowed_hwnds)
                 )
