@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from chimera.agent_runtime import AgentRuntime, AgentSessionStore
