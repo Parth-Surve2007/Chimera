@@ -450,6 +450,20 @@ class ComputerSessionManager:
             raise ValueError("current HWND owner does not match the authorized process")
         return identity
 
+    def close_window(self, session_id: str, hwnd: int, approved: bool = False) -> dict:
+        """Gracefully close one freshly observed window owned by this conversation."""
+        if not approved:
+            return {
+                "status": "awaiting_approval", "verified": False,
+                "session_id": session_id, "hwnd": int(hwnd),
+                "permission": "computer.close",
+            }
+        try:
+            identity = self.validate_window(session_id, int(hwnd))
+        except (KeyError, ValueError, RuntimeError) as exc:
+            return {"status": "blocked", "verified": False, "reason": str(exc)}
+        return self.backend.close(int(hwnd), approved=True, expected_pid=identity.pid)
+
     def observe(self, session_id: str) -> ComputerObservation:
         identity = self.sessions.get(session_id)
         if not identity: raise KeyError("computer session not found")
