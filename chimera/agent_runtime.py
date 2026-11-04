@@ -451,6 +451,7 @@ class AgentRuntime:
             "computer.inspect_elements": {"session_id": str},
             "computer.launch": {"executable": str},
             "computer.screenshot": {"session_id": str, "hwnd": int, "path": str},
+            "computer.inspect_visual_target": {"session_id": str, "reference_id": str, "question": str},
             "computer.inspect_window": {"session_id": str},
             "computer.inspect_pattern_support": {"session_id": str, "reference_id": str},
             "computer.invoke_element": {"session_id": str, "reference_id": str},
