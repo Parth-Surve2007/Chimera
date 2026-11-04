@@ -18,6 +18,11 @@ from ctypes import wintypes
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+
+def _is_windows_platform() -> bool:
+    """Return whether Windows-specific APIs are available."""
+    return os.name == "nt"
+
 @dataclass(frozen=True)
 class WindowObservation:
     hwnd: int
@@ -41,12 +46,12 @@ class WindowsComputerUse:
         self.workspace = Path(workspace).resolve() if workspace else None
         self._processes: dict[int, subprocess.Popen] = {}
         self._authorized: set[str] = set()
-        if os.name == "nt":
+        if _is_windows_platform():
             self.user32 = ctypes.windll.user32
             self.kernel32 = ctypes.windll.kernel32
 
     def _windows(self) -> list[WindowObservation]:
-        if os.name != "nt": return []
+        if not _is_windows_platform(): return []
         result = []
         enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def callback(hwnd, _):
@@ -90,7 +95,7 @@ class WindowsComputerUse:
         return self._start_menu_apps()[:100]
 
     def process_path(self, pid: int) -> str | None:
-        if os.name != "nt": return None
+        if not _is_windows_platform(): return None
         access = 0x1000 | 0x0400
         handle = self.kernel32.OpenProcess(access, False, pid)
         if not handle: return None
@@ -156,7 +161,7 @@ class WindowsComputerUse:
             if found and Path(found).is_file():
                 return Path(found).resolve()
 
-            if os.name == "nt":
+            if _is_windows_platform():
                 try:
                     import winreg
                     app_path_key = (
@@ -180,7 +185,7 @@ class WindowsComputerUse:
                 except ImportError:
                     pass
 
-        if os.name == "nt":
+        if _is_windows_platform():
             system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
             for root in (system_root / "System32", system_root / "SysWOW64"):
                 for executable_name in dict.fromkeys(executable_names):
@@ -188,7 +193,7 @@ class WindowsComputerUse:
                     if candidate.is_file() and candidate.suffix.casefold() == ".exe":
                         return candidate.resolve()
 
-        if os.name == "nt" and executable_names[0].casefold() == "winword.exe":
+        if _is_windows_platform() and executable_names[0].casefold() == "winword.exe":
             roots = [
                 Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
                 Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
@@ -209,7 +214,7 @@ class WindowsComputerUse:
     @staticmethod
     def _start_menu_apps() -> list[dict]:
         """Read Start-menu application names and AUMIDs without executing user input."""
-        if os.name != "nt":
+        if not _is_windows_platform():
             return []
         system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
         candidates = [
@@ -258,7 +263,7 @@ class WindowsComputerUse:
     def _resolve_start_menu_target(cls, application: str) -> dict | None:
         """Resolve a Start-menu entry to a validated AppsFolder activation target."""
         raw = str(application or "").strip().strip('"')
-        if not raw or os.name != "nt":
+        if not raw or not _is_windows_platform():
             return None
         requested_aumid = None
         if raw.casefold().startswith("appsfolder:"):
@@ -445,14 +450,14 @@ class WindowsComputerUse:
 
     def window_process_id(self, hwnd: int) -> int | None:
         """Read the current owner PID for one HWND without interacting with it."""
-        if os.name != "nt" or not self.user32.IsWindow(hwnd):
+        if not _is_windows_platform() or not self.user32.IsWindow(hwnd):
             return None
         pid = wintypes.DWORD()
         self.user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
         return int(pid.value) if pid.value else None
 
     def controls(self, hwnd: int) -> list[dict]:
-        if os.name != "nt" or not self.user32.IsWindow(hwnd): return []
+        if not _is_windows_platform() or not self.user32.IsWindow(hwnd): return []
         result = []; enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def callback(child, _):
             title = ctypes.create_unicode_buffer(1024); cls = ctypes.create_unicode_buffer(256)
