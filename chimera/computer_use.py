@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
+import shutil
 import subprocess
 import time
 import threading
@@ -99,19 +101,119 @@ class WindowsComputerUse:
         token = f"{session_id}:{pid}:{path.casefold()}"; self._authorized.add(token)
         return {"status": "completed", "authorization": token, "pid": pid, "executable": path}
 
+    @staticmethod
+    def _resolve_executable(application: str) -> Path | None:
+        """Resolve a direct .exe path or a known installed Windows app name."""
+        raw = str(application or "").strip().strip('"')
+        if not raw:
+            return None
+        direct = Path(raw).expanduser()
+        if direct.is_file() and direct.suffix.casefold() == ".exe":
+            return direct.resolve()
+        # Do not reinterpret a misspelled absolute/relative path as an app name.
+        if direct.is_absolute() or any(separator in raw for separator in ("\\", "/", ":")):
+            return None
+
+        aliases = {
+            "word": "WINWORD.EXE",
+            "microsoft word": "WINWORD.EXE",
+            "winword": "WINWORD.EXE",
+            "excel": "EXCEL.EXE",
+            "microsoft excel": "EXCEL.EXE",
+            "powerpoint": "POWERPNT.EXE",
+            "power point": "POWERPNT.EXE",
+            "outlook": "OUTLOOK.EXE",
+            "notepad": "notepad.exe",
+            "notepad++": "notepad++.exe",
+            "calculator": "calc.exe",
+            "paint": "mspaint.exe",
+            "blender": "blender.exe",
+            "chrome": "chrome.exe",
+            "google chrome": "chrome.exe",
+            "edge": "msedge.exe",
+            "microsoft edge": "msedge.exe",
+            "firefox": "firefox.exe",
+            "visual studio code": "code.exe",
+            "vscode": "code.exe",
+        }
+        key = raw.casefold()
+        executable_names = [aliases.get(key, raw)]
+        if not executable_names[0].casefold().endswith(".exe"):
+            executable_names.append(executable_names[0] + ".exe")
+
+        for executable_name in dict.fromkeys(executable_names):
+            found = shutil.which(executable_name)
+            if found and Path(found).is_file():
+                return Path(found).resolve()
+
+            if os.name == "nt":
+                try:
+                    import winreg
+                    app_path_key = (
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\"
+                        + executable_name
+                    )
+                    roots = [
+                        (winreg.HKEY_CURRENT_USER, 0),
+                        (winreg.HKEY_LOCAL_MACHINE, getattr(winreg, "KEY_WOW64_64KEY", 0)),
+                        (winreg.HKEY_LOCAL_MACHINE, getattr(winreg, "KEY_WOW64_32KEY", 0)),
+                    ]
+                    for root, view in roots:
+                        try:
+                            with winreg.OpenKey(root, app_path_key, 0, winreg.KEY_READ | view) as registry_key:
+                                value, _ = winreg.QueryValueEx(registry_key, "")
+                            candidate = Path(os.path.expandvars(str(value).strip().strip('"')))
+                            if candidate.is_file() and candidate.suffix.casefold() == ".exe":
+                                return candidate.resolve()
+                        except OSError:
+                            continue
+                except ImportError:
+                    pass
+
+        if os.name == "nt" and executable_names[0].casefold() == "winword.exe":
+            roots = [
+                Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
+                Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
+            ]
+            for root in roots:
+                for office_path in (
+                    root / "Microsoft Office" / "root" / "Office16" / "WINWORD.EXE",
+                    root / "Microsoft Office" / "Office16" / "WINWORD.EXE",
+                ):
+                    if office_path.is_file():
+                        return office_path.resolve()
+        return None
+
     def launch(self, executable: str, approved: bool = False) -> dict:
-        path = Path(executable).expanduser()
-        if not path.is_file(): return {"status": "blocked", "reason": "application executable does not exist"}
-        if path.suffix.casefold() != ".exe": return {"status": "blocked", "reason": "only executable applications may be launched"}
-        if not approved: return {"status": "awaiting_approval", "application": str(path), "permission": "computer.launch"}
-        process = subprocess.Popen([str(path.resolve())], shell=False)
+        path = self._resolve_executable(executable)
+        if path is None:
+            return {
+                "status": "blocked",
+                "reason": f"could not resolve an installed application executable for {executable!r}",
+            }
+        if path.suffix.casefold() != ".exe":
+            return {"status": "blocked", "reason": "only executable applications may be launched"}
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "application": str(path),
+                "requested_application": str(executable),
+                "permission": "computer.launch",
+            }
+        process = subprocess.Popen([str(path)], shell=False)
         self._processes[process.pid] = process
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             windows = [item for item in self._windows() if item.pid == process.pid]
-            if windows: return {"status": "completed", "pid": process.pid, "windows": [asdict(item) for item in windows]}
+            if windows:
+                return {"status": "completed", "pid": process.pid, "executable": str(path), "windows": [asdict(item) for item in windows]}
             time.sleep(.05)
-        return {"status": "failed", "pid": process.pid, "reason": "application window did not appear within timeout", "executable": str(path.resolve())}
+        return {
+            "status": "failed",
+            "pid": process.pid,
+            "reason": "application window did not appear within timeout",
+            "executable": str(path),
+        }
 
     def window_process_id(self, hwnd: int) -> int | None:
         """Read the current owner PID for one HWND without interacting with it."""
