@@ -410,7 +410,14 @@ class ComputerSessionManager:
         from dataclasses import asdict
         return asdict(self.strategy.choose(operation, application_type, evidence))
     def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None) -> ApplicationIdentity:
-        """Authorize one exact live process selected by the operator."""
+        """Authorize the exact live process returned by a verified app launch.
+
+        Packaged Windows apps may be started through an execution alias
+        (WindowsApps\\mspaint.exe) while the window-owning process reports
+        its real package executable (often under WindowsApps\\...\\...exe).
+        Bind authorization to the live PID + creation time + actual executable,
+        and use the alias only as a basename sanity check.
+        """
         try:
             import psutil
             process = psutil.Process(int(pid))
@@ -420,20 +427,29 @@ class ComputerSessionManager:
             raise RuntimeError(f"application process identity could not be verified: {exc}") from exc
         if not actual:
             raise RuntimeError("application executable path is unavailable")
-        if executable and str(Path(executable).resolve()).casefold() != actual.casefold():
-            raise RuntimeError("application executable changed before authorization")
+        if executable:
+            expected_name = Path(str(executable)).name.casefold()
+            actual_name = Path(actual).name.casefold()
+            if expected_name and actual_name != expected_name:
+                raise RuntimeError(
+                    "launched process does not match the requested application "
+                    f"(expected {expected_name}, observed {actual_name})"
+                )
+        # Re-read identity immediately before registering it to close the
+        # PID-reuse / process-exit race during authorization.
+        try:
+            current = psutil.Process(int(pid))
+            if abs(float(current.create_time()) - created) > 0.01:
+                raise RuntimeError("application PID was reused during authorization")
+            current_executable = str(Path(current.exe()).resolve())
+            if current_executable.casefold() != actual.casefold():
+                raise RuntimeError("application executable changed during authorization")
+        except Exception as exc:
+            raise RuntimeError(f"application process changed during authorization: {exc}") from exc
         identity = ApplicationIdentity(int(pid), actual, created, owner_session_id, uuid.uuid4().hex)
         self.sessions[identity.session_id] = identity
         return identity
-
-    @staticmethod
-    def _identity_is_current(identity: ApplicationIdentity) -> bool:
-        try:
-            import psutil
-            process = psutil.Process(identity.pid)
-            if abs(float(process.create_time()) - identity.process_create_time) > 0.01:
-                return False
-            return str(Path(process.exe()).resolve()).casefold() == identity.executable.casefold()
+process.exe()).resolve()).casefold() == identity.executable.casefold()
         except Exception:
             return False
 
