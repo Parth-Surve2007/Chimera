@@ -1,258 +1,246 @@
-# 🐉 Chimera
+# 🐉 CHIMERA
 
-### Your desktop. Your tools. Your rules.
+<p align="center">
+  <img src="assets/chimera_title.png" alt="Chimera" width="620">
+</p>
 
-**Chimera is a local-first AI computer-workbench for turning natural-language intent into governed, observable digital work.** It combines a persistent agent runtime, selectable language models, Windows desktop control, application connectors, local file and document tools, browser automation, and evidence-aware workflows.
+<h3 align="center">One local-first AI. Your whole digital workspace.</h3>
+<p align="center">
+  <strong>Think beyond chat. Delegate the work.</strong><br>
+  From documents and spreadsheets to 3D scenes, code, browser workflows and desktop applications, Chimera is being built to turn natural-language intent into real, reviewable computer work.
+</p>
 
-Chimera is designed to do more than produce instructions. It can inspect a workspace, plan a task, invoke registered tools, request approval before protected changes, execute supported actions, inspect the result, and preserve the work trail in a local session.
+<p align="center">
+  <img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white">
+  <img alt="Local first" src="https://img.shields.io/badge/AI-LOCAL--FIRST-9B7653?style=for-the-badge">
+  <img alt="Windows" src="https://img.shields.io/badge/Desktop-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white">
+  <img alt="Open source" src="https://img.shields.io/badge/Project-Open%20Source-6D8B74?style=for-the-badge">
+</p>
 
-> **The central idea:** intelligence proposes, policy authorizes, tools act, and evidence decides whether the work actually happened.
-
-<p align="left">
-  <img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white">
-  <img alt="Windows desktop" src="https://img.shields.io/badge/Desktop-Windows-0078D4?style=flat-square&logo=windows&logoColor=white">
-  <img alt="Local first" src="https://img.shields.io/badge/Architecture-Local--first-BC8B3C?style=flat-square">
-  <img alt="Flet" src="https://img.shields.io/badge/UI-Flet-222222?style=flat-square">
-  <img alt="llama.cpp" src="https://img.shields.io/badge/Inference-llama.cpp-6D8B74?style=flat-square">
+<p align="center">
+  <em>Your machine. Your models. Your permissions. Your agent.</em>
 </p>
 
 ---
 
-## 🧠 The Chimera approach
+## Meet Chimera
 
-Most assistants stop at an answer. Chimera is built around a work loop:
+Most AI assistants live inside a chat box. **Chimera is being built to work beyond one.**
 
-1. **Understand** the request and the active workspace.
-2. **Plan** the work and identify the tools and permissions it needs.
-3. **Authorize** protected operations through explicit, action-specific approval.
-4. **Execute** through registered capabilities rather than arbitrary model-generated code.
-5. **Verify** outputs and inspect post-action state where a verifier is available.
-6. **Report** what succeeded, what failed, and what evidence supports the result.
+Chimera is a local-first AI computer-workbench that brings together local language models, persistent agent reasoning, desktop control, application connectors, browser automation, document creation, workflow orchestration and evidence-aware verification.
 
-A model saying “done” is not proof that a file exists, a button was activated, or an application changed state. Chimera stores tool outcomes and verification evidence separately from the model's narration.
+Give it an outcome, not a twenty-step instruction manual. Chimera's architecture is designed to understand the goal, break it into work, choose from registered capabilities, request permission when an action matters, operate supported software, and check what actually happened.
 
-### The systems working together
+The ambition is simple and unapologetic:
 
-| System | What it contributes |
-|---|---|
-| **AgentRuntime** | Persistent conversations, model decisions, registered tool dispatch, approval pauses, execution feedback, and durable events. |
-| **Model Bay** | Local GGUF configuration, persistent llama.cpp server sessions, explicit provider profiles, and visible model selection. |
-| **Computer Runtime** | Windows process discovery, per-conversation process authorization, fresh UI Automation observations, and scoped interaction. |
-| **Application SDK** | Manifest-backed connectors, declared actions, argument contracts, risk levels, permissions, and availability discovery. |
-| **Workspace Tools** | Bounded local file discovery, inspection, search, reading, and approval-gated artifact creation. |
-| **Workflow Engine** | Multi-step execution, dependency-aware planning, policy checks, persisted run state, and evidence-aware outcomes. |
-| **Goal Ledger** | Durable operator-defined goals, priorities, acceptance criteria, and supporting evidence. |
-| **Experience Learning** | Trace review, secret redaction, reusable skill proposals, and operator-controlled approval. |
+> **One agent that can move between the tools you already use, get useful work done, and show its receipts.**
+
+It is not tied to one model, one vendor, one application or one workflow. Run it with local GGUF models, connect an explicitly selected external provider when you choose, and grow its capabilities through an extensible connector system.
+
+<p align="center">
+  <img src="assets/chimera_intro.gif" alt="Chimera project introduction" width="820">
+</p>
 
 ---
 
-## ✨ Capabilities
+## The idea: from a prompt to completed work
 
-### Persistent agent conversations
+Chimera combines the pieces that usually live in separate products:
 
-Chimera's desktop workbench is backed by a persistent runtime rather than a disposable prompt window.
+| Layer | What Chimera brings together |
+|---|---|
+| **Intelligence** | Local LLMs, optional external model providers, structured decisions and persistent conversation context. |
+| **Computer control** | Live application discovery, process-aware authorization, UI Automation, scoped keyboard and pointer input, and optional CUA transport. |
+| **Application ecosystem** | Manifest-backed connectors and specialist workflows for applications and services. |
+| **Creation** | Text files, Word documents, PDFs, browser downloads, Blender scenes and other bounded artifacts. |
+| **Orchestration** | Plans, task checklists, multi-step workflows, dependencies, approvals and persisted run history. |
+| **Verification** | Fresh observations, artifact inspection, independent checks and evidence-aware completion states. |
+| **Governance** | Local-first execution, explicit permissions, operator-controlled skills and no silent hosted fallback. |
 
-- Conversations and messages are stored locally in SQLite.
-- Session events are sequenced and persisted for replayable activity history.
-- The active conversation retains its selected model and Plan or Build mode.
-- Tool calls are structured invocations with arguments and results.
-- Pending protected actions can pause for an operator decision and resume through the runtime.
-- Failed tool results can be returned to the model as observations, allowing a bounded correction attempt.
-- Repeated identical failed calls are guarded against rather than retried indefinitely.
+The work loop:
 
-### Model choice and local inference
+1. **Understand** the outcome and current context.
+2. **Plan** the steps, dependencies and capabilities.
+3. **Ask** before protected or state-changing actions.
+4. **Act** through registered tools and application integrations.
+5. **Inspect** the actual application or artifact state.
+6. **Verify** the result and keep evidence.
+7. **Report** what completed, what did not, and what remains.
 
-Chimera is local-first, not local-only.
+A model response saying “done” is not the finish line. The file, application state or workflow result is.
 
-- Run local GGUF models through a configured llama.cpp llama-server.
-- Use an explicitly configured llama-cli path when one-shot inference is preferred.
-- Persist model profiles, runtime settings, context budgets, and the selected provider.
-- Use native GGUF chat templates and structured decision output when supported by the selected model and runtime.
-- Configure compatible external API profiles when desired.
-- Select hosted providers explicitly. A failed local model does not silently switch to another model or a hosted service.
-- Keep model files and inference executables under operator control. Chimera does not silently download models.
+---
 
-A separate opt-in local vision provider can inspect screenshots using a configured multimodal GGUF and llama.cpp server. It is disabled unless its local model configuration is supplied. Visual perception is evidence for understanding a screen, not permission to interact with it.
+## A desktop-wide ambition
 
-### Windows desktop control
+Chimera is not meant to be another single-purpose AI for one application. Its target is the software ecosystem people already work in: office suites, creative tools, development environments, browsers, engineering software and 3D production.
 
-Chimera can discover visible Windows application windows at runtime and work with supported controls through Windows UI Automation.
+### The kinds of applications Chimera is designed to work across
 
-- Live window and process discovery.
-- Exact process identity checks and per-conversation authorization.
-- Fresh UI Automation snapshots before supported interactions.
-- Reading accessible names, text patterns, values, and bounded table/grid information.
-- Semantic actions such as invoke, set value, toggle, select, expand, and collapse.
-- Bounded scrolling and supported item navigation.
-- Foreground-scoped pointer and keyboard interaction when a supported semantic control is not available.
-- Optional Cua Driver transport for snapshot-bound background interactions where the backend is available.
-- Canvas drawing uses background drag delivery first. A foreground retry is exposed only after the driver explicitly recommends it for that exact drawing attempt, and it requires a fresh canvas snapshot plus a separate higher-risk operator approval.
-- Post-action observation so an accepted input event is not confused with a verified task result.
+| Workspace | Examples |
+|---|---|
+| **Documents & office** | Microsoft Word, Excel, PowerPoint, Outlook, OneNote, LibreOffice Writer, Calc and Impress. |
+| **Creative & video** | Adobe Photoshop, Illustrator, Premiere Pro, After Effects, DaVinci Resolve, Audacity, OBS Studio, GIMP and Krita. |
+| **3D, CAD & design** | Blender, Autodesk Maya, 3ds Max, AutoCAD, Fusion, Inventor, Revit, SolidWorks, FreeCAD and KiCad. |
+| **Development** | VS Code, Visual Studio, PyCharm, IntelliJ IDEA, Android Studio, GitHub Desktop, terminals and local development tools. |
+| **Research & data** | Jupyter, MATLAB, spreadsheets, databases, technical viewers and analysis tools. |
+| **Communication & productivity** | Microsoft Teams, Slack, Discord, Notion, Obsidian and supported web applications. |
+| **Browsers & the web** | Microsoft Edge, Google Chrome, Firefox and isolated browser workflows. |
 
-The runtime does not silently escalate a background action into foreground input. A process being visible or installed does not automatically authorize it for the current conversation.
+**This is the ecosystem Chimera is aiming at, not a claim that every application above already has a complete dedicated connector.** Today, the actual control surface depends on the integration available: a native connector, browser automation, Windows UI Automation or another supported interaction route. Some apps expose excellent controls; others need deeper, application-specific adapters.
+
+The point of the architecture is that adding a new application should expand the same agent, not create another disconnected assistant.
+
+---
+
+## What is in the repository today
+
+Chimera already has a growing set of working foundations and specialist integrations.
+
+### Local-first model runtime
+
+- Run local GGUF models through a configured llama.cpp `llama-server`.
+- Configure `llama-cli` for one-shot inference when preferred.
+- Save model profiles, runtime settings and conversation-level model selection.
+- Use structured JSON decisions and native model chat templates when supported.
+- Configure compatible external API providers explicitly.
+- No automatic hosted fallback when a local model fails.
+- No silent model downloads.
+
+Chimera is **local-first, not local-only**. You decide where inference happens.
+
+### Persistent agent runtime
+
+- Conversations, messages and events stored locally in SQLite.
+- Persistent model selection and Plan/Build mode.
+- Registered tool dispatch with strict argument contracts.
+- Approval pauses for protected actions, followed by controlled resumption.
+- Bounded error feedback and correction attempts.
+- Repeated identical failed calls are guarded against.
+- Durable task and execution history.
+
+### Windows computer control
+
+- Discover live applications and top-level windows.
+- Bind authorization to the exact process and current conversation.
+- Capture fresh Windows UI Automation observations.
+- Read accessible text, values and supported grid information.
+- Invoke controls, set values, toggle, select, expand, collapse and scroll where supported.
+- Use foreground-scoped input for observed UIA targets when semantic actions are not available.
+- Optional Cua Driver background snapshots and interactions when installed.
+- Require separate approval for protected interactions and higher-risk escalation.
+- Re-observe after actions instead of confusing input delivery with task completion.
+
+A visible or installed application is not automatically authorized. Desktop control remains tied to a verified process and the operator's decision.
 
 ### Browser automation
 
-The browser connector uses an isolated visible Chromium session through Playwright. It is designed for controlled browser work without reusing the operator's everyday browser profile.
+The browser connector uses an isolated Chromium session through Playwright rather than reusing the operator's everyday browser profile.
 
-Supported browser operations include inspecting the current page, navigating, locating unique controls, interacting with supported elements, filling ordinary text fields, selecting dropdown values, uploading approved workspace files, capturing screenshots, and downloading files.
+Supported operations include:
 
-Browser mutations are subject to the runtime's approval policy. Page content is untrusted input, and password fields are not filled by the agent.
+- Inspecting and navigating pages.
+- Locating unique controls and interacting with supported elements.
+- Filling ordinary text fields and selecting dropdown values.
+- Uploading approved workspace files.
+- Capturing screenshots and downloading files.
 
-### Local files and document creation
+Browser mutations follow the runtime's approval policy. Page content is treated as untrusted input, and password fields are not filled by the agent.
 
-Chimera includes bounded workspace tools for practical file work.
+### Files, Word documents and PDFs
+
+Chimera includes bounded workspace operations for local file work:
 
 - List files and inspect metadata.
 - Search filenames and supported text content.
 - Read text files within configured size limits.
 - Create new text and source files.
-- Generate genuine Word DOCX documents.
-- Generate PDF documents and reopen them to verify extracted text and page structure.
-- Preserve existing files by refusing to overwrite a destination through the built-in create operations.
+- Generate genuine `.docx` Word documents.
+- Generate PDFs and independently reopen them to verify extracted text and page structure.
+- Refuse to overwrite an existing destination through built-in create operations.
 
-On Windows, the default workspace scope is the system drive. The tools run with the permissions of the Windows account that launched Chimera. They do not elevate privileges or bypass filesystem ACLs.
+This is the foundation for workflows such as reading a source text file, turning it into a formatted document, exporting a PDF and checking the finished artifact.
 
-### Application integrations
+### Specialist application integrations
 
-Chimera uses a manifest-backed application connector SDK. A connector declares its identity, integration surfaces, supported actions, argument schema, risk level, permissions, preconditions, and known limitations.
-
-| Integration | What it does | External requirement |
+| Integration | Current role | Requirement |
 |---|---|---|
+| **Blender** | Validated scene recipes, primitive-based 3D scene creation, saved BLEND projects and PNG previews. | Blender installed locally. |
+| **Ghidra** | Installation discovery and bounded binary inspection, including supported strings and function analysis. | Ghidra and its required Java runtime. |
+| **REA** | Built-in static artifact identification and inspection for supported binary formats. | No separate application for built-in analysis. |
 | **Browser** | Isolated browser inspection and controlled web interaction. | Edge or Chrome executable and Playwright runtime. |
-| **Blender** | Validated primitive-based scene creation, saved BLEND project, and PNG preview. | Blender installed locally. |
-| **Ghidra** | Installation discovery and bounded binary inspection, including supported string and function analysis. | Ghidra and its required Java runtime for Ghidra-backed operations. |
-| **REA** | Built-in static artifact identification and inspection for supported binary formats. | No separate application required for built-in analysis. |
 
-Connector availability is discovered at runtime. A connector being present in the repository does not imply that its companion application is installed or that every declared action is available.
+Connectors declare their identity, actions, argument schema, permissions, risk level, preconditions and availability. An installed application is not assumed to support every operation, and unavailable actions are reported rather than silently faked.
 
-#### Blender scene generation
+### Workflows, goals and reusable skills
 
-The Blender connector accepts a bounded JSON scene recipe, validates supported primitives and values, requests approval, and invokes Blender with a fixed script. It can create simple scenes with mesh primitives, transforms, basic materials, a camera, lighting, a saved project, and a rendered PNG preview.
+- Multi-step workflows with dependencies and persisted run state.
+- Operator-owned goals with priorities, success criteria and attached evidence.
+- Evidence-aware evaluation states: pass, fail, unknown and blocked.
+- Execution trace review and secret redaction.
+- Reusable skill proposals with declared steps, permissions and expected outputs.
+- Operator approval before a proposed skill becomes an approved reusable capability.
 
-It does not execute model-supplied Python scripts and is not presented as a general-purpose 3D modelling interface.
-
-#### Ghidra and REA
-
-REA provides built-in static inspection for supported artifacts, including format detection, structural metadata, and string extraction. The Ghidra connector adds discovery and bounded Ghidra-related analysis when the external application and runtime are available.
-
-The connector reports unavailable actions honestly. The presence of a Ghidra installation is not treated as proof that arbitrary Ghidra scripts can be executed.
-
-### Multi-step workflows and task governance
-
-Chimera can represent work as structured tasks and sequential workflows rather than relying on an unstructured chain of model messages.
-
-- Workflows can express dependencies between steps.
-- Each action is checked against the active policy.
-- Protected operations pause for approval.
-- Runs and step outcomes are persisted.
-- Failures and blocked actions remain visible in the run history.
-- Evidence-aware evaluation distinguishes pass, fail, unknown, and blocked.
-- An inconclusive check is not promoted to a successful result.
-- Proposal acquisition and verification use bounded attempts and staging rather than treating an unverified candidate as accepted.
-
-### Goals, memory, and reusable skills
-
-Chimera separates durable goals from individual conversations and task attempts.
-
-- Create operator-owned goals with priorities, descriptions, tags, and success criteria.
-- Attach evidence to goals as work progresses.
-- Keep completion as an explicit state transition rather than inferring it from a model response.
-- Capture execution traces for review.
-- Redact detected secrets before preparing reusable skill proposals.
-- Store proposed skills with declared permissions, parameters, expected outputs, and reusable steps.
-- Require operator approval before a proposed skill is treated as approved.
-
-This is governed experience capture, not unrestricted self-modification. A trace does not automatically become executable authority.
+Chimera's learning direction is governed experience capture, not unrestricted self-modification.
 
 ---
 
-## 🧭 The desktop workbench
+## The workbench
 
-The Flet desktop interface organizes the main systems into focused work areas:
+The Flet desktop workbench brings the systems into one place:
 
-| Area | Purpose |
+| Area | What it is for |
 |---|---|
-| **Chat** | Continuous conversation, task composition, tool activity, and Plan/Build controls. |
-| **Model Bay** | Local model selection, runtime configuration, and provider profiles. |
-| **Applications** | Installed and running application discovery and connector availability. |
-| **Workflow Studio** | Structured multi-step workflow authoring and execution. |
-| **Capabilities** | First-party capabilities and custom capability proposals. |
-| **Goals** | Durable goals, priorities, criteria, and evidence. |
-| **Run History** | Persisted workflow and execution activity. |
+| **Chat Workbench** | Persistent conversations, task requests, tool activity and Plan/Build controls. |
+| **Model Bay** | Local model configuration, runtime status and provider profiles. |
+| **Applications** | Installed/running application discovery and connector availability. |
+| **Workflow Studio** | Structured workflow creation and execution. |
+| **Capabilities** | Built-in capabilities and custom capability proposals. |
+| **Goal Ledger** | Long-lived goals, success criteria and evidence. |
+| **Run History** | Workflow runs, tool outcomes and execution events. |
 
-The workbench uses a dark graphite and neutral visual system. The interface exposes the active mode and approval boundary so the operator can distinguish planning from protected execution.
-
----
-
-## 🔐 Safety and execution model
-
-Chimera is designed around explicit authority boundaries.
-
-**Plan Mode** is for reasoning, inspection, and preparation. Protected actions are blocked. The model can identify the tools a task would need without receiving permission to perform protected changes.
-
-**Build Mode** enables governed execution. Actions that modify files, application state, or external resources are subject to their declared risk level and permission policy. When approval is required, Chimera presents the specific action and its arguments for an operator decision.
-
-### Evidence and verification
-
-- Tool arguments are validated against registered action contracts.
-- Application actions are checked against their connector manifests.
-- Windows interactions are tied to an authorized process and fresh observation.
-- Filesystem operations have explicit scope and size limits.
-- Created documents are checked after writing.
-- Workflow evaluation does not treat missing evidence as a pass.
-- The final response should distinguish completed work from attempted, blocked, failed, or unverified work.
-
-### Local-first privacy
-
-- Local inference is available without sending prompts to a hosted model provider.
-- Hosted model profiles are opt-in and explicitly selected.
-- Local model and vision files are supplied by the operator.
-- Browser automation uses an isolated profile rather than the user's default browser profile.
-- Application and filesystem operations run under the current user's operating-system permissions.
+The interface is designed around a clear distinction between planning, approved execution and verified outcomes.
 
 ---
 
-## 🗂️ Filesystem scope and limits
+## Approval, safety and evidence
 
-On Windows, the default local workspace is the system drive, typically:
+Chimera's philosophy is not “let the model do whatever it wants.” It is **give the model useful capabilities, then make authority explicit**.
 
-    C:\
+**Plan Mode** supports reasoning, preparation and permitted inspection. Protected operations remain blocked.
 
-The workspace tools can resolve known folders such as the current user's Desktop relative to that root. There is no separate project-attachment step required for the default drive scope.
+**Build Mode** enables governed execution. Actions that change files, application state or external resources are checked against their declared permissions and risk level. Where approval is required, Chimera pauses and shows the exact operation and arguments.
 
-Discovery is deliberately bounded:
+The runtime is built to:
 
-- Directory traversal skips inaccessible folders and does not follow symbolic links or Windows junctions.
-- A listing returns at most 200 files.
-- Filename search examines at most 2,000 files and returns at most 200 matches.
-- Text search scans at most 2,000 files and 50 MB of candidate text.
-- Individual text reads and new-file contents are limited to 2 MB.
-- New text/source files must use a supported extension.
-- Word documents and PDFs use dedicated document operations.
-- Built-in create operations do not overwrite existing files.
+- Validate tool arguments against registered contracts.
+- Check application operations against connector manifests.
+- Tie Windows interactions to a live process and fresh UI observation.
+- Keep filesystem access within the selected workspace scope.
+- Verify generated documents after writing.
+- Distinguish success from attempted, failed, blocked or unverified work.
+- Avoid silently changing model providers or escalating an action.
 
-These limits are intentional. Broad workspace access is not unrestricted system access, and protected Windows or application files may remain inaccessible.
-
----
-
-## 🪟 Windows application-control flow
-
-A typical governed desktop interaction follows this sequence:
-
-1. Refresh the live application inventory.
-2. Select an installed application to launch with approval, or authorize an already-running process.
-3. Verify the process identity and bind it to the current conversation.
-4. Capture a fresh UI Automation observation.
-5. Choose a supported semantic action or bounded scoped input.
-6. Apply the action only after the required approval.
-7. Capture a new observation and report what changed.
-
-Chimera supports the control patterns exposed by the target application. Some desktop software exposes incomplete or no useful UI Automation information. In those cases, a native connector or manual handoff may be needed.
+**The agent proposes. The operator authorizes. The runtime executes. Evidence decides.**
 
 ---
 
-## ⚙️ Install on Windows
+## Local-first by design
+
+Your computer should not need to send every thought, file or task to a remote service.
+
+- Local GGUF inference is supported through llama.cpp.
+- External model APIs are optional and explicitly selected.
+- Model files and inference executables remain under operator control.
+- Browser automation uses an isolated profile.
+- Desktop and filesystem actions run with the current Windows user's permissions.
+- No hidden elevation, silent model downloads or automatic hosted fallback.
+
+Local-first is an architectural choice, not just a badge.
+
+---
+
+## Install on Windows
 
 ### Requirements
 
@@ -264,191 +252,229 @@ Chimera supports the control patterns exposed by the target application. Some de
 
 ### 1. Clone the repository
 
-    git clone https://github.com/Parth-Surve2007/Chimera.git
-    cd Chimera
+```powershell
+git clone https://github.com/Parth-Surve2007/Chimera.git
+cd Chimera
+```
 
-### 2. Run the Windows setup helper
+### 2. Run the setup helper
 
-    scripts\setup_windows.bat
+```bat
+scripts\setup_windows.bat
+```
 
-The helper installs Chimera and its test/packaging dependencies into the active global Python user installation. **It does not create a virtual environment.**
+The helper installs Chimera and its test/packaging dependencies into the active global Python user installation. It does not create a virtual environment.
 
-When WinGet is available, the helper offers to install Blender through BlenderFoundation.Blender, Eclipse Temurin JDK 25 through EclipseAdoptium.Temurin.25.JDK, and the latest official Ghidra public ZIP release through scripts\install_ghidra.ps1.
-
-The setup process is interactive. Review installation prompts and Windows permission dialogs. It does not download a GGUF model. If WinGet is unavailable, install Blender, Temurin, and Ghidra manually.
+When WinGet is available, the helper offers optional setup for Blender, Eclipse Temurin JDK 25 and Ghidra. Review installation prompts and Windows permission dialogs. The setup process does not download a GGUF model.
 
 ### 3. Launch Chimera
 
-    python -m chimera
+```powershell
+python -m chimera
+```
 
-The first launch creates the local Chimera data directory. Source runs use .chimera\ in the repository unless CHIMERA_DATA_DIR is set. Packaged runs use the current user's LocalAppData directory.
+The first launch creates the local Chimera data directory. Source runs use `.chimera\` in the repository unless `CHIMERA_DATA_DIR` is set. Packaged runs use the current user's LocalAppData directory.
 
 ### 4. Configure a local model
 
 1. Open **Model Bay**.
 2. Select your GGUF model.
-3. Select the matching llama-server.exe for persistent inference, or explicitly configure llama-cli.exe for one-shot mode.
-4. Start with **APPLY LOW-MEMORY PRESET**: 4K context, 384 output tokens, 4 CPU threads, and adaptive GPU offload. This is the safer starting point for 16 GB RAM systems. Use **APPLY HIGH-COMPUTE PRESET** only when the machine has enough free memory and the larger context materially helps your tasks.
-5. Save the configuration and load the model. The llama-server must restart to apply changed settings. Existing saved user budgets are preserved; changing presets is an explicit operator choice.
+3. Select the matching `llama-server.exe` for persistent inference, or configure `llama-cli.exe` for one-shot mode.
+4. Start with **APPLY LOW-MEMORY PRESET**: 4K context, 384 output tokens, 4 CPU threads and adaptive GPU offload. This is the safer starting point for a 16 GB RAM system.
+5. Save the configuration and load the model. The llama-server must restart to apply changed settings.
 
-Persistent llama-server inference uses the GGUF's native chat template and schema-constrained JSON decisions when supported by the selected model and runtime. Failed actions are fed back as role-separated observations, and exact repeated failed tool calls are stopped. Runtime structure can improve execution discipline, but it cannot make a small model reason beyond its underlying capabilities.
+Existing saved inference budgets are preserved. Larger context and output budgets are an explicit choice, not a silent migration.
 
-Chimera does not silently change providers, download a model, or fall back to a hosted service when a local runtime fails. Hosted API profiles can be added separately and are used only when explicitly selected for the conversation.
+Chimera does not silently change providers, download a model or fall back to a hosted service when local inference fails. Hosted API profiles can be configured separately and selected explicitly.
 
 ### Optional local vision
 
-Configure the local vision provider with environment variables before launching Chimera:
+Configure a compatible local multimodal model and llama.cpp server before launching Chimera:
 
-    CHIMERA_VISION_MODEL_PATH=C:\Models\vision-model.gguf
-    CHIMERA_VISION_SERVER=C:\llama.cpp\llama-server.exe
-    CHIMERA_VISION_MMPROJ_PATH=C:\Models\mmproj.gguf
+```powershell
+$env:CHIMERA_VISION_MODEL_PATH="C:\Models\vision-model.gguf"
+$env:CHIMERA_VISION_SERVER="C:\llama.cpp\llama-server.exe"
+$env:CHIMERA_VISION_MMPROJ_PATH="C:\Models\mmproj.gguf"
+```
 
-The multimodal model and matching projector file must be compatible with the selected llama.cpp build. Vision is opt-in and does not grant desktop interaction permissions.
-
----
-
-## 📦 Build a portable Windows application
-
-The repository includes a PyInstaller build script. From the repository root, run this in PowerShell or Command Prompt:
-
-    powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\build_windows.ps1"
-
-The script runs the configured tests and compile checks, prepares the Flet desktop client, creates the frozen application, and writes:
-
-    dist\
-    ├── Chimera\
-    │   └── Chimera.exe
-    └── Chimera-Windows-portable.zip
-
-Use -SkipTests only when you have already run the test suite and intentionally want to skip it during packaging:
-
-    powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\build_windows.ps1" -SkipTests
-
-The portable application bundles its Python runtime and Flet desktop client. GGUF model files, llama.cpp executables, Blender, and Ghidra remain separate local installations.
+The model, projector and llama.cpp build must be compatible. Vision is opt-in and does not grant desktop interaction permissions.
 
 ---
 
-## 🧪 Development
+## Build a portable Windows application
 
-Install the source and test dependencies with:
+From the repository root, run:
 
-    python -m pip install --user -e ".[test]"
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\build_windows.ps1"
+```
 
-To enable the optional Cua Driver background desktop backend in a source run:
+The script runs the configured tests and compile checks, prepares the Flet desktop client, creates the frozen application and writes:
 
-    python -m pip install --user -e ".[computer-use]"
+```text
+dist\
+├── Chimera\
+│   └── Chimera.exe
+└── Chimera-Windows-portable.zip
+```
 
-The Windows portable build includes this optional SDK automatically. Source installs without it retain the UIA/Win32 desktop backends.
+To skip tests only when you have already run them and intentionally want to bypass them during packaging:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\build_windows.ps1" -SkipTests
+```
+
+The portable application bundles its Python runtime and Flet desktop client. GGUF model files, llama.cpp executables, Blender and Ghidra remain separate local installations.
+
+---
+
+## Development
+
+Install source and test dependencies:
+
+```powershell
+python -m pip install --user -e ".[test]"
+```
+
+Enable the optional Cua Driver backend:
+
+```powershell
+python -m pip install --user -e ".[computer-use]"
+```
 
 Run the CI test selection:
 
-    python -m pytest tests/ --ignore=tests/test_ui.py -q
+```powershell
+python -m pytest tests/ --ignore=tests/test_ui.py -q
+```
 
-Run the full local test suite when working on the UI:
+Run the full local suite:
 
-    python -m pytest -q
+```powershell
+python -m pytest -q
+```
 
 Compile-check the application and tests:
 
-    python -m compileall -q chimera tests
+```powershell
+python -m compileall -q chimera tests
+```
 
 ### Repository map
 
-    chimera/
-    ├── agent_runtime.py        # Persistent sessions, tool policy and execution loop
-    ├── local_model.py          # Local llama.cpp reasoning and prompt construction
-    ├── model_hub.py            # Model profiles and explicit provider selection
-    ├── tools.py                # Bounded workspace tools
-    ├── documents.py            # Word document generation
-    ├── pdf_documents.py        # PDF generation and verification
-    ├── builtin_capabilities.py # First-party capability inventory
-    ├── computer_use.py         # Windows desktop discovery and interaction
-    ├── computer_runtime.py     # Process authorization and UIA evidence
-    ├── cua_backend.py          # Optional Cua Driver transport
-    ├── scoped_input.py         # Approved scoped pointer and keyboard input
-    ├── applications/           # Connector SDK, registry and integrations
-    ├── reverse_engineering/    # REA static analysis engine
-    ├── learning.py             # Trace review and governed skill proposals
-    ├── goals.py                # Operator-owned goals and evidence
-    ├── workflow.py             # Governed workflow execution
-    ├── evaluation.py           # Evidence-aware acceptance evaluation
-    └── ui.py                   # Flet desktop workbench
+```text
+chimera/
+├── agent_runtime.py        # Persistent sessions, tool policy and execution loop
+├── local_model.py          # Local llama.cpp reasoning and prompt construction
+├── model_hub.py            # Model profiles and explicit provider selection
+├── tools.py                # Bounded workspace tools
+├── documents.py            # Word document generation
+├── pdf_documents.py        # PDF generation and verification
+├── builtin_capabilities.py # First-party capability inventory
+├── computer_use.py         # Windows desktop discovery and interaction
+├── computer_runtime.py     # Process authorization and UIA evidence
+├── cua_backend.py          # Optional Cua Driver transport
+├── scoped_input.py         # Approved scoped pointer and keyboard input
+├── applications/           # Connector SDK, registry and integrations
+├── reverse_engineering/    # REA static analysis engine
+├── learning.py             # Trace review and governed skill proposals
+├── goals.py                # Operator-owned goals and evidence
+├── workflow.py             # Governed workflow execution
+├── evaluation.py           # Evidence-aware acceptance evaluation
+└── ui.py                   # Flet desktop workbench
 
-    scripts/
-    ├── setup_windows.bat       # Dependencies and optional companion setup
-    ├── install_ghidra.ps1      # Official Ghidra release installer
-    └── build_windows.ps1       # Tests, Flet client prep and portable package
+scripts/
+├── setup_windows.bat       # Dependencies and optional companion setup
+├── install_ghidra.ps1      # Official Ghidra release installer
+└── build_windows.ps1       # Tests, Flet client prep and portable package
+```
 
 ### Runtime architecture
 
-    Desktop Workbench
-          |
-          v
-      AgentRuntime
-          |
-       TaskPolicy
-          |
-       +--+-------------------+
-       |          |           |
-       v          v           v
-    Workspace  Authorized  Specialist
-      tools    Windows apps connectors
-       |          |           |
-       +----------+-----------+
-                  |
-                  v
-           Persisted evidence
-           SQLite · Runs · Goals
+```text
+                  Desktop Workbench
+                         |
+                         v
+                    AgentRuntime
+                         |
+                      TaskPolicy
+                         |
+          +--------------+---------------+
+          |              |               |
+          v              v               v
+      Workspace     Authorized       Specialist
+        tools       Windows apps     connectors
+          |              |               |
+          +--------------+---------------+
+                         |
+                         v
+                 Persisted evidence
+                 SQLite · Runs · Goals
+```
 
 ---
 
-## 🧱 Compatibility boundaries
+## The roadmap: a computer agent, not another chatbot
 
-Chimera is an extensible computer-work platform, not a promise that every third-party application can already be automated in every situation.
+The long-term direction is to make Chimera a capable, extensible operator for the digital workspace:
 
-- Windows desktop automation is platform-specific and depends on the target app exposing useful UI Automation controls.
-- A visible application is not automatically authorized. Authorization is per conversation and exact process identity.
-- Some applications expose no semantic controls or expose only a partial UIA tree.
-- Blender generation targets validated primitive-based scenes rather than unrestricted modelling.
-- Ghidra-backed operations depend on the external installation and required Java runtime. Direct arbitrary Ghidra script execution is not exposed as an available connector action.
-- Browser automation requires an installed Edge or Chrome executable and a working Playwright runtime. Chimera does not download browser engines or reuse the user's default browser profile.
-- Browser page content is untrusted; password fields are not filled by the agent.
-- Universal control of arbitrary third-party applications is not guaranteed. Applications with incomplete UI Automation support may need a dedicated native connector or manual handoff.
-- Local model quality, context limits, GPU memory, and inference speed depend on the selected GGUF and llama.cpp build.
-- Local vision requires a compatible multimodal model and projector configuration. It is not enabled by default.
+- **More applications:** deeper native connectors for office, creative, engineering, development and productivity software.
+- **Richer computer use:** better handling of complex interfaces, multi-window work and applications with limited accessibility support.
+- **Stronger local intelligence:** efficient model routing, model-specific tool use and local multimodal perception.
+- **Long-running work:** durable plans, resumable execution, dependencies and recovery from partial progress.
+- **Better verification:** independent checks for documents, media, code, scenes and application state.
+- **Reusable expertise:** operator-approved skills that capture successful workflows without granting themselves new permissions.
+- **A larger ecosystem:** an open connector and capability SDK so developers can teach Chimera new tools without rebuilding the agent.
 
-These boundaries are part of the design: Chimera should report an unavailable capability instead of pretending it succeeded.
+The goal is not to replace every application. It is to give one agent a useful, governed way to work across them.
 
 ---
 
-## 🤝 Contributing
+## Compatibility, honestly
 
-Issues, focused pull requests, test coverage, connector improvements, and documentation fixes are welcome.
+Chimera is an ambitious computer-work platform, not a guarantee that every third-party application can already be automated in every situation.
 
-A useful contribution should include:
+- Windows desktop automation depends on the controls exposed by the target application.
+- A visible application is not automatically authorized.
+- Some applications expose incomplete or no useful UI Automation information.
+- Blender scene generation currently targets validated primitive-based recipes rather than unrestricted modelling.
+- Ghidra-backed operations depend on the external installation and Java runtime.
+- Browser automation requires an installed Edge or Chrome executable and a working Playwright runtime.
+- Local model quality, context limits, GPU memory and inference speed depend on the selected GGUF and llama.cpp build.
+- Local vision requires a compatible multimodal model and projector configuration.
+
+When a capability is unavailable, Chimera should say so rather than pretend the task succeeded. That discipline is what makes broader computer control worth building.
+
+---
+
+## Contributing
+
+Issues, focused pull requests, tests, connector improvements and documentation fixes are welcome.
+
+A useful contribution includes:
 
 1. A clear problem statement and expected behaviour.
-2. Tests for new tool, policy, or persistence behaviour.
+2. Tests for new tool, policy or persistence behaviour.
 3. Honest capability and failure reporting.
-4. No hidden hosted fallback, silent downloads, or unapproved protected changes.
+4. No hidden hosted fallback, silent downloads or unapproved protected changes.
 
-For application integrations, prefer a small manifest-backed connector with explicit permissions, argument validation, availability reporting, and tests.
+For application integrations, prefer a manifest-backed connector with explicit permissions, argument validation, availability reporting and tests.
 
 ---
 
-## 🔗 Useful links
+## Useful links
 
 - [Repository](https://github.com/Parth-Surve2007/Chimera)
 - [Issues](https://github.com/Parth-Surve2007/Chimera/issues)
-- [Blender downloads](https://www.blender.org/download/)
+- [Blender](https://www.blender.org/download/)
 - [Ghidra releases](https://github.com/NationalSecurityAgency/ghidra/releases)
 - [Ghidra installation guide](https://github.com/NationalSecurityAgency/ghidra/blob/master/GhidraDocs/GettingStarted.md)
-- [Eclipse Temurin installation](https://adoptium.net/installation/)
+- [Eclipse Temurin](https://adoptium.net/installation/)
 - [WinGet documentation](https://learn.microsoft.com/windows/package-manager/winget/)
 
 ---
 
 <p align="center">
-  <strong>Chimera</strong><br>
-  <sub>Local intelligence. Visible permissions. Work that leaves evidence.</sub>
+  <strong>CHIMERA</strong><br>
+  <em>Local intelligence. Desktop-wide ambition. Work with evidence.</em>
 </p>
