@@ -75,10 +75,10 @@ class GhidraConnector(BaseApplicationConnector):
             actions=actions,
             supported_file_extensions=[".exe", ".dll", ".so", ".dylib", ".elf", ".bin", ".o"],
             known_limitations=[
-                "Requires Java Runtime Environment (JDK 17+) for headless analysis.",
+                "Current Ghidra 12.2 releases require a 64-bit JDK 25+ for headless analysis.",
                 "Automated binary execution is prohibited; analysis is strictly static.",
             ],
-            preconditions=["JDK 17+ installed", "GHIDRA_HOME configured or standard directory present"],
+            preconditions=["64-bit JDK 25+ installed for Ghidra 12.2", "Ghidra installed and discoverable"],
         )
         super().__init__(manifest)
         self._custom_install_path = install_path
@@ -123,6 +123,25 @@ class GhidraConnector(BaseApplicationConnector):
                         ghidra_home = str(sp)
                         break
 
+        if not executable and os.name == "nt":
+            # Winget installs Ghidra beneath the current user's LocalAppData tree.
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            winget_root = (
+                Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
+                if local_app_data else None
+            )
+            if winget_root and winget_root.is_dir():
+                for package_root in sorted(
+                    winget_root.glob("NationalSecurityAgency.Ghidra_*"),
+                    reverse=True,
+                ):
+                    candidates = list(package_root.glob("**/support/analyzeHeadless.bat"))
+                    if candidates:
+                        headless = candidates[0]
+                        executable = str(headless)
+                        ghidra_home = str(headless.parents[1])
+                        break
+
         # Check running process
         is_running = False
         try:
@@ -138,6 +157,21 @@ class GhidraConnector(BaseApplicationConnector):
         self.manifest.installation_path = ghidra_home
         self.manifest.is_running = is_running
         self.manifest.metadata["headless_executable"] = executable
+        java_candidates = []
+        java_home = os.environ.get("JAVA_HOME")
+        if java_home:
+            java_candidates.append(
+                Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java")
+            )
+        if os.name == "nt":
+            adoptium = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Eclipse Adoptium"
+            if adoptium.is_dir():
+                java_candidates.extend(
+                    path / "bin" / "java.exe"
+                    for path in sorted(adoptium.glob("jdk-25*"), reverse=True)
+                )
+        self.manifest.metadata["jdk_available"] = any(path.is_file() for path in java_candidates)
+        self.manifest.metadata["jdk_requirement"] = "64-bit JDK 25+ for Ghidra 12.2"
         return self.manifest
 
     def execute_action(self, action_id: str, arguments: dict[str, Any], approved: bool = False) -> dict[str, Any]:
