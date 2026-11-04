@@ -118,7 +118,8 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
         session={"mode": "plan", "workspace": None},
     )
     assert result["type"] == "message"
-    assert len(captured["prompt"]) < 5000
+    prompt_budget = max(3200, int(max(256, provider.config.context - provider.config.max_tokens - 128) * 3.2))
+    assert len(captured["prompt"]) <= prompt_budget
     assert "interaction_inventory" not in captured["prompt"]
     assert "unused inventory payload" not in captured["prompt"]
     assert "Desktop inventory summary" in captured["prompt"]
