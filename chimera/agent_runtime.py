@@ -465,7 +465,7 @@ class AgentRuntime:
             "computer.list_installed_applications": {},
             "computer.list_windows": {},
             "computer.inspect_controls": {"session_id": str, "hwnd": int},
-            "computer.inspect_elements": {"session_id": str},
+            "computer.inspect_elements": {"session_id": str, "hwnd": int, "depth": int, "limit": int},
             "computer.launch": {"executable": str},
             "computer.screenshot": {"session_id": str, "hwnd": int, "path": str},
             "computer.inspect_visual_target": {"session_id": str, "reference_id": str, "question": str},
@@ -1306,7 +1306,12 @@ class AgentRuntime:
                     result_status, result_error = "completed", None
                 elif operation == "computer.inspect_elements":
                     require_authorized_app(args["session_id"])
-                    observation = self.computer.observe(args["session_id"])
+                    observation = self.computer.observe(
+                        args["session_id"],
+                        hwnd=args.get("hwnd"),
+                        depth=args.get("depth", 3),
+                        limit=args.get("limit", 250),
+                    )
                     result_data = {
                         "observation_id": observation.observation_id,
                         "session_id": observation.session_id,
