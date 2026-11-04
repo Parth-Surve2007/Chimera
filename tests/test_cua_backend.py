@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import pytest
 import io
 from enum import Enum
@@ -629,18 +630,22 @@ def test_cua_drag_structured_background_refusal_is_parsed_from_tool_result_conte
         async def drag(self, request):
             self.drag_inputs.append(request.values)
             return SimpleNamespace(
-                is_error=True,
-                content=[SimpleNamespace(
-                    text="Background drag refused: UIA route unavailable.",
-                )],
-                structured_content={
+                text="Background drag refused: UIA route unavailable.",
+                images=[],
+                structured_json=json.dumps({
                     "code": "background_unavailable",
                     "effect": "refused",
                     "escalation": {
                         "recommended": "foreground",
                         "reason": "the target requires a separate foreground gesture",
                     },
-                },
+                }),
+                is_error=True,
+                error_code="background_unavailable",
+                action=None,
+                verification=None,
+                degraded=False,
+                raw_json="{}",
             )
 
     driver = StructuredRefusalDriver()
