@@ -863,7 +863,7 @@ class LocalModelProvider:
             "WORKSPACE_SCOPE.known_folders.desktop for Desktop requests. Never overwrite; require exact Build Mode approval and "
             "report success only after independent file hash/size verification. "
             if workspace_available else
-            "No workspace tools are available in this turn: do not call workspace operations or invent host filesystem paths. "
+            "No workspace tools are available in this turn: do not call workspace tools or invent host filesystem paths. "
         )
         multi_window_guidance = (
             "If an authorized application has multiple top-level windows, call computer.inspect_window first and select the exact visible hwnd by title/purpose. "
