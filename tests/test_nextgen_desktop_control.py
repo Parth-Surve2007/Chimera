@@ -67,6 +67,18 @@ def test_agent_runtime_validates_bounded_multi_stroke_canvas_actions():
     with pytest.raises(ValueError, match="16 paths"):
         AgentRuntime._validate_arguments("computer.visual_action", invalid)
 
+    out_of_bounds = dict(valid, strokes=[[[0.1, 0.1], [1.0, 0.9]]])
+    with pytest.raises(ValueError, match="normalized"):
+        AgentRuntime._validate_arguments("computer.visual_action", out_of_bounds)
+
+    boolean_coordinate = dict(valid, strokes=[[[True, 0.1], [0.9, 0.9]]])
+    with pytest.raises(ValueError, match="normalized"):
+        AgentRuntime._validate_arguments("computer.visual_action", boolean_coordinate)
+
+    non_integer_duration = dict(valid, duration_ms=True)
+    with pytest.raises(ValueError, match="duration_ms must be an integer"):
+        AgentRuntime._validate_arguments("computer.visual_action", non_integer_duration)
+
 
 def test_local_model_prompt_explains_safe_launch_continuation_and_canvas_strokes():
     provider = LocalModelProvider(LocalModelConfig(None, None, context=8192, max_tokens=256))
