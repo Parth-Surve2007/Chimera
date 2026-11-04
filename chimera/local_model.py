@@ -63,10 +63,10 @@ def _run_streaming(command, timeout, cancel_event=None, on_stdout=None):
 class LocalModelConfig:
     model_path: Path | None
     cli_path: str | None
-    context: int = 8192
-    max_tokens: int = 768
+    context: int = 4096
+    max_tokens: int = 384
     timeout: float = 120
-    threads: int = 8
+    threads: int = 4
     gpu_layers: int | str = "auto"
     server_path: str | None = None
 
@@ -168,10 +168,10 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
     # Version-one configurations inherited conservative defaults, including
     # an explicit zero GPU layers. Migrate those old defaults once to
     # llama.cpp's memory-aware auto offload while preserving custom tuning.
-    legacy_config = "config_version" not in persisted
-    context_default = persisted.get("context", 8192)
-    token_default = persisted.get("max_tokens", 768)
-    thread_default = persisted.get("threads", 8)
+    legacy_config = bool(persisted) and "config_version" not in persisted
+    context_default = persisted.get("context", 4096)
+    token_default = persisted.get("max_tokens", 384)
+    thread_default = persisted.get("threads", 4)
     gpu_default = persisted.get("gpu_layers", "auto")
     if legacy_config:
         if context_default == 4096:
