@@ -1593,7 +1593,8 @@ class AgentRuntime:
             "computer.scroll_element", "computer.scroll_into_view",
             "computer.toggle_element", "computer.select_element",
             "computer.expand_element", "computer.collapse_element",
-            "computer.screenshot", "computer.launch", "computer.visual_action",
+            "computer.screenshot", "computer.inspect_visual_target",
+            "computer.launch", "computer.visual_action",
             "computer.close_window",
         }:
             operation = pending["tool"]
@@ -1655,6 +1656,16 @@ class AgentRuntime:
                         "control_authorized": False,
                         "next_step": "The window appeared, but its process could not be matched strongly enough for automatic authorization. Confirm the exact process on the Applications page.",
                     }
+            elif operation == "computer.inspect_visual_target":
+                identity = self.computer.sessions.get(args["session_id"])
+                if not identity or identity.owner_session_id != session_id:
+                    raise PermissionError("application is not authorized for this Chimera conversation")
+                result_data = self.computer.inspect_visual_target(
+                    args["session_id"],
+                    args["reference_id"],
+                    args["question"],
+                    approved=True,
+                )
             elif operation == "computer.screenshot":
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:
