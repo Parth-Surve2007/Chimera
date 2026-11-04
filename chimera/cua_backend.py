@@ -1149,6 +1149,7 @@ class CuaDriverBackend:
                     }
                 return {
                     **error_result,
+                    "status": "partial" if segment_results else error_result.get("status", "background_unavailable"),
                     "foreground_retry": "computer.cua_draw_path_foreground",
                     "segments_sent": len(segment_results),
                     "retry_strokes": pending_retry_strokes,
