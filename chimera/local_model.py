@@ -542,6 +542,9 @@ class LocalModelProvider:
                 "Use only exact tool IDs and valid arguments from TOOLS. Never invent IDs or results. "
                 "Never echo, copy, or merely restate the latest USER message as the answer. "
                 "A message decision must provide useful information or ask one necessary clarification. "
+                "When the user asks for code or an explanation in chat, answer directly as a message containing the code; "
+                "do not invent a python, code, shell, or execution tool. Only call a tool when the user explicitly asks "
+                "you to create/edit a file, run something, or interact with an application. "
                 "Treat the latest USER message as the task; earlier messages are context. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
                 "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
@@ -572,42 +575,77 @@ class LocalModelProvider:
             transcript = "\n".join(compact_message(item) for item in recent)
             prompt = render_prompt()
 
+        # Constrain structured decoding to the exact tool IDs that survived
+        # context budgeting. With no tools, only a conversational message is
+        # a valid decision.
+        available_tool_ids = sorted(
+            item["id"] for item in compact_tools if isinstance(item.get("id"), str)
+        )
+        decision_schema = json.loads(json.dumps(AGENT_DECISION_SCHEMA))
+        if available_tool_ids:
+            decision_schema["oneOf"][1]["properties"]["tool"]["enum"] = available_tool_ids
+        else:
+            decision_schema["oneOf"] = [decision_schema["oneOf"][0]]
+
         parsed, metrics = self.structured_with_metrics(
             prompt,
-            json_schema=AGENT_DECISION_SCHEMA,
+            json_schema=decision_schema,
             cancel_event=cancel_event,
             on_delta=on_delta,
         )
+
+        recovery_reason = None
         if (
             isinstance(parsed, dict)
             and parsed.get("type") == "message"
             and _is_unhelpful_prompt_echo(parsed.get("content", ""), recent)
         ):
+            recovery_reason = "The previous candidate only repeated the user's task."
+        elif isinstance(parsed, dict) and parsed.get("type") == "tool_call":
+            selected_tool = parsed.get("tool")
+            if not isinstance(selected_tool, str) or selected_tool not in available_tool_ids:
+                recovery_reason = (
+                    f"The previous candidate selected an unregistered tool ID: {selected_tool!r}. "
+                    f"Valid tool IDs are: {json.dumps(available_tool_ids)}."
+                )
+
+        if recovery_reason:
             retry_prompt = (
                 prompt
-                + "\n\nRECOVERY: Your previous candidate only repeated the user's task and is invalid. "
-                "Re-evaluate the request from scratch. Use a registered tool when an action is possible. "
+                + "\\n\\nRECOVERY: " + recovery_reason + " "
+                "Re-evaluate the request from scratch. You may return a message with a useful direct answer, "
+                "or select exactly one tool ID from the valid tool IDs in the schema. "
+                "For a code-writing or programming question that asks for code in chat, return the code directly "
+                "as a message. Do not invent python, code, shell, or execution tools. "
                 "For opening an application, use computer.list_applications and computer.launch if present. "
-                "If a capability or permission is missing, state the exact blocker in one helpful sentence. "
-                "Do not repeat the user request as your answer."
+                "If an explicitly requested action cannot be performed, state the exact blocker in one helpful sentence. "
+                "Never claim an action succeeded without an actual tool result. Do not echo the user's request."
             )
             parsed, retry_metrics = self.structured_with_metrics(
                 retry_prompt,
-                json_schema=AGENT_DECISION_SCHEMA,
+                json_schema=decision_schema,
                 cancel_event=cancel_event,
                 on_delta=None,
             )
-            metrics["echo_recovery_attempted"] = True
-            metrics["echo_recovery_duration_ms"] = retry_metrics.get("duration_ms")
+            metrics["decision_recovery_attempted"] = True
+            metrics["decision_recovery_reason"] = recovery_reason
+            metrics["decision_recovery_duration_ms"] = retry_metrics.get("duration_ms")
             if (
                 isinstance(parsed, dict)
                 and parsed.get("type") == "message"
                 and _is_unhelpful_prompt_echo(parsed.get("content", ""), recent)
             ):
                 raise ValueError(
-                    "the local model repeated the task instead of answering or selecting a tool; "
-                    "try again or use a model better suited to tool calling"
+                    "the local model repeated the task instead of answering; "
+                    "no tool was executed. Retry with a more specific request."
                 )
+            if isinstance(parsed, dict) and parsed.get("type") == "tool_call":
+                selected_tool = parsed.get("tool")
+                if not isinstance(selected_tool, str) or selected_tool not in available_tool_ids:
+                    raise ValueError(
+                        f"the local model selected an unregistered tool ID {selected_tool!r}; "
+                        "no tool was executed. For code questions, ask for the code directly in chat."
+                    )
         metrics["schema_provenance"] = "chimera.agent_decision.v3"
         metrics["prompt_chars"] = len(prompt)
         if not isinstance(parsed, dict):
@@ -621,6 +659,10 @@ class LocalModelProvider:
         elif decision_type == "tool_call":
             if not isinstance(parsed.get("tool"), str) or not parsed["tool"].strip():
                 raise ValueError("local model returned a tool_call without a tool id")
+            if parsed["tool"] not in available_tool_ids:
+                raise ValueError(
+                    f"local model returned an unregistered tool ID {parsed['tool']!r}; no tool was executed"
+                )
             if not isinstance(parsed.get("arguments"), dict):
                 raise ValueError("local model returned a tool_call without an arguments object")
             invocation_id = parsed.get("invocation_id")
