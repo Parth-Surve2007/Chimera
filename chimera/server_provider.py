@@ -295,7 +295,7 @@ class LlamaServerManager:
                 }
             except urllib.error.HTTPError as exc:
                 try:
-                    response_body = exc.read(4096).decode("utf-8", errors="replace")
+                    response_body = exc.read(4097).decode("utf-8", errors="replace")
                 except Exception:
                     response_body = "<unable to read server error body>"
                 diagnostic = ServerRequestError(
