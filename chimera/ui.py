@@ -214,9 +214,15 @@ class MainWindow:
         status = check_status(config_from_env())
         return "RUNTIME: CONFIGURED" if status.state == "ready" else f"RUNTIME: {status.state.upper()}"
     def _statusbar(self):
-        try: caps = len(self.registry.list()); review = len(self.review.list())
-        except Exception: caps, review = "?", "?"
-        return ft.Container(ft.Text(f"MODEL: {self._runtime_state().split(': ')[-1]}   ·   CAPABILITIES: {caps}   ·   REVIEW: {review}   ·   STATE: IDLE", color=MUTED, size=10), height=34, padding=ft.Padding.symmetric(horizontal=24, vertical=8), border=ft.Border.only(top=ft.BorderSide(1, BORDER)))
+        try:
+            custom_caps = len(self.registry.list())
+            review = len(self.review.list())
+        except Exception:
+            custom_caps, review = "?", "?"
+        return ft.Container(ft.Text(
+            f"MODEL: {self._runtime_state().split(': ')[-1]}   ·   BUILT-INS: {len(BUILTIN_CAPABILITIES)}   ·   CUSTOM: {custom_caps}   ·   REVIEW: {review}",
+            color=MUTED, size=10,
+        ), height=34, padding=ft.Padding.symmetric(horizontal=24, vertical=8), border=ft.Border.only(top=ft.BorderSide(1, BORDER)))
 
     def _set(self, controls):
         self.current_view = "other"
@@ -349,6 +355,7 @@ class MainWindow:
 
 
     def _show_workflow_studio(self, e=None):
+        self.active_page = "workflow"
         try:
             runs = AuditStore(self.registry.data_dir / "chimera.db").workflow_runs()
             error = None
@@ -389,6 +396,7 @@ class MainWindow:
 
 
     def _show_model_hub(self, e=None):
+        self.active_page = "model"
         profiles = self.profile_store.list()
         self.hub_id = ft.TextField(label="Profile ID", hint_text="e.g. local-llama-3b", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, expand=True)
         self.hub_provider = ft.TextField(label="Provider ID", hint_text="e.g. llama_cpp or openai", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, expand=True)
@@ -532,7 +540,8 @@ class MainWindow:
         except Exception as exc: self._toast(f"Action failed: {exc}")
 
     def _show_computer_apps(self, e=None):
-        """Discover open Windows applications dynamically; never use a hard-coded list."""
+        """Discover open Windows apps and expose specialist application connectors."""
+        self.active_page = "applications"
         self.apps_search = ft.TextField(
             label="Search open applications", hint_text="Filter by executable or window title",
             color=TEXT, border_color=BORDER, focused_border_color=FOCUS,
@@ -606,6 +615,12 @@ class MainWindow:
                 bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(14), width=940,
             ),
             ft.Row([self.apps_search], spacing=10),
+            self._page_heading("Specialist connectors", "These connectors are shipped with Chimera. Some need a separate native companion application.", eyebrow="APPLICATION ECOSYSTEM"),
+            *self._connector_status_cards(),
+            ft.Row([
+                self._button("INSTALL OPTIONAL APPS & CONTROL DEPENDENCIES", self._launch_setup_helper),
+                ft.Text("Windows setup helper · Winget optional", color=MUTED, size=9),
+            ], wrap=True, spacing=10),
         ]
         if self._desktop_inventory_error:
             content.append(ft.Text(f"Application inventory unavailable: {self._desktop_inventory_error}", color=ACCENT, size=11))
@@ -624,6 +639,18 @@ class MainWindow:
         ))
         self._set(content)
 
+    def _launch_setup_helper(self, e=None):
+        if os.name != "nt":
+            return self._toast("The companion-app installer is available on Windows only.")
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+        script = base / "scripts" / "setup_windows.bat"
+        if not script.is_file():
+            return self._toast("Setup helper not found. Run scripts\\setup_windows.bat from the source checkout.")
+        try:
+            os.startfile(str(script))
+        except Exception as exc:
+            self._toast(f"Could not launch the Windows setup helper: {exc}")
+
     def _authorize_computer_application(self, pid, executable):
         try:
             identity = self.agent_runtime.computer.create(
@@ -636,8 +663,10 @@ class MainWindow:
         except Exception as exc:
             self._toast(f"Application authorization failed: {exc}")
 
-    def _show_runs(self, e=None): self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
+    def _show_runs(self, e=None):
+        self.active_page = "runs" self._set([ft.Text("RUNS", size=18, color=TEXT), ft.Text("No executions recorded.", color=MUTED)])
     def _show_settings(self, e=None):
+        self.active_page = "model"
         config = self.local_provider.config
         status = check_status(config)
         server = self.local_provider.server.status() if self.local_provider.server else {"state": "not selected"}
@@ -779,6 +808,7 @@ class MainWindow:
     def _toast(self, message): self.page.snack_bar = ft.SnackBar(ft.Text(message, color=TEXT), bgcolor=ELEVATED); self.page.snack_bar.open = True; self.page.update()
 
     def _show_runs(self, e=None):
+        self.active_page = "runs"
         try:
             runs = AuditStore(self.registry.data_dir / "chimera.db").workflow_runs()
         except Exception as exc:
@@ -838,6 +868,7 @@ class MainWindow:
         ])
 
     def _show_goals(self, e=None):
+        self.active_page = "goals"
         """Render the operator-owned goal ledger, separate from individual task runs."""
         try:
             stats = self.goal_store.stats()
@@ -1228,61 +1259,8 @@ class MainWindow:
                 return "SERVER ERROR", str(exc), ACCENT
         return "CLI / ONE-SHOT", "Explicit CLI mode · GGUF is loaded for each request", SECONDARY
 
-    def _context_rail(self):
-        workspace = self.workspace_path
-        try:
-            active_goals = self.goal_store.list(status="active", limit=2)
-        except Exception:
-            active_goals = []
-        try:
-            capability_count = len(self.registry.list())
-        except Exception:
-            capability_count = 0
-        model_state, model_detail, model_color = self._model_runtime_summary()
-        goal_cards = [
-            ft.Container(
-                ft.Column([
-                    ft.Text(goal.title, color=TEXT, size=10, weight=ft.FontWeight.BOLD),
-                    ft.Text(f"{goal.priority.upper()}  ·  {goal.project or 'No project'}", color=MUTED, size=8),
-                ], spacing=4),
-                bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=8, padding=ft.Padding.all(10),
-            )
-            for goal in active_goals
-        ]
-        return ft.Container(
-            ft.Column([
-                ft.Row([ft.Text("SESSION INTEL", color=TEXT, size=10, weight=ft.FontWeight.BOLD), ft.Text("LIVE", color=FOCUS, size=8)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Container(
-                    ft.Column([
-                        ft.Text("MODEL STATE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
-                        ft.Text(model_state, color=model_color, size=11, weight=ft.FontWeight.BOLD),
-                        ft.Text(model_detail, color=SECONDARY, size=9),
-                        ft.TextButton("OPEN MODEL BAY ↗", on_click=self._show_settings, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.all(0))),
-                    ], spacing=7),
-                    bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(12),
-                ),
-                ft.Divider(height=1, color=BORDER),
-                ft.Text("WORKSPACE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
-                ft.Text(workspace.name if workspace else "No project attached", color=TEXT, size=12, weight=ft.FontWeight.BOLD),
-                ft.Text(str(workspace) if workspace else "Attach a folder to unlock project inspection and file tools.", color=SECONDARY, size=9),
-                ft.TextButton("ATTACH FOLDER ↗", on_click=self._pick_workspace, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.all(0))),
-                ft.Divider(height=1, color=BORDER),
-                ft.Row([ft.Text("ACTIVE GOALS", color=MUTED, size=8, weight=ft.FontWeight.BOLD), ft.Text(str(len(active_goals)), color=FOCUS, size=9)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                *(goal_cards or [ft.Text("No active goals recorded.", color=MUTED, size=9)]),
-                ft.TextButton("OPEN GOAL LEDGER ↗", on_click=self._show_goals, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.all(0))),
-                ft.Divider(height=1, color=BORDER),
-                ft.Text("CAPABILITY INVENTORY", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
-                ft.Text(f"{capability_count} registered capabilities", color=TEXT, size=10),
-                ft.Text("Plan mode is read-only. Build mode still asks before protected changes.", color=SECONDARY, size=9),
-                ft.Container(expand=True),
-                ft.Text("DARK EMPEROR / LOCAL-FIRST", color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
-                ft.Text("No silent provider changes. No automatic model downloads.", color=MUTED, size=8),
-            ], spacing=10, expand=True, scroll=ft.ScrollMode.AUTO),
-            width=232, bgcolor="#070707", padding=ft.Padding.all(14),
-            border=ft.Border.only(left=ft.BorderSide(1, BORDER)),
-        )
-
     def _chat_sidebar(self):
+        active_page = getattr(self, "active_page", "chat")
         sessions = self.agent_store.list_sessions(limit=6)
         recent = []
         for item in sessions:
@@ -1317,13 +1295,13 @@ class MainWindow:
                 ),
                 ft.Container(self._button("＋   NEW TASK", lambda e: self._new_agent_session()), width=208),
                 ft.Text("WORKSPACE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
-                self._nav_item("◉", "Chat workbench", self._show_overview, True),
-                self._nav_item("⌘", "Model bay", self._show_model_hub),
-                self._nav_item("▧", "Applications", self._show_computer_apps),
-                self._nav_item("⌁", "Workflow studio", self._show_workflow_studio),
-                self._nav_item("⬡", "Capabilities", self._show_capabilities),
-                self._nav_item("◎", "Goal ledger", self._show_goals),
-                self._nav_item("◷", "Run history", self._show_runs),
+                self._nav_item("◉", "Chat workbench", self._show_overview, active_page == "chat"),
+                self._nav_item("⌘", "Model bay", self._show_model_hub, active_page == "model"),
+                self._nav_item("▧", "Applications", self._show_computer_apps, active_page == "applications"),
+                self._nav_item("⌁", "Workflow studio", self._show_workflow_studio, active_page == "workflow"),
+                self._nav_item("⬡", "Capabilities", self._show_capabilities, active_page == "capabilities"),
+                self._nav_item("◎", "Goal ledger", self._show_goals, active_page == "goals"),
+                self._nav_item("◷", "Run history", self._show_runs, active_page == "runs"),
                 ft.Divider(height=1, color=BORDER),
                 ft.Row([
                     ft.Text("RECENT THREADS", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
@@ -1439,7 +1417,7 @@ class MainWindow:
                         ft.Text("◈", color=ACCENT, size=40),
                         ft.Text("What are we working on?", color=TEXT, size=27, weight=ft.FontWeight.BOLD),
                         ft.Text("A local-first agent for thinking, building and using your tools.", color=SECONDARY, size=13),
-                        ft.Text("Attach a folder before asking Chimera to read or create files there. Protected writes require Build Mode and your approval.", color=MUTED, size=11, text_align=ft.TextAlign.CENTER),
+                        ft.Text(f"Chimera can inspect files on {self.workspace_path}. New files require Build Mode and your approval.", color=MUTED, size=11, text_align=ft.TextAlign.CENTER),
                         ft.Row(chips, wrap=True, spacing=8),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=16),
                     alignment=ft.Alignment(0, 0), expand=True,
@@ -1542,13 +1520,14 @@ class MainWindow:
                 pass
 
     def _show_overview(self, e=None):
+        self.active_page = "chat"
         self.current_view = "chat"
         session = self.agent_store.session(self.agent_session_id) or {}
         session_mode = session.get("mode", "plan")
         session_title = self._session_title(self.agent_session_id)
         model_label = self._active_model_label()
         model_state, model_detail, model_color = self._model_runtime_summary()
-        workspace_label = str(self.workspace_path) if self.workspace_path else "No workspace attached"
+        workspace_label = str(self.workspace_path)
         self.chat_model_state_text = ft.Text(
             model_state, color=model_color, size=8, weight=ft.FontWeight.BOLD
         )
@@ -1573,9 +1552,9 @@ class MainWindow:
             ft.Row([
                 ft.Column([
                     ft.Row([
-                        ft.Text("WORKSPACE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
+                        ft.Text("LOCAL COMPUTER", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
                         ft.Text(" / ", color=ACCENT, size=8),
-                        ft.Text(self.workspace_path.name if self.workspace_path else "PERSONAL THREAD", color=SECONDARY, size=8, weight=ft.FontWeight.BOLD),
+                        ft.Text(self.workspace_path.drive or self.workspace_path.anchor, color=SECONDARY, size=8, weight=ft.FontWeight.BOLD),
                     ], spacing=4),
                     ft.Text(session_title, color=TEXT, size=19, weight=ft.FontWeight.BOLD, max_lines=1),
                     ft.Text(workspace_label, color=MUTED, size=9, max_lines=1),
@@ -1622,7 +1601,7 @@ class MainWindow:
                 ], spacing=10),
                 self.task_field,
                 ft.Row([
-                    ft.TextButton("＋  ATTACH PROJECT", on_click=self._pick_workspace, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.symmetric(horizontal=8, vertical=7))),
+                    ft.Text(f"FILE SCOPE  {self.workspace_path}", color=MUTED, size=8),
                     ft.TextButton("RUN WORKFLOW", on_click=self._run_multi_capability_workflow, disabled=self.task_busy, style=ft.ButtonStyle(color=SECONDARY, padding=ft.Padding.symmetric(horizontal=8, vertical=7))),
                     ft.Container(expand=True),
                     ft.Text("ENTER A GOAL  ·  KEEP THE THREAD GOING", color=MUTED, size=8),
@@ -1752,29 +1731,6 @@ class MainWindow:
             self._sync_chat_controls()
             self._refresh_chat_feed()
 
-    async def _pick_workspace(self, e=None):
-        try:
-            selected = await self.workspace_picker.get_directory_path()
-            if selected:
-                self._select_workspace(selected)
-        except Exception as exc:
-            self._toast(f"Directory picker failed: {exc}")
-    def _select_workspace(self, selected):
-        try:
-            path = validate_workspace_path(selected)
-            self.workspace_path = path
-            self.workspace_path_field.value = str(path)
-            self.agent_session_id = self.agent_runtime.create_session(path)
-            self.conversation_messages = []
-            self.pending_agent_approval = None
-            self.local_verification = None
-            self.last_turn_notice = None
-            self._bind_agent_session()
-            self._show_overview()
-        except Exception as exc:
-            self._toast(f"Workspace selection failed: {exc}")
-    def _use_workspace_path(self, e=None):
-        self._select_workspace(self.workspace_path_field.value)
     def _bind_agent_session(self):
         try:
             if getattr(self, "agent_unsubscribe", None):
@@ -1863,10 +1819,6 @@ class MainWindow:
             self._show_runs()
         except Exception as exc: self._toast(f"Workspace execution failed: {exc}")
         finally: self.task_busy = False
-    def _workspace_picked(self, e):
-        selected = getattr(e, "path", None)
-        if selected:
-            self._select_workspace(selected)
     def _new_agent_session(self):
         self.agent_session_id = self.agent_runtime.create_session(self.workspace_path)
         self.conversation_messages = []
@@ -1883,8 +1835,12 @@ class MainWindow:
         if not session:
             return self._toast("That session is no longer available.")
         self.agent_session_id = session_id
-        self.workspace_path = Path(session["workspace"]) if session.get("workspace") else None
-        self.workspace_path_field.value = str(self.workspace_path or "")
+        self.workspace_path = (
+            Path(session["workspace"]).expanduser().resolve()
+            if session.get("workspace") else default_workspace_root()
+        )
+        if not session.get("workspace"):
+            self.agent_store.set_workspace(session_id, self.workspace_path)
         self.conversation_messages = [(m.role, m.content) for m in self.agent_store.messages(session_id) if m.role in {"user", "assistant"}]
         self.pending_agent_approval = self.agent_store.pending_tool(session_id)
         self.local_verification = None
