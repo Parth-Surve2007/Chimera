@@ -77,11 +77,13 @@ def test_desktop_inventory_omits_blank_helper_windows_and_is_compact(tmp_path):
     assert applications[0]["windows"] == [{"hwnd": 2, "pid": 11, "title": "Untitled - Notepad"}]
 
 
-def test_agent_tool_catalog_hides_unscoped_desktop_inventory(tmp_path):
+def test_agent_tool_catalog_exposes_bounded_app_discovery_without_workspace(tmp_path):
     runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), _UnusedProvider())
     catalog = runtime._protocol_catalog({"session_id": "session-a", "workspace": None})
     ids = {tool["id"] for tool in catalog["tools"]}
-    assert "computer.list_applications" not in ids and "computer.list_windows" not in ids
+    assert "computer.list_applications" in ids
+    assert "computer.list_windows" not in ids
+    assert "computer.inspect_window" not in ids
     assert "computer.launch" in ids and "workspace.create_file" not in ids
 
 
@@ -90,7 +92,8 @@ def test_agent_tool_catalog_exposes_file_creation_only_with_workspace(tmp_path):
     catalog = runtime._protocol_catalog({"session_id": "session-a", "workspace": str(tmp_path)})
     ids = {tool["id"] for tool in catalog["tools"]}
     assert "workspace.create_file" in ids
-    assert "computer.list_applications" not in ids
+    assert "computer.list_applications" in ids
+    assert "computer.list_windows" not in ids
 
 
 def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
