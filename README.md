@@ -86,6 +86,7 @@ Chimera can discover visible Windows application windows at runtime and work wit
 - Bounded scrolling and supported item navigation.
 - Foreground-scoped pointer and keyboard interaction when a supported semantic control is not available.
 - Optional Cua Driver transport for snapshot-bound background interactions where the backend is available.
+- Canvas drawing uses background drag delivery first. A foreground retry is exposed only after the driver explicitly recommends it for that exact drawing attempt, and it requires a fresh canvas snapshot plus a separate higher-risk operator approval.
 - Post-action observation so an accepted input event is not confused with a verified task result.
 
 The runtime does not silently escalate a background action into foreground input. A process being visible or installed does not automatically authorize it for the current conversation.
