@@ -204,7 +204,7 @@ class TaskStore:
             if db.execute("SELECT 1 FROM agent_task_processed_events WHERE runtime_event_id=?", (runtime_event_id,)).fetchone(): return
             self._event(db, task_id, event_type, payload); db.execute("INSERT INTO agent_task_processed_events VALUES(?,?)", (runtime_event_id, task_id))
             invocation = payload.get("invocation_id")
-            if str(payload.get("tool") or "").startswith("agent.todo_"):
+            if str(payload.get("tool") or "").startswith(("agent.todo_", "agent.skill_")):
                 return
             if event_type == "tool.call.requested":
                 position = db.execute("SELECT COALESCE(MAX(position),0)+1 FROM agent_task_steps WHERE task_id=?", (task_id,)).fetchone()[0]
