@@ -573,7 +573,7 @@ class AgentRuntime:
         text = str(content or "").strip().casefold()
         return bool(re.match(
             r"^(?:new task|start a new task|separate task|different task|new goal|"
-            r"switch tasks?|forget the previous task)\\s*[:：-]",
+            r"switch tasks?|forget the previous task)\s*[:：-]",
             text,
         ))
 
@@ -581,7 +581,7 @@ class AgentRuntime:
     def _is_explicit_resume_task(content: str) -> bool:
         import re
         return bool(re.match(
-            r"^\\s*(?:resume|continue)\\s+(?:the\\s+)?(?:previous|paused)\\s+task\\b",
+            r"^\s*(?:resume|continue)\s+(?:the\s+)?(?:previous|paused)\s+task\b",
             str(content or "").casefold(),
         ))
 
