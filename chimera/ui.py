@@ -697,6 +697,10 @@ class MainWindow:
                 ft.Text("Higher inference budget for multi-step local work. GPU auto lets llama.cpp fit layers to the VRAM actually available on this machine.", color=SECONDARY, size=10),
                 ft.Row([self.context_field, self.max_tokens_field, self.threads_field, self.gpu_layers_field], wrap=True, spacing=10),
                 ft.Row([
+                    ft.TextButton("APPLY LOW-MEMORY PRESET", on_click=self._apply_low_memory_preset, style=ft.ButtonStyle(color=ACCENT)),
+                    ft.Text("4096 context · 384 output · 4 CPU threads · GPU auto", color=MUTED, size=10),
+                ], wrap=True),
+                ft.Row([
                     ft.TextButton("APPLY HIGH-COMPUTE PRESET", on_click=self._apply_high_compute_preset, style=ft.ButtonStyle(color=ACCENT)),
                     ft.Text("8192 context · 768 output · 8 CPU threads · GPU auto", color=MUTED, size=10),
                 ], wrap=True),
@@ -760,6 +764,14 @@ class MainWindow:
         if e.files: self.runtime_path_field.value = e.files[0].path; self.page.update()
     def _server_picked(self, e):
         if e.files: self.server_path_field.value = e.files[0].path; self.page.update()
+    def _apply_low_memory_preset(self, e=None):
+        self.context_field.value = "4096"
+        self.max_tokens_field.value = "384"
+        self.threads_field.value = "4"
+        self.gpu_layers_field.value = "auto"
+        self._toast("Low-memory preset staged: 4096 context, 384 output tokens, 4 CPU threads, GPU auto. Save to apply.")
+        self.page.update()
+
     def _apply_high_compute_preset(self, e=None):
         self.context_field.value = "8192"
         self.max_tokens_field.value = "768"
