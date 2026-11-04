@@ -1439,7 +1439,9 @@ class AgentRuntime:
         follow_up_actions = re.compile(
             r"\b(?:create|write|edit|save|type|enter|fill|draft|make|generate|insert|"
             r"draw|paint|sketch|illustrate|annotate|mark|circle|highlight|crop|rotate|"
-            r"format|export|print|upload|download)\b"
+            r"format|export|print|upload|download|read|inspect|search|find|look|view|"
+            r"check|analyze|analyse|summarize|summarise|copy|paste|calculate|compute|"
+            r"convert|measure|compare|select|open|navigate|click|press|scroll)\b"
         )
         for clause in clauses[1:]:
             if re.search(r"\b(?:do not|don't|never|not|without)\b", clause):
