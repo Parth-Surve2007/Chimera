@@ -978,7 +978,14 @@ class CuaDriverBackend:
                     if refused:
                         with self._lock:
                             self._snapshots.pop(current_ref, None)
-                        if not foreground and recommends_foreground and pending_retry_strokes:
+                        retry_safe = (
+                            driver_effect in {"refused", "suspected_noop"}
+                            or "background_unavailable" in drag_text.casefold()
+                        )
+                        if (
+                            not foreground and retry_safe
+                            and recommends_foreground and pending_retry_strokes
+                        ):
                             with self._lock:
                                 self._foreground_draw_escalations[draw_key] = {
                                     "stroke_digest": self._draw_digest(pending_retry_strokes, duration_ms, steps),
