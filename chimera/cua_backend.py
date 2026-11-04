@@ -11,6 +11,7 @@ import atexit
 import base64
 import hashlib
 import inspect
+import json
 import os
 import threading
 import time
@@ -65,10 +66,40 @@ def _tool_result_text(value: Any) -> str:
 
 
 def _tool_result_structured(value: Any) -> dict:
+    """Normalize the generated Python SDK ToolResult into a dictionary.
+
+    The current SDK exposes structured_json as a JSON string and error_code
+    as a separate field. Keep accepting structured_content for compatible
+    transports and fakes, but prefer the actual Python SDK contract.
+    """
     structured = _get(value, "structured_content")
     if isinstance(structured, dict):
-        return structured
-    return {}
+        result = dict(structured)
+    else:
+        result = {}
+    structured_json = _get(value, "structured_json")
+    if isinstance(structured_json, str) and structured_json.strip():
+        try:
+            decoded = json.loads(structured_json)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            result = {**decoded, **result}
+    error_code = _get(value, "error_code")
+    if isinstance(error_code, str) and error_code.strip():
+        result.setdefault("code", error_code)
+    action = _get(value, "action")
+    if action is not None:
+        effect = _enum_name(_get(action, "effect"))
+        if effect:
+            result.setdefault("effect", effect)
+        escalation = _get(action, "escalation")
+        if escalation is not None:
+            result.setdefault("escalation", {
+                "target": _enum_name(_get(escalation, "target")),
+                "reason": _enum_name(_get(escalation, "reason")),
+            })
+    return result
 
 
 def _enum_name(value: Any) -> str | None:
