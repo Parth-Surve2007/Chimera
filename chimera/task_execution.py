@@ -39,6 +39,55 @@ class TaskStore:
     def latest_for_session(self, session_id):
         with sqlite3.connect(self.db_path) as db: row=db.execute("SELECT task_id FROM agent_tasks WHERE session_id=? ORDER BY created_at DESC LIMIT 1",(session_id,)).fetchone()
         return self.get(row[0]) if row else None
+
+    def active_for_session(self, session_id):
+        """Return the newest unresolved task; terminal tasks are never resumed."""
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT task_id FROM agent_tasks WHERE session_id=? "
+                "AND status IN ('draft','ready','running','waiting_approval','blocked') "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return self.get(row[0]) if row else None
+
+    def resume(self, task_id):
+        """Return a non-terminal task to running without changing its identity."""
+        task = self.get(task_id)
+        if task is None:
+            raise KeyError("task not found")
+        if task.status in {"completed", "failed", "cancelled"}:
+            raise ValueError("terminal tasks cannot be resumed")
+        self.transition(task_id, "running")
+
+    def context(self, task_id):
+        """Build a bounded, deterministic snapshot for model context rehydration."""
+        task = self.get(task_id)
+        if task is None:
+            return None
+        return {
+            "task_id": task.task_id,
+            "objective": task.objective,
+            "mode": task.mode,
+            "status": task.status,
+            "todos": self.todos(task_id),
+            "steps": self.steps(task_id)[-12:],
+        }
+
+    def can_complete(self, task_id):
+        """A task cannot complete while any persisted checklist item is unresolved."""
+        todos = self.todos(task_id)
+        return bool(todos) and all(item["status"] == "completed" for item in todos)
+
+    def reconcile_completion(self, task_id, requested_status):
+        """Prevent turn-idle from completing unfinished work."""
+        if requested_status == "completed" and not self.can_complete(task_id):
+            todos = self.todos(task_id)
+            status = "blocked" if any(item["status"] == "blocked" for item in todos) else "ready"
+            self.transition(task_id, status)
+            return status
+        self.transition(task_id, requested_status)
+        return requested_status
     def transition(self, task_id, status):
         if status not in TASK_STATES: raise ValueError("invalid task state")
         task=self.get(task_id)
