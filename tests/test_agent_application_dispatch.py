@@ -397,3 +397,81 @@ def test_approved_computer_launch_authorizes_exact_process_for_same_conversation
     assert launch_result["status"] == "completed"
     assert launch_result["result"]["control_authorized"] is True
     assert launch_result["result"]["computer_session_id"] == "authorized-notepad-session"
+
+
+
+def test_native_computer_action_revalidates_mode_at_approval_replay(test_env, monkeypatch):
+    import sqlite3
+    from chimera.computer_use import WindowsComputerUse
+
+    workspace, store = test_env["tmp_path"], test_env["store"]
+    calls = []
+
+    def fake_launch(_self, requested, approved=False):
+        calls.append(approved)
+        return {
+            "status": "awaiting_approval",
+            "application": str(workspace / "Notepad.exe"),
+            "requested_application": requested,
+            "display_name": "Notepad",
+            "launch_kind": "executable",
+            "permission": "computer.launch",
+        }
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = MockScriptedProvider([{
+        "type": "tool_call", "tool": "computer.launch",
+        "invocation_id": "launch-mode-check",
+        "arguments": {"executable": "Notepad"},
+    }])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    pending = runtime.send(session_id, "Open Notepad.")
+
+    assert pending["status"] == "awaiting_approval"
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_sessions SET mode='plan' WHERE session_id=?",
+            (session_id,),
+        )
+
+    with pytest.raises(PermissionError, match="Plan Mode is read-only"):
+        runtime.approve_pending(session_id, True)
+
+    assert calls == [False]
+    assert store.pending_tool(session_id) is not None
+
+
+def test_native_computer_launch_exception_becomes_failed_tool_result(test_env, monkeypatch):
+    from chimera.computer_use import WindowsComputerUse
+
+    workspace, store = test_env["tmp_path"], test_env["store"]
+
+    def fake_launch(_self, requested, approved=False):
+        if not approved:
+            return {
+                "status": "awaiting_approval", "application": requested,
+                "requested_application": requested, "display_name": "Notepad",
+                "launch_kind": "executable", "permission": "computer.launch",
+            }
+        raise OSError("Windows refused to start the executable")
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = MockScriptedProvider([
+        {
+            "type": "tool_call", "tool": "computer.launch",
+            "invocation_id": "launch-failure-01",
+            "arguments": {"executable": "Notepad"},
+        },
+        {"type": "message", "content": "The application could not be launched."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    pending = runtime.send(session_id, "Open Notepad.")
+    assert pending["status"] == "awaiting_approval"
+
+    runtime.approve_pending(session_id, True)
+    messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    launch_result = next(item for item in messages if item.get("tool") == "computer.launch")
+    assert launch_result["status"] == "failed"
+    assert "Windows refused to start" in launch_result["error"]
