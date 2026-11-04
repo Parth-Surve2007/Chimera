@@ -180,7 +180,7 @@ class Win32InputNative:
         self._mouse(flags[0] if down else flags[1])
 
     def send_mouse_wheel(self, delta: int) -> None:
-        self._mouse(0x0800, data=delta * 120)
+        self._mouse(0x0800, data=(delta * 120) & 0xFFFFFFFF)
 
     def send_unicode_unit(self, unit: int, down: bool) -> None:
         flags = 0x0004 | (0 if down else 0x0002)  # KEYEVENTF_UNICODE / KEYUP
@@ -284,7 +284,10 @@ class ScopedWindowsInputBackend:
         if len(parts) > 1 and any(part not in modifiers for part in parts[:-1]):
             raise ValueError("only CTRL, SHIFT and ALT may precede a chord key")
         forbidden = {
-            ("ALT", "TAB"), ("CTRL", "ESC"), ("CONTROL", "ESC"),
+            ("ALT", "TAB"), ("ALT", "ESC"), ("ALT", "SPACE"),
+            ("CTRL", "ESC"), ("CONTROL", "ESC"),
+            ("CTRL", "SHIFT", "ESC"), ("CONTROL", "SHIFT", "ESC"),
+            ("CTRL", "ALT", "TAB"), ("CONTROL", "ALT", "TAB"),
             ("ALT", "F4"), ("CTRL", "ALT", "DELETE"),
             ("CONTROL", "ALT", "DELETE"),
         }
