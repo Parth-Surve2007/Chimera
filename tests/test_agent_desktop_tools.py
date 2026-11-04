@@ -126,8 +126,8 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
     assert "No user-facing applications found" not in captured["prompt"]
 
 
-def test_new_local_model_context_default_is_four_k():
-    assert LocalModelConfig(None, None).context == 4096
+def test_new_local_model_context_default_is_eight_k():
+    assert LocalModelConfig(None, None).context == 8192
 
 
 def test_ui_removes_verify_controls_and_optional_langflow_setup():
