@@ -756,7 +756,7 @@ class LocalModelProvider:
             for tool_id in tool_ids
         )
         workspace_guidance = (
-            "Choose by format: use workspace.create_document for a real .docx and workspace.create_file for plain .txt/source. "
+            "Choose by format: use workspace.create_document for a real .docx and workspace.create_file for a plain .txt/source. "
             "Never silently downgrade a requested .docx to .txt. Use only workspace-relative paths under WORKSPACE_SCOPE.root and "
             "WORKSPACE_SCOPE.known_folders.desktop for Desktop requests. Never overwrite; require exact Build Mode approval and "
             "report success only after independent file hash/size verification. "
