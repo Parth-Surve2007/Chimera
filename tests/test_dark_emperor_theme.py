@@ -12,6 +12,7 @@ def test_dark_emperor_theme_uses_full_black_graphite_surfaces():
     assert ui.TEXT == "#F2F2F2"
     assert ui.FOCUS == "#E0E0E0"
     assert ui.ACCENT == "#C5C5C5"
+    assert ui.THEME_SEED == "#BDBDBD"
     assert ui.PANEL_SURFACE == "#101010"
 
 
