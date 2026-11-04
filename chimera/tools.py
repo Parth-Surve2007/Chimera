@@ -31,7 +31,7 @@ OPERATIONS = {
     "read_text": {"description": "Read a bounded UTF-8 text file", "arguments": {"path": "string"}, "permission": "workspace.read"},
     "create_artifact": {"description": "Create a new Markdown or text artifact in the execution output directory", "arguments": {"name": "string", "content": "string"}, "permission": "execution.write"},
     "create_file": {"description": "Create a new plain-text or source file inside the attached workspace without overwriting existing files. Supports .txt and common text/source extensions. The path must be workspace-relative.", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
-    "create_document": {"description": "Create a real Microsoft Word .docx document in the attached workspace. Provide a workspace-relative .docx path, document title, and content. Does not require Microsoft Word to be installed.", "arguments": {"path": "string", "title": "string", "content": "string"}, "permission": "execution.write"},
+    "create_document": {"description": "Create a real Microsoft Word .docx document in the attached workspace. Provide a workspace-relative .docx path, document title, and content. Does not require Microsoft Word to be installed.", "arguments": {"path": "string", "title": "string", "content": "string"}, "permission": "execution.write"},\n    "create_pdf": {"description": "Create a genuine, parseable PDF in the attached workspace from supplied text. Requires explicit Build Mode approval; verifies extracted text, page count, file size and SHA-256 before returning.", "arguments": {"path": "string", "title": "string", "content": "string"}, "permission": "execution.write"},
     "computer.list_applications": {"description": "List currently visible Windows applications and observed window identities", "arguments": {}, "permission": "computer.observe"},
     "computer.list_installed_applications": {"description": "List installed, user-launchable Windows Start-menu apps, including packaged applications and their registered application IDs", "arguments": {}, "permission": "computer.observe"},
     "computer.list_windows": {"description": "List observed visible top-level windows and process identities", "arguments": {}, "permission": "computer.observe"},
@@ -63,10 +63,40 @@ class WorkspaceTools:
         if not self.workspace.is_dir(): raise ValueError("workspace must be an existing directory")
         if self.output != self.workspace and self.workspace not in self.output.parents:
             raise ValueError("artifact output directory must remain inside the selected workspace")
+    @staticmethod
+    def _known_desktop_directory() -> Path:
+        """Resolve the user's configured Windows Desktop, including redirection."""
+        if os.name == "nt":
+            try:
+                import winreg
+                key_path = r"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders"
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                    value, _kind = winreg.QueryValueEx(key, "Desktop")
+                return Path(os.path.expandvars(value)).expanduser().resolve()
+            except (OSError, ImportError):
+                pass
+        return (Path.home() / "Desktop").resolve()
+
     def _path(self, value, root=None):
-        if not isinstance(value, str) or not value.strip(): raise ValueError("path must be a non-empty string")
-        base = root or self.workspace; target = (base / value).resolve()
-        if target != base and base not in target.parents: raise ValueError("path escapes the selected workspace")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("path must be a non-empty string")
+        base = root or self.workspace
+        # With the system drive as workspace, "Desktop/..." is a known-folder
+        # alias rather than a literal C:\\Desktop directory. Do not apply
+        # this alias inside project workspaces or non-workspace output roots.
+        relative = Path(value)
+        if (
+            root is None
+            and self.workspace == Path(self.workspace.anchor).resolve()
+            and relative.parts
+            and relative.parts[0].casefold() == "desktop"
+        ):
+            desktop = self._known_desktop_directory()
+            target = (desktop.joinpath(*relative.parts[1:])).resolve()
+        else:
+            target = (base / value).resolve()
+        if target != self.workspace and self.workspace not in target.parents:
+            raise ValueError("path escapes the selected workspace")
         return target
 
     def _iter_files(self, root: Path, recursive=True, max_files=MAX_SCAN_FILES):
@@ -254,6 +284,35 @@ class WorkspaceTools:
                     "bytes": len(data),
                     "sha256": hashlib.sha256(data).hexdigest(),
                     "format": "docx",
+                })
+            if operation_id == "create_pdf":
+                relative = arguments.get("path")
+                title = arguments.get("title")
+                content = arguments.get("content")
+                if not isinstance(relative, str) or not relative.strip():
+                    raise ValueError("PDF path must be a non-empty workspace-relative path")
+                normalized_path = relative.replace("\\\\", "/")
+                windows_drive, _ = ntpath.splitdrive(relative)
+                if normalized_path.startswith("/") or Path(relative).is_absolute() or windows_drive:
+                    raise ValueError("PDF path must be workspace-relative; use Desktop/Report.pdf")
+                if not isinstance(title, str) or not title.strip():
+                    raise ValueError("PDF title must be a non-empty string")
+                if not isinstance(content, str) or not content.strip() or len(content.encode("utf-8")) > MAX_FILE:
+                    raise ValueError("PDF content must be non-empty and no larger than 2 MB")
+                target = self._path(relative)
+                if target.suffix.casefold() != ".pdf":
+                    raise ValueError("PDF output must use the .pdf extension")
+                if target.exists():
+                    raise ValueError("file already exists; refusing to overwrite")
+                if not approved:
+                    return OperationResult(operation_id, "awaiting_approval", {}, "explicit Build Mode PDF-write approval is required")
+                from .pdf_documents import create_pdf
+                verification = create_pdf(target, title=title.strip(), content=content)
+                data = target.read_bytes()
+                return OperationResult(operation_id, "completed", {
+                    "path": target.relative_to(self.workspace).as_posix(),
+                    **verification,
+                    "sha256": hashlib.sha256(data).hexdigest(),
                 })
         except (OSError, UnicodeError, ValueError) as exc: return OperationResult(operation_id, "failed", {}, str(exc))
 
