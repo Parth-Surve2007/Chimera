@@ -942,15 +942,15 @@ class AgentRuntime:
         import re
 
         text = str(request or "").strip().casefold()
-        if not re.match(r"^(?:please\\s+)?(?:open|launch|start|run)\\b", text):
+        if not re.match(r"^(?:please\s+)?(?:open|launch|start|run)\b", text):
             return False
-        clauses = re.split(r"[.!?;,]|\\b(?:and then|and|then|after that)\\b", text)
+        clauses = re.split(r"[.!?;,]|\b(?:and then|and|then|after that)\b", text)
         follow_up_actions = re.compile(
-            r"\\b(?:create|write|edit|save|type|enter|fill|draft|make|generate|insert|"
-            r"format|export|print|upload|download)\\b"
+            r"\b(?:create|write|edit|save|type|enter|fill|draft|make|generate|insert|"
+            r"format|export|print|upload|download)\b"
         )
         for clause in clauses[1:]:
-            if re.search(r"\\b(?:do not|don't|never|not|without)\\b", clause):
+            if re.search(r"\b(?:do not|don't|never|not|without)\b", clause):
                 continue
             if follow_up_actions.search(clause):
                 return False
