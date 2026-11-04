@@ -82,15 +82,23 @@ if (-not (Test-Path $Headless)) {
 $env:GHIDRA_HOME = $Destination
 
 $JdkCandidates = @()
-if ($env:JAVA_HOME) {
-    $JdkCandidates += Join-Path $env:JAVA_HOME "bin\java.exe"
-}
 $AdoptiumRoot = Join-Path $env:ProgramFiles "Eclipse Adoptium"
 if (Test-Path $AdoptiumRoot) {
     $JdkCandidates += Get-ChildItem -LiteralPath $AdoptiumRoot -Directory -Filter "jdk-25*" |
         ForEach-Object { Join-Path $_.FullName "bin\java.exe" }
 }
-$Jdk25 = $JdkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($env:JAVA_HOME) {
+    $JdkCandidates += Join-Path $env:JAVA_HOME "bin\java.exe"
+}
+$Jdk25 = $null
+foreach ($Candidate in $JdkCandidates) {
+    if (-not (Test-Path $Candidate)) { continue }
+    $VersionOutput = (& $Candidate -version 2>&1 | Out-String)
+    if ($VersionOutput -match '(?i)(?:version\s+["'']?|openjdk\s+)25(?:[.\s"'']|$)') {
+        $Jdk25 = $Candidate
+        break
+    }
+}
 
 Write-Host ""
 Write-Host "Ghidra installed: $Destination" -ForegroundColor Green
