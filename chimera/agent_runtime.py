@@ -455,6 +455,17 @@ class AgentRuntime:
                     raise ValueError(f"argument {name} must be a finite number")
             elif type(actual) is not kind:
                 raise ValueError(f"argument {name} must be {kind.__name__}")
+        required_arguments = {
+            "computer.get_range_value": {"session_id", "reference_id"},
+            "computer.set_range_value": {"session_id", "reference_id", "value"},
+            "computer.read_grid": {"session_id", "reference_id"},
+            "computer.scroll_element": {"session_id", "reference_id", "direction", "amount"},
+            "computer.scroll_into_view": {"session_id", "reference_id"},
+        }.get(operation)
+        if required_arguments:
+            missing = required_arguments - set(arguments)
+            if missing:
+                raise ValueError(f"missing required arguments for {operation}: {sorted(missing)}")
         if operation == "computer.scroll_element":
             if arguments["direction"] not in {"up", "down", "left", "right"}:
                 raise ValueError("scroll direction must be up, down, left, or right")
