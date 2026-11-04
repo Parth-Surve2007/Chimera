@@ -530,3 +530,78 @@ def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path
     after = runtime._protocol_catalog(session)
     after_ids = {item["id"] for item in after["tools"]}
     assert "computer.cua_click_foreground" in after_ids
+
+
+def test_manager_restricts_cua_windows_to_launch_approved_hwnd_set():
+    from types import SimpleNamespace
+    from chimera.computer_runtime import ComputerSessionManager
+
+    class FakeWindowsBackend:
+        def window_process_id(self, hwnd):
+            return 4321 if hwnd in {77, 78} else None
+
+    class FakeCua:
+        def __init__(self):
+            self.inspect_calls = []
+            self.click_calls = []
+            self.draw_calls = []
+
+        def list_windows(self, pid):
+            return {
+                "status": "completed",
+                "windows": [
+                    {"pid": pid, "window_id": 77, "title": "Approved"},
+                    {"pid": pid, "window_id": 78, "title": "Same process, unapproved window"},
+                ],
+                "count": 2,
+            }
+
+        def inspect_window(self, owner, pid, window_id, **kwargs):
+            self.inspect_calls.append((owner, pid, window_id))
+            return {"status": "completed", "snapshot_ref": "fresh"}
+
+        def click(self, *args, **kwargs):
+            self.click_calls.append((args, kwargs))
+            return {"status": "action_returned"}
+
+        def draw_path(self, *args, **kwargs):
+            self.draw_calls.append((args, kwargs))
+            return {"status": "completed"}
+
+    manager = ComputerSessionManager.__new__(ComputerSessionManager)
+    manager.backend = FakeWindowsBackend()
+    manager.cua = FakeCua()
+    identity = SimpleNamespace(
+        pid=4321,
+        executable="C:/Windows/mspaint.exe",
+        authorized_hwnds=(77,),
+    )
+    manager._cua_authorized_identity = lambda _app, _owner: identity
+
+    listing = manager.cua_list_windows("app-session", "conversation-a")
+    assert listing["status"] == "completed"
+    assert [window["window_id"] for window in listing["windows"]] == [77]
+    assert listing["rejected_unapproved_windows"] == 1
+
+    approved_inspection = manager.cua_inspect_window(
+        "app-session", "conversation-a", 77,
+    )
+    assert approved_inspection["status"] == "completed"
+    rejected_inspection = manager.cua_inspect_window(
+        "app-session", "conversation-a", 78,
+    )
+    assert rejected_inspection["status"] == "blocked"
+    assert len(manager.cua.inspect_calls) == 1
+
+    rejected_click = manager.cua_click(
+        "app-session", "conversation-a", 78, "snapshot",
+        element_token="s00000001:1",
+    )
+    assert rejected_click["status"] == "blocked"
+    rejected_draw = manager.cua_draw_path(
+        "app-session", "conversation-a", 78, "snapshot",
+        "s00000001:1", [[[0.1, 0.1], [0.9, 0.9]]],
+    )
+    assert rejected_draw["status"] == "blocked"
+    assert manager.cua.click_calls == []
+    assert manager.cua.draw_calls == []
