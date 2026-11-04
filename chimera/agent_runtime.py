@@ -887,7 +887,11 @@ class AgentRuntime:
                 current_workspace = Path(current["workspace"]) if current and current.get("workspace") else None
                 if current_workspace is None or not current_workspace.is_dir():
                     result_data = {"status": "workspace_required", "reason": "select an existing project workspace before using workspace tools"}
-                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data}, separators=(",", ":")))
+                    self.store.add_message(session_id, "tool", json.dumps({
+                        "invocation_id": invocation, "tool": tool_id,
+                        "arguments": decision["arguments"], "result": result_data,
+                        "status": "workspace_required", "error": result_data["reason"],
+                    }, separators=(",", ":")))
                     self._record(session_id, "tool.completed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "workspace_required", "data": result_data})
                     continue
                 workspace = current_workspace
@@ -897,7 +901,7 @@ class AgentRuntime:
                 valid, reason, _ = app_connector.validate_action_call(app_action.action_id, decision["arguments"], mode=session.get("mode", "plan"))
                 if not valid:
                     result_data = {"status": "blocked", "reason": reason, "tool": tool_id}
-                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data, "status": "blocked", "error": reason}, separators=(",", ":")))
+                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"], "result": result_data, "status": "blocked", "error": reason}, separators=(",", ":")))
                     self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": reason})
                     continue
 
@@ -906,7 +910,7 @@ class AgentRuntime:
                     TaskPolicy.validate(session.get("mode", "plan"), tool_id, permission)
                 except PermissionError as exc:
                     result_data = {"status": "blocked", "reason": str(exc), "tool": tool_id}
-                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data, "status": "blocked", "error": str(exc)}, separators=(",", ":")))
+                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"], "result": result_data, "status": "blocked", "error": str(exc)}, separators=(",", ":")))
                     self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": str(exc)})
                     continue
 
