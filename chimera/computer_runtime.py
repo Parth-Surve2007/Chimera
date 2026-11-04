@@ -395,6 +395,11 @@ class ComputerSessionManager:
         try: self.uia = WindowsUIABackend() if self.selector.select().name == "uia" else None
         except Exception: self.uia = None
         self.visual_input = ScopedWindowsInputBackend()
+        try:
+            from .vision import LocalVisionProvider
+            self.visual_perception = LocalVisionProvider.from_env()
+        except Exception:
+            self.visual_perception = None
         self.strategy = InteractionStrategyEngine([
             UIABackendDescriptor(self),
             BrowserBackendDescriptor(),
@@ -617,6 +622,97 @@ class ComputerSessionManager:
         if element.get("rectangle") and not element.get("offscreen", False):
             actions.append("visual_action")
         return actions
+
+    def inspect_visual_target(
+        self,
+        session_id: str,
+        reference_id: str,
+        question: str,
+        *,
+        approved: bool = False,
+        cancel_event=None,
+    ) -> dict:
+        """Inspect a fresh visible element with an explicitly configured local vision model."""
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "verified": False,
+                "permission": "computer.screenshot",
+                "reason": "operator approval is required before capturing application pixels",
+            }
+        if self.visual_perception is None:
+            return {
+                "status": "unavailable",
+                "verified": False,
+                "reason": (
+                    "no local vision model is configured; set CHIMERA_VISION_MODEL_PATH and "
+                    "CHIMERA_VISION_SERVER to user-supplied local assets"
+                ),
+                "hosted_fallback": False,
+            }
+        reference = self.references.get(reference_id)
+        if reference is None or reference.session_id != session_id:
+            return {
+                "status": "blocked", "verified": False,
+                "reason": "unknown or cross-session visual target reference",
+            }
+        try:
+            self.validate_reference(reference)
+            if self.uia is None:
+                raise RuntimeError("UI Automation is unavailable; screenshot target cannot be grounded")
+            identity = self.sessions.get(session_id)
+            if identity is None:
+                raise RuntimeError("authorized application session no longer exists")
+            target = self.uia.visual_target(
+                reference.hwnd, reference.runtime_id, identity.pid
+            )
+            rectangle = target["rectangle"]
+            window_rectangle = self.backend.window_rect(reference.hwnd)
+            if not isinstance(window_rectangle, dict):
+                raise RuntimeError("authorized application window geometry is unavailable")
+            if not (
+                window_rectangle["left"] <= rectangle["left"] < rectangle["right"] <= window_rectangle["right"]
+                and window_rectangle["top"] <= rectangle["top"] < rectangle["bottom"] <= window_rectangle["bottom"]
+            ):
+                raise PermissionError("visual target is outside the exact authorized window")
+            native = self.visual_input._native()
+            if not native.window_exists(reference.hwnd) or native.window_pid(reference.hwnd) != identity.pid:
+                raise PermissionError("authorized application window identity changed")
+            if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                return {
+                    "status": "awaiting_operator_focus", "verified": False,
+                    "reason": "bring the exact authorized application window to the foreground before screenshot analysis",
+                    "hwnd": reference.hwnd, "pid": identity.pid,
+                }
+            image = native.capture((
+                int(rectangle["left"]), int(rectangle["top"]),
+                int(rectangle["right"]), int(rectangle["bottom"]),
+            ))
+            if image is None:
+                raise RuntimeError("Windows could not capture the target element pixels")
+            if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                raise PermissionError("foreground application changed during screenshot capture")
+            result = self.visual_perception.inspect_image(
+                image, question, cancel_event=cancel_event
+            )
+            return {
+                **result,
+                "session_id": session_id,
+                "reference_id": reference_id,
+                "hwnd": reference.hwnd,
+                "target_name": target.get("name"),
+                "target_control_type": target.get("control_type"),
+                "target_rectangle": rectangle,
+                "evidence_scope": "fresh_uia_target_inside_authorized_window",
+                "verified": False,
+                "note": "Visual descriptions are observations, not proof that an action succeeded.",
+            }
+        except Exception as exc:
+            return {
+                "status": "failed", "verified": False,
+                "reason": f"visual target inspection failed: {exc}",
+                "hosted_fallback": False,
+            }
 
     def act_reference(
         self, session_id: str, reference_id: str, operation: str,
