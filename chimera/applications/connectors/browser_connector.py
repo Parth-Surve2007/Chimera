@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
-import ipaddress
 import json
 import os
+import queue
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.request
 import uuid
+from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,6 +215,34 @@ class BrowserConnector(BaseApplicationConnector):
         self._playwright_factory = playwright_factory
         self._context = contextvars.ContextVar(f"chimera_browser_context_{id(self)}", default=None)
         self._runtimes: dict[str, _BrowserRuntime] = {}
+        self._browser_queue: queue.Queue = queue.Queue()
+        self._browser_worker_thread = threading.Thread(
+            target=self._browser_worker,
+            name=f"ChimeraBrowser-{id(self):x}",
+            daemon=True,
+        )
+        self._browser_worker_thread.start()
+
+    def _browser_worker(self):
+        """Own every Playwright Sync API object on one stable daemon thread."""
+        while True:
+            item = self._browser_queue.get()
+            if item is None:
+                return
+            future, callback = item
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                future.set_result(callback())
+            except BaseException as exc:
+                future.set_exception(exc)
+
+    def _run_on_browser_thread(self, callback):
+        if threading.current_thread() is self._browser_worker_thread:
+            return callback()
+        future: Future = Future()
+        self._browser_queue.put((future, callback))
+        return future.result(timeout=180)
 
     @staticmethod
     def _default_browser_paths() -> dict[str, str]:
@@ -245,6 +275,11 @@ class BrowserConnector(BaseApplicationConnector):
         except ImportError:
             playwright_available = False
         paths = dict(self._browser_paths) or self._default_browser_paths()
+        paths = {
+            name: str(Path(path).expanduser().resolve())
+            for name, path in paths.items()
+            if name in {"edge", "chrome"} and Path(path).expanduser().is_file()
+        }
         self._browser_paths = paths
         self.manifest.is_installed = bool(playwright_available and paths)
         self.manifest.installation_path = "; ".join(paths.values()) if paths else None
@@ -579,6 +614,22 @@ class BrowserConnector(BaseApplicationConnector):
         return locator
 
     def execute_action(self, action_id: str, arguments: dict[str, Any], approved: bool = False) -> dict[str, Any]:
+        # Playwright's synchronous objects must only be used on the thread that
+        # created them. Capture the caller's conversation context explicitly.
+        context_value = self._context.get()
+        if threading.current_thread() is self._browser_worker_thread:
+            return self._execute_action_on_browser_thread(action_id, arguments, approved)
+        def invoke():
+            token = self._context.set(context_value)
+            try:
+                return self._execute_action_on_browser_thread(action_id, arguments, approved)
+            finally:
+                self._context.reset(token)
+        return self._run_on_browser_thread(invoke)
+
+    def _execute_action_on_browser_thread(
+        self, action_id: str, arguments: dict[str, Any], approved: bool = False
+    ) -> dict[str, Any]:
         if action_id == "inspect_installation":
             self.discover()
             return {
