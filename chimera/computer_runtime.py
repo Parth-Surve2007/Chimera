@@ -549,47 +549,108 @@ class ComputerSessionManager:
             return {"status": "blocked", "verified": False, "reason": str(exc)}
         return self.backend.close(int(hwnd), approved=True, expected_pid=identity.pid)
 
-    def observe(self, session_id: str) -> ComputerObservation:
+    def observe(
+        self,
+        session_id: str,
+        hwnd: int | None = None,
+        depth: int = 3,
+        limit: int = 250,
+    ) -> ComputerObservation:
+        """Inspect one authorized top-level window using bounded UIA traversal."""
         identity = self.sessions.get(session_id)
-        if not identity: raise KeyError("computer session not found")
-        if not self._identity_is_current(identity): raise RuntimeError("authorized process identity is no longer valid")
-        windows = [
+        if not identity:
+            raise KeyError("computer session not found")
+        if not self._identity_is_current(identity):
+            raise RuntimeError("authorized process identity is no longer valid")
+        if type(depth) is not int or not 0 <= depth <= 8:
+            raise ValueError("UI Automation depth must be an integer from 0 to 8")
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("UI Automation element limit must be an integer from 1 to 500")
+
+        applications = [
             item for item in self.backend.list_applications()
             if item["pid"] == identity.pid
             and bool(item.get("executable"))
             and str(Path(item.get("executable")).resolve()).casefold() == identity.executable.casefold()
+        ]
+        if not applications:
+            raise RuntimeError("authorized application process is no longer visible")
+        app = dict(applications[0])
+        available_windows = [
+            window for window in app.get("windows", [])
+            if isinstance(window, dict)
+            and int(window.get("pid", 0)) == identity.pid
             and (
                 not identity.authorized_hwnds
-                or any(int(window.get("hwnd", 0)) in identity.authorized_hwnds for window in item.get("windows", []))
+                or int(window.get("hwnd", 0)) in identity.authorized_hwnds
             )
         ]
-        if identity.authorized_hwnds:
-            for item in windows:
-                item["windows"] = [
-                    window for window in item.get("windows", [])
-                    if int(window.get("hwnd", 0)) in identity.authorized_hwnds
-                ]
-        if not windows: raise RuntimeError("authorized application window is no longer available")
-        generation = self.observations.get(session_id, (0, None))[0] + 1; app = windows[0]; elements = []
+        if not available_windows:
+            raise RuntimeError("authorized application window is no longer available")
+
+        if hwnd is not None:
+            if type(hwnd) is not int or hwnd <= 0:
+                raise ValueError("hwnd must be a positive integer")
+            if identity.authorized_hwnds and hwnd not in identity.authorized_hwnds:
+                raise PermissionError("window is outside the launch-approved HWND set")
+            selected = next(
+                (window for window in available_windows if int(window.get("hwnd", 0)) == hwnd),
+                None,
+            )
+            if selected is None or self.backend.window_process_id(hwnd) != identity.pid:
+                raise PermissionError("selected window does not belong to the exact authorized process")
+            app["windows"] = [selected]
+        else:
+            app["windows"] = available_windows
+
+        target_hwnd = int(app["windows"][0]["hwnd"])
+        generation = self.observations.get(session_id, (0, None))[0] + 1
+        elements = []
         if self.uia:
-            try: elements = self.uia.elements(app["windows"][0]["hwnd"])
-            except Exception: self.uia = None
+            try:
+                elements = self.uia.elements(target_hwnd, depth=depth, limit=limit)
+            except Exception:
+                self.uia = None
         if not elements:
-            for window in app["windows"][:8]: elements.extend(self.backend.controls(window["hwnd"])[:100])
+            elements = self.backend.controls(target_hwnd)[:min(limit, 250)]
         backend = "uia" if self.uia else "win32"
         if self.uia:
             enriched = []
             for element in elements:
                 runtime_id = element.get("runtime_id")
-                if not runtime_id: continue
-                reference = ElementReference(uuid.uuid4().hex, session_id, element.get("parent") or app["windows"][0]["hwnd"], runtime_id, generation, time.time() + self.observation_ttl)
+                if not runtime_id:
+                    continue
+                reference = ElementReference(
+                    uuid.uuid4().hex,
+                    session_id,
+                    int(element.get("parent") or target_hwnd),
+                    runtime_id,
+                    generation,
+                    time.time() + self.observation_ttl,
+                )
                 self.references[reference.reference_id] = reference
-                item = dict(element); item["reference_id"] = reference.reference_id; item["session_id"] = session_id; item["observation_generation"] = generation
-                item["available_actions"] = self._available_actions(item); enriched.append(item)
+                item = dict(element)
+                item["reference_id"] = reference.reference_id
+                item["session_id"] = session_id
+                item["observation_generation"] = generation
+                item["available_actions"] = self._available_actions(item)
+                enriched.append(item)
             elements = enriched
-        observation = ComputerObservation(uuid.uuid4().hex, session_id, generation, time.time(), backend, app, app["windows"], elements, limitation=None if backend == "uia" else "UIA unavailable or provider query failed; Win32 fallback used")
+
+        observation = ComputerObservation(
+            uuid.uuid4().hex,
+            session_id,
+            generation,
+            time.time(),
+            backend,
+            app,
+            app["windows"],
+            elements,
+            limitation=None if backend == "uia" else "UIA unavailable or provider query failed; Win32 fallback used",
+        )
         self.observations[session_id] = (generation, observation)
         return observation
+
     def element_reference(self, session_id: str, hwnd: int) -> ElementReference:
         generation, observation = self.observations.get(session_id, (0, None))
         if observation is None: raise ValueError("fresh observation required")
