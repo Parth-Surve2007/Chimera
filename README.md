@@ -23,7 +23,7 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 |---|---|
 | **Local reasoning** | Run a GGUF model through a persistent llama-server or an explicitly configured one-shot llama-cli runtime. |
 | **Computer control** | Discover visible Windows applications, authorize one exact running process, inspect its UI Automation tree, and use supported semantic controls. |
-| **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create new text and source files after explicit approval. |
+| **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files and genuine Word DOCX documents after explicit approval. |
 | **3D workflows** | Ask the Blender connector to create a bounded primitive-based scene and render a PNG preview. |
 | **Reverse engineering** | Use REA for built-in static artifact inspection, strings, file-format detection, and available analysis backends. Connect Ghidra when installed. |
 | **Multi-step work** | Run sequential workflows with tool validation, approval pauses, persistent run records, and evidence-aware outcomes. |
@@ -36,14 +36,14 @@ Chimera distinguishes between a **connector** and the external application it co
 
 The desktop UI keeps the main navigation on the left while you move between Chat, Model Bay, Applications, Workflow Studio, Capabilities, Goals, and Run History.
 
-- **Chat** is the continuous conversation and task surface.
+- **Chat** is the continuous conversation and task surface. Complex requests can maintain a persistent checklist with pending, in-progress, completed, and blocked items.
 - **Model Bay** manages local GGUF and explicitly selected API profiles.
 - **Applications** discovers open Windows apps and reports the state of specialist connectors.
 - **Capabilities** lists the built-in toolkit separately from custom capability proposals.
 - **Workflow Studio** and **Run History** show persisted workflow activity.
 - **Goals** stores operator-owned outcomes and evidence.
 
-The interface uses mostly-black and charcoal surfaces with restrained midnight-blue gradients. The goal is to keep useful controls visible and decorative noise on a short leash.
+The interface uses a strict monochrome black, graphite, and neutral-grey palette. Complex agent tasks display their persisted checklist directly in the conversation.
 
 ---
 
@@ -101,7 +101,7 @@ The system-drive scope is broad, so discovery is deliberately bounded:
 - Filename search examines at most 2,000 files and returns at most 200 matches.
 - Text search scans at most 2,000 files and 50 MB of candidate text.
 - Individual text reads and new-file contents are limited to 2 MB.
-- New files must use a supported text or source-code extension.
+- New text/source files must use a supported extension. Genuine Word documents use the separate DOCX operation.
 - Existing files are never overwritten by the built-in create-file operation.
 
 **Reads are read-only. Writes are approval-gated.** Plan Mode cannot perform protected changes. In Build Mode, Chimera shows the exact operation and arguments before execution. You approve or reject that exact action.
