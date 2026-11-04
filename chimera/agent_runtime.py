@@ -306,6 +306,23 @@ class AgentRuntime:
         session_workspace = session.get("workspace") if session else None
         if not session_workspace or not Path(session_workspace).is_dir():
             aliases = {key: value for key, value in aliases.items() if not key.startswith("workspace.")}
+        # Do not advertise UIA actions when no semantic provider is installed.
+        # Win32 child-window inspection remains read-only and is exposed separately.
+        if self.computer.uia is None:
+            uia_only = {
+                "computer.inspect_elements", "computer.inspect_pattern_support",
+                "computer.invoke_element", "computer.set_value", "computer.read_text",
+                "computer.get_range_value", "computer.set_range_value", "computer.read_grid",
+                "computer.scroll_element", "computer.scroll_into_view",
+                "computer.toggle_element", "computer.select_element",
+                "computer.expand_element", "computer.collapse_element",
+                "computer.visual_action",
+            }
+            aliases = {key: value for key, value in aliases.items() if key not in uia_only}
+        # Visual perception is opt-in and local. Never advertise it without a
+        # configured vision GGUF, llama-server executable and UIA target support.
+        if self.computer.visual_perception is None or self.computer.uia is None:
+            aliases.pop("computer.inspect_visual_target", None)
         authorized_applications = [
             {
                 "session_id": identity.session_id,
