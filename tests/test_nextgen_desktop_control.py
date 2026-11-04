@@ -238,7 +238,7 @@ def test_ui_automation_observation_targets_exact_authorized_window_and_bounds_tr
     try:
         manager.observe(computer_session_id, hwnd=99)
     except PermissionError as exc:
-        assert "authorized process" in str(exc)
+        assert "launch-approved HWND set" in str(exc)
     else:
         raise AssertionError("a foreign HWND was accepted")
 
