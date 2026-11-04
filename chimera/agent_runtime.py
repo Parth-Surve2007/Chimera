@@ -1382,6 +1382,7 @@ class AgentRuntime:
         clauses = re.split(r"[.!?;,]|\b(?:and then|and|then|after that)\b", text)
         follow_up_actions = re.compile(
             r"\b(?:create|write|edit|save|type|enter|fill|draft|make|generate|insert|"
+            r"draw|paint|sketch|illustrate|annotate|mark|circle|highlight|crop|rotate|"
             r"format|export|print|upload|download)\b"
         )
         for clause in clauses[1:]:
