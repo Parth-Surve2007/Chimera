@@ -530,7 +530,8 @@ class ComputerSessionManager:
         windows = [
             item for item in self.backend.list_applications()
             if item["pid"] == identity.pid
-            and (item.get("executable") or "").casefold() == identity.executable.casefold()
+            and bool(item.get("executable"))
+            and str(Path(item.get("executable")).resolve()).casefold() == identity.executable.casefold()
             and (
                 not identity.authorized_hwnds
                 or any(int(window.get("hwnd", 0)) in identity.authorized_hwnds for window in item.get("windows", []))
