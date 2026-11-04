@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-TASK_STATES={"draft","ready","running","waiting_approval","blocked","failed","completed","cancelled"}
+TASK_STATES={"draft","ready","running","waiting_approval","blocked","paused","failed","completed","cancelled"}
 STEP_STATES={"pending","running","waiting_approval","blocked","failed","completed","cancelled"}
 TODO_STATES={"pending","in_progress","completed","blocked","cancelled"}
 MAX_TODOS=16
@@ -46,6 +46,16 @@ class TaskStore:
             row = db.execute(
                 "SELECT task_id FROM agent_tasks WHERE session_id=? "
                 "AND status IN ('draft','ready','running','waiting_approval','blocked') "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return self.get(row[0]) if row else None
+
+    def paused_for_session(self, session_id):
+        """Return the most recently paused task for an explicit resume request."""
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT task_id FROM agent_tasks WHERE session_id=? AND status='paused' "
                 "ORDER BY created_at DESC, rowid DESC LIMIT 1",
                 (session_id,),
             ).fetchone()
