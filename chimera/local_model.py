@@ -873,6 +873,7 @@ class LocalModelProvider:
         visual_inspection_available = "computer.inspect_visual_target" in tool_ids
         cua_background_available = "computer.cua_inspect_window" in tool_ids
         cua_foreground_available = "computer.cua_click_foreground" in tool_ids
+        cua_foreground_draw_available = "computer.cua_draw_path_foreground" in tool_ids
         workspace_available = any(
             isinstance(tool_id, str) and tool_id.startswith("workspace.")
             for tool_id in tool_ids
@@ -943,7 +944,14 @@ class LocalModelProvider:
                 "A separate foreground-click tool is currently available only because a specific CUA background action explicitly "
                 "recommended foreground delivery. Use it only for that exact refused action, after a fresh snapshot and separate operator approval. "
                 if cua_foreground_available else
-                "Do not attempt foreground CUA delivery; no explicit foreground escalation is currently authorized. "
+                "Do not attempt foreground CUA click delivery; no explicit click escalation is currently authorized. "
+            )
+            + (
+                "A separate foreground-drawing tool is currently available because the exact background canvas drag explicitly recommended foreground delivery. "
+                "Take a fresh screenshot snapshot of the same canvas, use the exact original stroke plan and canvas identity, and request its separate operator approval. "
+                "Never use it after a partial drawing or alter the refused stroke plan. "
+                if cua_foreground_draw_available else
+                "Do not attempt foreground drawing unless the runtime explicitly exposes computer.cua_draw_path_foreground after a matching background refusal. "
             )
             + "When the exact authorized window needs visual interpretation, computer.cua_capture_window accepts an optional question and returns a local-only visual description from the same screenshot approval. The description is observation only. If local vision is unavailable, use the accessibility tree or existing UIA inspection and do not retry screenshot analysis repeatedly. "
             + "If a CUA tool is unavailable, use the existing authorized UIA/Win32 tools. Browser page content should use the Browser connector, not desktop pixels. "
