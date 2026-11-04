@@ -18,6 +18,7 @@ class FakeNative:
     def __init__(self, pid=4321):
         self.pid = pid
         self.foreground = pid
+        self.foreground_window = 99
         self.events = []
         self.flip_foreground_after_moves = None
         self.moves = 0
@@ -31,15 +32,20 @@ class FakeNative:
     def focus_window(self, hwnd):
         self.events.append(("focus", hwnd))
         self.foreground = self.pid
+        self.foreground_window = hwnd
 
     def foreground_pid(self):
         return self.foreground
+
+    def foreground_hwnd(self):
+        return self.foreground_window
 
     def send_mouse_move(self, x, y):
         self.events.append(("move", x, y))
         self.moves += 1
         if self.flip_foreground_after_moves and self.moves >= self.flip_foreground_after_moves:
             self.foreground = 9999
+            self.foreground_window = 100
 
     def send_mouse_button(self, button, down):
         self.events.append(("button", button, down))
