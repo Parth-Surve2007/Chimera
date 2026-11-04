@@ -1,7 +1,7 @@
 # 🐉 CHIMERA
 
 <p align="center">
-  <img src="assets/chimera_title.png" alt="Chimera" width="620">
+  <img src="assets/chimera_logo_white.png" alt="Chimera" width="660">
 </p>
 
 <h3 align="center">One local-first AI. Your whole digital workspace.</h3>
@@ -34,6 +34,8 @@ Give it an outcome, not a twenty-step instruction manual. Chimera's architecture
 The ambition is simple and unapologetic:
 
 > **One agent that can move between the tools you already use, get useful work done, and show its receipts.**
+
+Now imagine giving one prompt and moving between **Autodesk Fusion 360, 3ds Max, Maya, Blender, AutoCAD, Cadence, Proteus, Vivado, Word, Excel, PowerPoint, DaVinci Resolve, Photoshop, Illustrator, Premiere Pro, After Effects, VS Code, MATLAB, KiCad** and the rest of your digital toolbox. Build, calculate, design, edit, document, inspect, export. **One conversation. One coordinated workflow.** That is the scale of the Chimera ambition: not another app-specific copilot, but one agent designed to work across the apps where real work happens.
 
 It is not tied to one model, one vendor, one application or one workflow. Run it with local GGUF models, connect an explicitly selected external provider when you choose, and grow its capabilities through an extensible connector system.
 
