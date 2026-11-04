@@ -1545,7 +1545,7 @@ class AgentRuntime:
                 if reader.is_encrypted or not reader.pages:
                     raise ValueError("PDF is encrypted or contains no pages")
                 extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
-                normalize = lambda value: " ".join(str(value or "").replace("\\u00a0", " ").split())
+                normalize = lambda value: " ".join(str(value or "").split())
                 expected = normalize(pending["arguments"]["title"] + "\n" + pending["arguments"]["content"])
                 observed = normalize(extracted)
                 if observed != expected:
