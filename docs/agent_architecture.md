@@ -81,6 +81,23 @@ Windows UI Automation varies by application. Win32, WPF and WinForms often expos
 
 Packaged Windows apps are not always represented by a discoverable executable path. The Windows app inventory reads Start-menu entries and their registered Application User Model IDs (AUMIDs); launch uses the validated `shell:AppsFolder\\<AUMID>` activation route after the normal application-launch approval. This improves discovery for apps such as Paint, Photos and Calculator, but it does not provide semantic control of every custom-rendered canvas or prove that every Start-menu item is automatable.
 
+## Controlled browser automation
+
+- The browser connector launches a dedicated visible Edge/Chrome process with an isolated profile. It does not attach to or reuse the operator's everyday browser profile.
+- Playwright Sync API objects are owned by one connector worker thread. Calls from agent/UI threads are serialized onto that worker, with the calling conversation and workspace context explicitly rebound.
+- Page inspection returns bounded text and interactive-element metadata tagged as untrusted website content. It is observation, not policy.
+- Navigation and state-changing page operations require approval. Supported actions include unique-control click, editable non-password text fill, allowlisted key presses, exact native HTML select selection, workspace-confined file upload/download, and PNG screenshot capture.
+- Uploads require one exact HTML file input and an existing regular file inside the selected workspace. Downloads and screenshots are written only inside that workspace.
+- Browser screenshots verify the PNG signature and saved bytes against the browser-returned payload. Download/upload results report the actual file metadata.
+- Browser support depends on a locally installed Edge/Chrome executable and Playwright runtime; the connector does not download browser engines. Custom JavaScript comboboxes may need explicit click/keyboard actions rather than the native-select tool.
+
+## Graceful native-window close
+
+- The computer.close_window action requires Build Mode and exact operator approval.
+- At approval replay, AgentRuntime checks that the computer session belongs to the current conversation. ComputerSessionManager requires a fresh observation and confirms the HWND still belongs to the exact authorized PID.
+- The Windows backend sends WM_CLOSE to that HWND, then checks whether the window disappears.
+- It never calls TerminateProcess, taskkill, or a forced process-kill API. If the application keeps the window open (for example, an unsaved-work prompt), the result is uncertain with a manual handoff requirement, not a false success.
+
 ## Verified document output
 
 - `workspace.create_pdf` creates a genuine PDF with an embedded ReportLab font where available and refuses overwrites.
@@ -98,6 +115,8 @@ Packaged Windows apps are not always represented by a discoverable executable pa
 - No unregistered shell/Python/code execution.
 - No unscoped keyboard/mouse injection, background-window input, clipboard injection, or global hooks.
 - A scoped Windows input broker may use short SendInput packets only after exact operator approval, against a fresh UIA element rectangle fully contained by the authorized HWND, while that exact HWND and PID remain foreground before every packet.
+- Graceful window closing is a distinct approved operation: send WM_CLOSE to one exact, freshly observed HWND belonging to the conversation-authorized process; verify disappearance and never force-terminate the process.
+- Browser pages are untrusted data. Browser mutations require their own approval and are limited to the isolated profile and selected workspace.
 - Scoped input supports bounded click/double-click/stroke/text/key/scroll operations. It aborts on focus/identity changes, releases held buttons, captures before/after hashes, and reports uncertainty when pixel changes cannot be verified.
 - No silent local-to-hosted fallback or automatic model download.
 - Preserve audit events for calls, approvals, outputs and verification.
@@ -136,7 +155,6 @@ Packaged Windows apps are not always represented by a discoverable executable pa
 
 ### Next: Windows capability ecosystem
 - Add native Office automation and real spreadsheet/presentation operations.
-- Add browser control through a controlled protocol.
 - Add connectors for VS Code, file managers, media, CAD/EDA and more.
 - Add capability discovery, installation, tests and user-managed permissions.
 
