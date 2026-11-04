@@ -1223,16 +1223,22 @@ class AgentRuntime:
                 self._cancelled.discard(session_id)
                 return {"status": "cancelled"}
             if is_app_tool:
-                context_factory = getattr(app_connector, "execution_context", None)
-                execution_context = (
-                    context_factory(session_id, workspace)
-                    if callable(context_factory) else nullcontext()
-                )
-                with execution_context:
-                    act_res = app_connector.execute_action(app_action.action_id, decision["arguments"], approved=False)
-                res_status = act_res.get("status", "completed")
-                res_err = act_res.get("error")
-                result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+                try:
+                    context_factory = getattr(app_connector, "execution_context", None)
+                    execution_context = (
+                        context_factory(session_id, workspace)
+                        if callable(context_factory) else nullcontext()
+                    )
+                    with execution_context:
+                        act_res = app_connector.execute_action(app_action.action_id, decision["arguments"], approved=False)
+                    res_status = act_res.get("status", "completed")
+                    res_err = act_res.get("error")
+                    result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+                except Exception as exc:
+                    result = type("AppResult", (), {
+                        "data": {"status": "failed", "error": str(exc), "action": app_action.action_id},
+                        "status": "failed", "error": str(exc),
+                    })()
             elif tool_id.startswith("computer."):
                 computer = WindowsComputerUse(workspace)
                 args = decision["arguments"]
@@ -1553,16 +1559,22 @@ class AgentRuntime:
             self.store.clear_pending_tool(session_id)
             with sqlite3.connect(self.store.db_path) as db:
                 db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
-            context_factory = getattr(connector, "execution_context", None)
-            execution_context = (
-                context_factory(session_id, workspace)
-                if callable(context_factory) else nullcontext()
-            )
-            with execution_context:
-                act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
-            res_status = act_res.get("status", "completed")
-            res_err = act_res.get("error")
-            result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+            try:
+                context_factory = getattr(connector, "execution_context", None)
+                execution_context = (
+                    context_factory(session_id, workspace)
+                    if callable(context_factory) else nullcontext()
+                )
+                with execution_context:
+                    act_res = connector.execute_action(action_id, pending["arguments"], approved=True)
+                res_status = act_res.get("status", "completed")
+                res_err = act_res.get("error")
+                result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
+            except Exception as exc:
+                result = type("AppResult", (), {
+                    "data": {"status": "failed", "error": str(exc), "action": action_id},
+                    "status": "failed", "error": str(exc),
+                })()
         elif pending["tool"].startswith("computer.") and pending["tool"] in {
             "computer.invoke_element", "computer.set_value", "computer.set_range_value",
             "computer.scroll_element", "computer.scroll_into_view",
