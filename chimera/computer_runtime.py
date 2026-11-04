@@ -582,6 +582,21 @@ class ComputerSessionManager:
                         "backend": "scoped_win32_input",
                     }
                 action = (options or {}).get("action")
+                native = self.visual_input._native()
+                if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                    try:
+                        native.focus_window(reference.hwnd)
+                    except Exception as focus_exc:
+                        return {
+                            "status": "awaiting_operator_focus", "verified": False,
+                            "reason": str(focus_exc), "backend": "scoped_win32_input",
+                        }
+                if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
+                    return {
+                        "status": "awaiting_operator_focus", "verified": False,
+                        "reason": "the exact authorized application window could not be made foreground",
+                        "backend": "scoped_win32_input",
+                    }
                 if action == "type_text":
                     control_type = str(target.get("control_type") or "").casefold()
                     patterns = " ".join(str(item) for item in target.get("patterns", [])).casefold()
@@ -592,9 +607,6 @@ class ComputerSessionManager:
                             "backend": "scoped_win32_input",
                         }
                 if action in {"type_text", "press_key"}:
-                    foreground = self.visual_input._native()
-                    if foreground.foreground_pid() != identity.pid:
-                        foreground.focus_window(reference.hwnd)
                     focus_result = self.uia.focus_element(reference.hwnd, reference.runtime_id, identity.pid)
                     if focus_result.get("status") != "completed":
                         return {
