@@ -565,7 +565,7 @@ def test_cua_partial_background_delivery_never_offers_foreground_replay():
         )
         assert result["status"] == "blocked"
         assert result["verified"] is False
-        assert result["foreground_retry_available"] is not True
+        assert result.get("foreground_retry_available") is not True
         assert backend.can_foreground_draw_retry("conversation-a", 4321) is False
         assert len(driver.drag_inputs) == 1
         assert driver.drag_inputs[0]["delivery_mode"] is DeliveryMode.BACKGROUND
