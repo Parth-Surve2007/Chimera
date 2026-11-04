@@ -266,3 +266,56 @@ def test_empty_uia_tree_uses_honest_read_only_win32_fallback(tmp_path):
     assert observation.limitation is not None
     assert observation.elements[0]["text"] == "Open"
     assert "reference_id" not in observation.elements[0]
+
+
+def test_uia_provider_failure_falls_back_for_one_observation_only(tmp_path):
+    from chimera.computer_runtime import ApplicationIdentity, ComputerSessionManager
+
+    manager = ComputerSessionManager(tmp_path)
+    identity = ApplicationIdentity(
+        4321, "C:/Apps/editor.exe", 123.0, "conversation", "app-session", (77,),
+    )
+    manager.sessions["app-session"] = identity
+    manager._identity_is_current = lambda current: current is identity
+    manager.backend.window_process_id = lambda hwnd: 4321 if hwnd == 77 else None
+    manager.backend.list_applications = lambda: [{
+        "pid": 4321,
+        "executable": identity.executable,
+        "windows": [{"hwnd": 77, "pid": 4321, "title": "Editor"}],
+    }]
+    manager.backend.controls = lambda hwnd: [{
+        "hwnd": 91, "parent_hwnd": hwnd, "class_name": "Button",
+        "text": "Open", "control_id": 100,
+    }]
+
+    class FlakyUIA:
+        def __init__(self):
+            self.calls = 0
+
+        def elements(self, hwnd, depth=3, limit=250):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("UIA provider timed out for this application")
+            return [{
+                "runtime_id": "editor-root",
+                "parent": hwnd,
+                "process_id": 4321,
+                "name": "Editor surface",
+                "control_type": "Document",
+                "rectangle": {"left": 0, "top": 0, "right": 500, "bottom": 400},
+                "enabled": True,
+                "offscreen": False,
+                "patterns": ["Text"],
+            }]
+
+    provider = FlakyUIA()
+    manager.uia = provider
+    first = manager.observe("app-session")
+    assert first.backend == "win32"
+    assert "UIA error" in first.limitation
+    assert manager.uia is provider
+
+    second = manager.observe("app-session")
+    assert second.backend == "uia"
+    assert second.elements[0]["name"] == "Editor surface"
+    assert provider.calls == 2
