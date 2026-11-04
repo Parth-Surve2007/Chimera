@@ -214,3 +214,41 @@ def test_invalid_tool_identifier_error_includes_the_returned_value():
         assert "registered workspace.*, computer.*, or application.* ID" in str(exc)
     else:
         raise AssertionError("an invalid tool identifier was accepted")
+
+
+
+def test_local_agent_can_manage_persistent_todos_in_plan_mode(tmp_path):
+    class TodoProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self):
+            self.calls = 0
+            self.catalogs = []
+
+        def decide(self, messages, catalog, session=None):
+            self.catalogs.append(catalog)
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool": "agent.todo_write",
+                    "arguments": {"todos": [
+                        {"content": "Inspect the available workspace", "status": "in_progress"},
+                        {"content": "Verify the requested outcome", "status": "pending"},
+                    ]},
+                }
+            if self.calls == 2:
+                return {"type": "tool_call", "tool": "agent.todo_read", "arguments": {}}
+            return {"type": "message", "content": "The task checklist is saved."}
+
+    provider = TodoProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(mode="plan")
+    result = runtime.send(session_id, "Plan a multi-step workspace task.")
+    assert result["status"] == "completed"
+    assert provider.calls == 3
+    offered = {item["id"] for item in provider.catalogs[0]["tools"]}
+    assert {"agent.todo_read", "agent.todo_write"} <= offered
+    task = runtime.task_store.latest_for_session(session_id)
+    assert [item["status"] for item in runtime.task_store.todos(task.task_id)] == ["in_progress", "pending"]
