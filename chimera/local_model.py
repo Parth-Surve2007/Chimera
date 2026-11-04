@@ -165,23 +165,16 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
         except ValueError: raise ValueError(f"{name} must be a positive integer")
         if value < 1: raise ValueError(f"{name} must be a positive integer")
         return value
-    # Version-one configurations inherited conservative defaults, including
-    # an explicit zero GPU layers. Migrate those old defaults once to
-    # llama.cpp's memory-aware auto offload while preserving custom tuning.
+    # Preserve existing user-selected inference budgets. Only migrate the
+    # legacy explicit CPU-only offload setting to llama.cpp's adaptive mode;
+    # never silently increase context, output tokens, or CPU thread count.
     legacy_config = bool(persisted) and "config_version" not in persisted
     context_default = persisted.get("context", 4096)
     token_default = persisted.get("max_tokens", 384)
     thread_default = persisted.get("threads", 4)
     gpu_default = persisted.get("gpu_layers", "auto")
-    if legacy_config:
-        if context_default == 4096:
-            context_default = 8192
-        if token_default == 256:
-            token_default = 768
-        if thread_default == 4:
-            thread_default = 8
-        if gpu_default == 0:
-            gpu_default = "auto"
+    if legacy_config and gpu_default == 0:
+        gpu_default = "auto"
     raw_gpu_layers = str(env.get("CHIMERA_MODEL_GPU_LAYERS", gpu_default)).strip().casefold()
     if raw_gpu_layers == "auto":
         gpu_layers = "auto"
