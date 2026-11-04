@@ -75,3 +75,43 @@ def test_non_chat_pages_keep_left_navigation_mounted():
     assert isinstance(window.body.content, ui.ft.Row)
     assert len(window.body.content.controls) == 2
     assert window.body.content.controls[0].width == 238
+
+
+def test_resuming_legacy_conversation_migrates_it_to_default_drive(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from chimera import ui
+    from chimera.ui import MainWindow
+
+    target_root = tmp_path / "drive"
+    target_root.mkdir()
+    old_workspace = tmp_path / "old-project"
+    old_workspace.mkdir()
+    saved = {}
+
+    class Store:
+        def session(self, session_id):
+            return {"workspace": str(old_workspace)}
+
+        def set_workspace(self, session_id, workspace):
+            saved["workspace"] = workspace
+
+        def messages(self, session_id):
+            return []
+
+        def pending_tool(self, session_id):
+            return None
+
+    window = object.__new__(MainWindow)
+    window.agent_store = Store()
+    window.agent_session_id = "legacy-session"
+    window.drawer = None
+    window.local_verification = None
+    window.last_turn_notice = None
+    window._bind_agent_session = lambda: None
+    window._show_overview = lambda: None
+
+    monkeypatch.setattr(ui, "default_workspace_root", lambda: target_root)
+    window._resume_agent_session("legacy-session")
+
+    assert window.workspace_path == target_root
+    assert saved["workspace"] == target_root
