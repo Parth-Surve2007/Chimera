@@ -99,8 +99,14 @@ Windows UI Automation varies by application. Win32, WPF and WinForms often expos
 - Define postcondition/evidence contracts for each action family.
 - Add relevant capability routing and context compaction.
 
+### Current generic Windows interaction slice
+- Execute actions through a validated, fresh UIA element reference and exact authorized process identity.
+- Keep read-only Text, RangeValue and Grid observations separate from state-changing actions.
+- Support ValuePattern, RangeValuePattern, InvokePattern, TogglePattern, SelectionItemPattern, ExpandCollapsePattern, ScrollPattern and ScrollItemPattern where the live control exposes them.
+- Require approval for every UIA state change; do not substitute blind global keyboard/mouse injection or a Win32 mutation fallback.
+- Verify readable/range state after actions and require a fresh observation after operations such as InvokePattern where the control does not expose a deterministic postcondition.
+
 ### Next: Windows capability ecosystem
-- Strengthen generic UIA observations and post-action verification.
 - Add native Office automation and real spreadsheet/presentation operations.
 - Add browser control through a controlled protocol.
 - Add connectors for VS Code, file managers, media, CAD/EDA and more.
