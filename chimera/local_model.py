@@ -867,9 +867,8 @@ class LocalModelProvider:
                 )
 
         if recovery_reason:
-            retry_prompt = (
-                prompt
-                + "\n\nRECOVERY: " + recovery_reason + " "
+            recovery_instructions = (
+                "\n\nRECOVERY: " + recovery_reason + " "
                 "Re-evaluate the request from scratch. You may return a message with a useful direct answer, "
                 "or select exactly one tool ID from the valid tool IDs in the schema. "
                 "For a code-writing or programming question that asks for code in chat, return the code directly "
@@ -881,9 +880,9 @@ class LocalModelProvider:
                 "If the latest tool result failed, explain that specific failure or choose a different supported tool; "
                 "never repeat the exact same failed tool and arguments."
             )
-            retry_system_content, _, _ = retry_prompt.partition("\nCONVERSATION:\n")
+            retry_prompt = prompt + recovery_instructions
             retry_chat_messages = [
-                {"role": "system", "content": retry_system_content},
+                {"role": "system", "content": system_content + recovery_instructions},
                 *chat_messages[1:],
             ]
             parsed, retry_metrics = self.structured_with_metrics(
