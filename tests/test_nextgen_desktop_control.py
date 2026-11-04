@@ -142,8 +142,8 @@ def test_interaction_strategy_routes_semantic_and_visual_actions_by_evidence(tmp
         evidence={"fresh_window": True, "geometry": True},
     )
 
-    assert semantic.selected == "uia"
-    assert visual.selected == "grounded_input"
+    assert semantic["selected"] == "uia"
+    assert visual["selected"] == "grounded_input"
 
     manager.uia = None
     unavailable = manager.choose_interaction(
@@ -151,4 +151,4 @@ def test_interaction_strategy_routes_semantic_and_visual_actions_by_evidence(tmp
         "native_windows",
         evidence={"fresh_window": True, "geometry": True},
     )
-    assert unavailable.selected is None
+    assert unavailable["selected"] is None
