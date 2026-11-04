@@ -69,7 +69,7 @@ class WorkspaceTools:
         if os.name == "nt":
             try:
                 import winreg
-                key_path = r"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders"
+                key_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
                     value, _kind = winreg.QueryValueEx(key, "Desktop")
                 return Path(os.path.expandvars(value)).expanduser().resolve()
@@ -291,7 +291,7 @@ class WorkspaceTools:
                 content = arguments.get("content")
                 if not isinstance(relative, str) or not relative.strip():
                     raise ValueError("PDF path must be a non-empty workspace-relative path")
-                normalized_path = relative.replace("\\\\", "/")
+                normalized_path = relative.replace("\\", "/")
                 windows_drive, _ = ntpath.splitdrive(relative)
                 if normalized_path.startswith("/") or Path(relative).is_absolute() or windows_drive:
                     raise ValueError("PDF path must be workspace-relative; use Desktop/Report.pdf")
