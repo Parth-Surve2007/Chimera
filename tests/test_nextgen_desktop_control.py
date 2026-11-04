@@ -386,3 +386,91 @@ def test_custom_desktop_profiles_discard_permission_and_coordinate_fields():
     assert profile["permissions_granted"] == []
     assert "coordinates" not in profile
     assert "permissions" not in profile
+
+
+def test_profile_store_persists_sanitized_custom_profiles_atomically(tmp_path):
+    import json
+    from chimera.computer_runtime import ProfileStore, DesktopApplicationProfileRegistry
+
+    store = ProfileStore(tmp_path / "application_profiles.json")
+    profiles = [{
+        "profile_id": "custom.editor",
+        "version": 1,
+        "display_name": "Custom Editor",
+        "match": {"executable": [r"C:\\Tools\\editor.exe"], "title_contains": ["Custom Editor"]},
+        "target_hints": ["Prefer the main editor document surface."],
+        "preferred_operations": ["inspect_elements", "read_text"],
+        "limitations": ["Some extension panels are custom-rendered."],
+        "permissions": ["computer.input"],
+        "coordinates": [[0.1, 0.2], [0.8, 0.9]],
+    }]
+
+    saved_path = store.save(profiles)
+    loaded = store.load()
+
+    assert saved_path.is_file()
+    assert loaded[0]["profile_id"] == "custom.editor"
+    assert "permissions" not in loaded[0]
+    assert "coordinates" not in loaded[0]
+    assert json.loads(saved_path.read_text(encoding="utf-8")) == loaded
+
+    registry = DesktopApplicationProfileRegistry(loaded)
+    matched = registry.match(
+        r"C:\\Tools\\editor.exe",
+        [{"hwnd": 77, "pid": 4321, "title": "Project - Custom Editor"}],
+    )
+    assert matched["profile_id"] == "custom.editor"
+    assert matched["permissions_granted"] == []
+
+
+def test_profile_store_rejects_unsafe_or_ambiguous_profile_schema(tmp_path):
+    from chimera.computer_runtime import ProfileStore
+
+    store = ProfileStore(tmp_path / "application_profiles.json")
+    with pytest.raises(ValueError, match="version must be an integer"):
+        store.save([{
+            "profile_id": "bad.version",
+            "version": True,
+            "match": {"executable": "editor.exe"},
+        }])
+    with pytest.raises(ValueError, match="match must use"):
+        store.save([{
+            "profile_id": "bad.matcher",
+            "version": 1,
+            "match": {"executable": "editor.exe", "command": "run.exe"},
+        }])
+    with pytest.raises(ValueError, match="duplicate"):
+        store.save([
+            {"profile_id": "duplicate", "version": 1, "match": {"executable": "a.exe"}},
+            {"profile_id": "duplicate", "version": 1, "match": {"executable": "b.exe"}},
+        ])
+
+
+def test_profile_registry_normalizes_windows_executable_paths_on_non_windows_hosts():
+    from chimera.computer_runtime import DesktopApplicationProfileRegistry
+
+    registry = DesktopApplicationProfileRegistry()
+    matched = registry.match(
+        r"C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+        [],
+    )
+    assert matched is not None
+    assert matched["profile_id"] == "office.word"
+
+
+def test_computer_session_manager_loads_operator_profiles_from_configured_store(tmp_path):
+    from chimera.computer_runtime import ComputerSessionManager, ProfileStore
+
+    profile_path = tmp_path / "application_profiles.json"
+    ProfileStore(profile_path).save([{
+        "profile_id": "custom.paintlike",
+        "version": 1,
+        "display_name": "Paintlike App",
+        "match": {"executable": "paintlike.exe"},
+        "target_hints": ["Find the main custom surface."],
+    }])
+
+    manager = ComputerSessionManager(profile_store_path=profile_path)
+    matched = manager.application_profiles.match("C:/Apps/paintlike.exe", [])
+    assert matched["profile_id"] == "custom.paintlike"
+    assert manager.profile_store_error is None
