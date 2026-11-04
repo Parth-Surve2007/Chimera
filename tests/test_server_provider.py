@@ -267,9 +267,10 @@ def test_chat_completion_parses_split_streamed_content_and_reasoning(monkeypatch
             {"choices": [{"delta": {"content": '"message"}'}}]},
         ]
         return FakeResponse([
-            ("data: " + json.dumps(event) + "\\n").encode()
+            ("data: " + json.dumps(event)).encode() + bytes([10])
             for event in events
-        ] + [b"data: [DONE]\\n"])
+        ] + [b"data: [DONE]" + bytes([10])])
+
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     output, metrics = manager.complete(
         "",
