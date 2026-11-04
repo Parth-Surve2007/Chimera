@@ -481,7 +481,8 @@ def test_packaged_paint_resolves_from_start_menu_when_executable_is_not_on_disk(
         staticmethod(lambda: [{"name": "Paint", "app_id": aumid}]),
     )
 
-    target = WindowsComputerUse._resolve_launch_target("mspaint.exe")
+    computer = object.__new__(WindowsComputerUse)
+    target = computer._resolve_launch_target("mspaint.exe")
 
     assert target is not None
     assert target["kind"] == "appsfolder"
