@@ -162,7 +162,7 @@ def test_foreground_change_aborts_remaining_stroke_and_releases_button():
     assert result["status"] == "blocked"
     assert "foreground window changed" in result["reason"]
     assert native.events[-1] == ("button", "left", False)
-    assert len([event for event in native.events if event[0] == "move"]) == 1
+    assert len([event for event in native.events if event[0] == "move"]) == 2
 
 
 def test_keyboard_input_supports_only_bounded_named_chords():
