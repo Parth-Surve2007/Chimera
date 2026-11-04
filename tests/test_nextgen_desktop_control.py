@@ -562,3 +562,19 @@ def test_invalid_custom_profile_file_does_not_disable_builtin_profiles(tmp_path)
         [{"hwnd": 77, "pid": 4321, "title": "Untitled - Paint"}],
     )
     assert paint["profile_id"] == "windows.paint"
+
+
+def test_computer_interaction_strategy_is_a_dictionary_contract_for_rejections(tmp_path):
+    from chimera.computer_runtime import ComputerSessionManager
+
+    manager = ComputerSessionManager(tmp_path)
+    result = manager.choose_interaction(
+        "invoke_element",
+        "native_windows",
+        evidence={"fresh_window": True, "geometry": True},
+    )
+
+    assert isinstance(result, dict)
+    assert set(result) >= {"selected", "reason", "proof", "alternatives"}
+    assert result["selected"] in {None, "uia", "win32", "browser", "grounded_input"}
+    assert isinstance(result["reason"], str)
