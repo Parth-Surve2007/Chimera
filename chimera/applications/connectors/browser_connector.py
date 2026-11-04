@@ -242,7 +242,7 @@ class BrowserConnector(BaseApplicationConnector):
             return callback()
         future: Future = Future()
         self._browser_queue.put((future, callback))
-        return future.result(timeout=180)
+        return future.result()
 
     @staticmethod
     def _default_browser_paths() -> dict[str, str]:
