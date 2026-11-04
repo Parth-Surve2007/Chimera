@@ -109,3 +109,22 @@ def test_application_launch_blocks_unknown_application_name(tmp_path, monkeypatc
 
     assert result["status"] == "blocked"
     assert "could not resolve" in result["reason"]
+
+
+
+def test_word_alias_resolves_to_registered_app_path_before_launch(tmp_path, monkeypatch):
+    from chimera import computer_use
+
+    executable = tmp_path / "WINWORD.EXE"
+    executable.write_bytes(b"MZ")
+    resolved_names = []
+
+    def fake_which(name):
+        resolved_names.append(name)
+        return str(executable) if name == "WINWORD.EXE" else None
+
+    monkeypatch.setattr(computer_use.shutil, "which", fake_which)
+    result = WindowsComputerUse._resolve_executable("Word")
+
+    assert resolved_names[0] == "WINWORD.EXE"
+    assert result == executable.resolve()
