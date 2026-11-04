@@ -409,14 +409,13 @@ class ComputerSessionManager:
     def choose_interaction(self, operation: str, application_type: str = "native_windows", evidence: dict | None = None) -> dict:
         from dataclasses import asdict
         return asdict(self.strategy.choose(operation, application_type, evidence))
-    def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None) -> ApplicationIdentity:
-        """Authorize the exact live process returned by a verified app launch.
+    def create(self, pid: int, executable: str | None = None, owner_session_id: str | None = None, authorized_windows: list[dict] | None = None) -> ApplicationIdentity:
+        """Authorize one live process, optionally restricted to launch-observed HWNDs.
 
-        Packaged Windows apps may be started through an execution alias
-        (WindowsApps\\mspaint.exe) while the window-owning process reports
-        its real package executable (often under WindowsApps\\...\\...exe).
-        Bind authorization to the live PID + creation time + actual executable,
-        and use the alias only as a basename sanity check.
+        A per-user WindowsApps execution alias can resolve to a different final
+        image path. That exception requires a matching executable basename and
+        exact visible HWNDs still owned by the verified PID. Later observations
+        and actions are restricted to that HWND set.
         """
         try:
             import psutil
@@ -427,16 +426,37 @@ class ComputerSessionManager:
             raise RuntimeError(f"application process identity could not be verified: {exc}") from exc
         if not actual:
             raise RuntimeError("application executable path is unavailable")
+
+        allowed_hwnds: tuple[int, ...] = ()
+        if authorized_windows is not None:
+            verified_hwnds = []
+            for item in authorized_windows:
+                if not isinstance(item, dict):
+                    continue
+                hwnd, observed_pid = item.get("hwnd"), item.get("pid")
+                if type(hwnd) is not int or hwnd <= 0 or observed_pid != int(pid):
+                    continue
+                if self.backend.window_process_id(hwnd) == int(pid):
+                    verified_hwnds.append(hwnd)
+            allowed_hwnds = tuple(dict.fromkeys(verified_hwnds))
+            if not allowed_hwnds:
+                raise RuntimeError("launch returned no visible window that still belongs to the verified process")
+
         if executable:
-            expected_name = Path(str(executable)).name.casefold()
-            actual_name = Path(actual).name.casefold()
-            if expected_name and actual_name != expected_name:
-                raise RuntimeError(
-                    "launched process does not match the requested application "
-                    f"(expected {expected_name}, observed {actual_name})"
+            expected = str(Path(executable).resolve())
+            if expected.casefold() != actual.casefold():
+                expected_normalized = expected.replace("/", "\\\\").casefold()
+                alias_exception = (
+                    "\\\\appdata\\\\local\\\\microsoft\\\\windowsapps\\\\" in expected_normalized
+                    and Path(expected).name.casefold() == Path(actual).name.casefold()
+                    and bool(allowed_hwnds)
                 )
-        # Re-read identity immediately before registering it to close the
-        # PID-reuse / process-exit race during authorization.
+                if not alias_exception:
+                    raise RuntimeError(
+                        "application executable changed before authorization "
+                        f"(requested {Path(expected).name}, observed {Path(actual).name})"
+                    )
+
         try:
             current = psutil.Process(int(pid))
             if abs(float(current.create_time()) - created) > 0.01:
@@ -446,10 +466,21 @@ class ComputerSessionManager:
                 raise RuntimeError("application executable changed during authorization")
         except Exception as exc:
             raise RuntimeError(f"application process changed during authorization: {exc}") from exc
-        identity = ApplicationIdentity(int(pid), actual, created, owner_session_id, uuid.uuid4().hex)
+
+        identity = ApplicationIdentity(
+            int(pid), actual, created, owner_session_id, uuid.uuid4().hex, allowed_hwnds
+        )
         self.sessions[identity.session_id] = identity
         return identity
-process.exe()).resolve()).casefold() == identity.executable.casefold()
+
+    @staticmethod
+    def _identity_is_current(identity: ApplicationIdentity) -> bool:
+        try:
+            import psutil
+            process = psutil.Process(identity.pid)
+            if abs(float(process.create_time()) - identity.process_create_time) > 0.01:
+                return False
+            return str(Path(process.exe()).resolve()).casefold() == identity.executable.casefold()
         except Exception:
             return False
 
