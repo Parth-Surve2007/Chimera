@@ -333,3 +333,56 @@ def test_uia_provider_failure_falls_back_for_one_observation_only(tmp_path):
     assert second.backend == "uia"
     assert second.elements[0]["name"] == "Editor surface"
     assert provider.calls == 2
+
+
+def test_desktop_application_profiles_are_advisory_and_match_live_identity():
+    from chimera.computer_runtime import DesktopApplicationProfileRegistry
+
+    profiles = DesktopApplicationProfileRegistry()
+    paint = profiles.match(
+        r"C:\Program Files\WindowsApps\ApplicationFrameHost.exe",
+        [{"hwnd": 77, "pid": 4321, "title": "Untitled - Paint", "class_name": "ApplicationFrameWindow"}],
+    )
+    word = profiles.match(
+        r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
+        [{"hwnd": 88, "pid": 4321, "title": "Report.docx - Word"}],
+    )
+    excel = profiles.match(
+        r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE",
+        [{"hwnd": 99, "pid": 4321, "title": "Budget.xlsx - Excel"}],
+    )
+    notepad = profiles.match(
+        r"C:\Windows\System32\notepad.exe",
+        [{"hwnd": 100, "pid": 4321, "title": "notes.txt - Notepad"}],
+    )
+
+    assert paint["profile_id"] == "windows.paint"
+    assert any("largest visible enabled" in hint for hint in paint["target_hints"])
+    assert word["profile_id"] == "office.word"
+    assert excel["profile_id"] == "office.excel"
+    assert notepad["profile_id"] == "windows.notepad"
+    for profile in (paint, word, excel, notepad):
+        assert profile["advisory_only"] is True
+        assert profile["permissions_granted"] == []
+        assert "permissions" not in profile
+
+
+def test_custom_desktop_profiles_discard_permission_and_coordinate_fields():
+    from chimera.computer_runtime import DesktopApplicationProfileRegistry
+
+    registry = DesktopApplicationProfileRegistry([{
+        "profile_id": "custom-editor",
+        "version": 1,
+        "display_name": "Custom Editor",
+        "match": {"executable": "editor.exe"},
+        "target_hints": ["Prefer the visible document editor surface."],
+        "preferred_operations": ["read_text"],
+        "permissions": ["computer.input", "workspace.write"],
+        "coordinates": [[0.1, 0.2], [0.9, 0.8]],
+    }])
+    profile = registry.match("editor.exe", [{"hwnd": 77, "pid": 4321, "title": "Editor"}])
+
+    assert profile["profile_id"] == "custom-editor"
+    assert profile["permissions_granted"] == []
+    assert "coordinates" not in profile
+    assert "permissions" not in profile
