@@ -101,7 +101,7 @@ A minimal profile looks like this:
 ]
 ```
 
-Only descriptive match rules, target hints, preferred-operation names and limitations are accepted. Unknown fields are discarded. Profiles are capped at 100 entries and bounded per field. Duplicate IDs and attempts to shadow built-in profile IDs are ignored or rejected. A malformed file disables custom profiles for that launch while preserving built-ins; it never changes execution permissions.
+The resolver consumes only descriptive match rules, target hints, preferred-operation names and limitations. The storage layer preserves unknown metadata for backwards-compatible round trips, but those fields are stripped before a profile reaches the agent. Profiles are capped at 100 entries and bounded per descriptive field. Duplicate IDs and attempts to shadow built-in profile IDs are ignored or rejected. A malformed file disables custom profiles for that launch while preserving built-ins; it never changes execution permissions.
 
 ### Multi-window UIA observation and context packing
 
