@@ -496,6 +496,7 @@ class AgentRuntime:
             "computer.read_grid": {"session_id", "reference_id"},
             "computer.scroll_element": {"session_id", "reference_id", "direction", "amount"},
             "computer.scroll_into_view": {"session_id", "reference_id"},
+            "computer.visual_action": {"session_id", "reference_id", "action"},
         }.get(operation)
         if required_arguments:
             missing = required_arguments - set(arguments)
