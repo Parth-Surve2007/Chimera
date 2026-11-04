@@ -128,3 +128,57 @@ def test_word_alias_resolves_to_registered_app_path_before_launch(tmp_path, monk
 
     assert resolved_names[0] == "WINWORD.EXE"
     assert result == executable.resolve()
+
+
+
+def test_application_launch_detects_existing_process_handoff(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import subprocess
+    from chimera.computer_use import WindowObservation
+
+    computer = WindowsComputerUse(tmp_path)
+    executable = tmp_path / "notepad.exe"
+    executable.write_bytes(b"MZ")
+    monkeypatch.setattr(computer, "_resolve_executable", lambda _name: executable)
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda _args, shell=False: SimpleNamespace(pid=111),
+    )
+    monkeypatch.setattr(computer, "_windows", lambda: [
+        WindowObservation(77, 222, "Untitled - Notepad", "Notepad", True)
+    ])
+    monkeypatch.setattr(computer, "process_path", lambda pid: str(executable) if pid == 222 else None)
+
+    result = computer.launch("Notepad", approved=True)
+
+    assert result["status"] == "completed"
+    assert result["pid"] == 222
+    assert result["spawned_pid"] == 111
+    assert result["verification"] == "visible_window_executable_match"
+    assert result["windows"][0]["title"] == "Untitled - Notepad"
+
+
+def test_application_launch_matches_packaged_app_image_name(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import subprocess
+    from chimera.computer_use import WindowObservation
+
+    computer = WindowsComputerUse(tmp_path)
+    executable = tmp_path / "notepad.exe"
+    executable.write_bytes(b"MZ")
+    monkeypatch.setattr(computer, "_resolve_executable", lambda _name: executable)
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda _args, shell=False: SimpleNamespace(pid=111),
+    )
+    packaged_image = r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad\Notepad.exe"
+    monkeypatch.setattr(computer, "_windows", lambda: [
+        WindowObservation(77, 222, "Untitled - Notepad", "Notepad", True)
+    ])
+    monkeypatch.setattr(computer, "process_path", lambda pid: packaged_image if pid == 222 else None)
+
+    result = computer.launch("Notepad", approved=True)
+
+    assert result["status"] == "completed"
+    assert result["pid"] == 222
+    assert result["spawned_pid"] == 111

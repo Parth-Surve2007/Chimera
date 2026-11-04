@@ -106,7 +106,7 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
 
     provider.structured_with_metrics = fake_structured
     messages = [
-        SimpleNamespace(role="tool", content='{"tool":"computer.list_applications","result":[{"pid":1,"executable":"notepad.exe","windows":[{"title":"Untitled"}]}]}'),
+        SimpleNamespace(role="tool", content='{"tool":"computer.list_applications","result":{"items":[{"pid":1,"executable":"notepad.exe","windows":[{"title":"Untitled"}]}]}}'),
         SimpleNamespace(role="user", content="Create a text file."),
     ]
     inventory = [{"backend": "win32", "description": "unused inventory payload " * 100} for _ in range(40)]
@@ -122,6 +122,8 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
     assert "interaction_inventory" not in captured["prompt"]
     assert "unused inventory payload" not in captured["prompt"]
     assert "Desktop inventory summary" in captured["prompt"]
+    assert "- notepad.exe: Untitled" in captured["prompt"]
+    assert "No user-facing applications found" not in captured["prompt"]
 
 
 def test_new_local_model_context_default_is_four_k():
@@ -361,3 +363,113 @@ def test_launch_completion_shortcut_does_not_skip_requested_follow_up_work():
     assert AgentRuntime._is_terminal_launch_request("Open Notepad. Do not create a text file.")
     assert not AgentRuntime._is_terminal_launch_request("Open Word and create a document.")
     assert not AgentRuntime._is_terminal_launch_request("Launch Notepad, then type hello.")
+
+
+
+def test_runtime_completes_verified_text_file_write_without_second_model_call(tmp_path):
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            return {
+                "type": "tool_call",
+                "tool": "workspace.create_file",
+                "arguments": {"path": "hello.txt", "content": "Hello from Chimera."},
+                "invocation_id": "create-text-file",
+            }
+
+    provider = DecidingProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    pending = runtime.send(session_id, "Create a text file named hello.txt with Hello from Chimera.")
+
+    assert pending["status"] == "awaiting_approval"
+    completed = runtime.approve_pending(session_id, True)
+
+    target = tmp_path / "hello.txt"
+    assert completed["status"] == "completed"
+    assert target.read_text(encoding="utf-8") == "Hello from Chimera."
+    assert "Created and verified the text file" in completed["message"].content
+    assert completed["verification"]["sha256"]
+    assert provider.calls == 1
+    assert runtime.store.session(session_id)["state"] == "idle"
+
+
+def test_runtime_creates_real_word_document_for_docx_request(tmp_path):
+    import zipfile
+
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            return {
+                "type": "tool_call",
+                "tool": "workspace.create_document",
+                "arguments": {
+                    "path": "Cake-Recipe.docx",
+                    "title": "Chocolate Cake Recipe",
+                    "content": "Ingredients: flour, cocoa, sugar.\n\nMethod: mix and bake.",
+                },
+                "invocation_id": "create-word-document",
+            }
+
+    provider = DecidingProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    pending = runtime.send(
+        session_id,
+        "Create a Word document named Cake-Recipe.docx with a chocolate cake recipe.",
+    )
+
+    assert pending["status"] == "awaiting_approval"
+    completed = runtime.approve_pending(session_id, True)
+
+    target = tmp_path / "Cake-Recipe.docx"
+    assert completed["status"] == "completed"
+    assert target.is_file()
+    with zipfile.ZipFile(target) as archive:
+        assert archive.testzip() is None
+        xml = archive.read("word/document.xml").decode("utf-8")
+    assert "Chocolate Cake Recipe" in xml
+    assert "mix and bake" in xml
+    assert "Created and verified the Word document" in completed["message"].content
+    assert provider.calls == 1
+
+
+def test_terminal_file_creation_detection_preserves_requested_follow_up_work():
+    assert AgentRuntime._is_terminal_file_creation_request("Create a text file with hello.")
+    assert AgentRuntime._is_terminal_file_creation_request("Create a Word document with a recipe.")
+    assert not AgentRuntime._is_terminal_file_creation_request("Create a file and then open it.")
+    assert not AgentRuntime._is_terminal_file_creation_request("Create a file, then email it.")
+
+
+def test_local_model_prompt_routes_docx_requests_to_document_tool():
+    provider = LocalModelProvider(LocalModelConfig(None, None, context=4096))
+    captured = {}
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "Please confirm the document title."}, {"context": 4096}
+
+    provider.structured_with_metrics = fake_structured
+    result = provider.decide(
+        [SimpleNamespace(role="user", content="Create a Word document on my Desktop.")],
+        {"tools": [
+            {"id": "workspace.create_document", "description": "Create a Word DOCX document", "arguments": {"path": "string", "title": "string", "content": "string"}, "permission": "execution.write"},
+            {"id": "workspace.create_file", "description": "Create plain text files", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
+        ]},
+        session={"mode": "build", "workspace": r"C:\\Users\\Parth"},
+    )
+
+    assert result["type"] == "message"
+    assert "workspace.create_document" in captured["prompt"]
+    assert "Never silently downgrade a requested .docx to .txt" in captured["prompt"]
+    assert "workspace.create_file for a plain .txt" in captured["prompt"]

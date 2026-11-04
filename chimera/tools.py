@@ -30,7 +30,8 @@ OPERATIONS = {
     "search_text": {"description": "Search text in common source and text files", "arguments": {"query": "string"}, "permission": "workspace.read"},
     "read_text": {"description": "Read a bounded UTF-8 text file", "arguments": {"path": "string"}, "permission": "workspace.read"},
     "create_artifact": {"description": "Create a new Markdown or text artifact in the execution output directory", "arguments": {"name": "string", "content": "string"}, "permission": "execution.write"},
-    "create_file": {"description": "Create a new text file inside the attached workspace without overwriting existing files. The path must be workspace-relative, such as hello.txt; never use an absolute path or host operating-system path.", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
+    "create_file": {"description": "Create a new plain-text or source file inside the attached workspace without overwriting existing files. Supports .txt and common text/source extensions. The path must be workspace-relative.", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
+    "create_document": {"description": "Create a real Microsoft Word .docx document in the attached workspace. Provide a workspace-relative .docx path, document title, and content. Does not require Microsoft Word to be installed.", "arguments": {"path": "string", "title": "string", "content": "string"}, "permission": "execution.write"},
     "computer.list_applications": {"description": "List currently visible Windows applications and observed window identities", "arguments": {}, "permission": "computer.observe"},
     "computer.list_windows": {"description": "List observed visible top-level windows and process identities", "arguments": {}, "permission": "computer.observe"},
     "computer.inspect_controls": {"description": "Inspect controls belonging to a freshly observed operator-authorized application", "arguments": {"session_id": "string", "hwnd": "integer"}, "permission": "computer.observe"},
@@ -216,6 +217,37 @@ class WorkspaceTools:
                     "path": target.relative_to(self.workspace).as_posix(),
                     "bytes": len(content.encode("utf-8")),
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                })
+            if operation_id == "create_document":
+                relative = arguments.get("path")
+                title = arguments.get("title")
+                content = arguments.get("content")
+                if not isinstance(relative, str) or not relative.strip():
+                    raise ValueError("document path must be a non-empty workspace-relative path")
+                normalized_path = relative.replace("\\", "/")
+                windows_drive, _ = ntpath.splitdrive(relative)
+                if normalized_path.startswith("/") or Path(relative).is_absolute() or windows_drive:
+                    raise ValueError("document path must be workspace-relative; use a name such as Desktop/Report.docx")
+                if not isinstance(title, str) or not title.strip():
+                    raise ValueError("document title must be a non-empty string")
+                if not isinstance(content, str) or not content.strip() or len(content.encode("utf-8")) > MAX_FILE:
+                    raise ValueError("document content must be non-empty and no larger than 2 MB")
+                target = self._path(relative)
+                if target.suffix.casefold() != ".docx":
+                    raise ValueError("Word documents must use the .docx extension; use create_file only for plain text files")
+                if target.exists():
+                    raise ValueError("file already exists; refusing to overwrite")
+                if not approved:
+                    return OperationResult(operation_id, "awaiting_approval", {}, "explicit Build Mode document-write approval is required")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                from .documents import create_docx
+                create_docx(target, title=title.strip(), content=content)
+                data = target.read_bytes()
+                return OperationResult(operation_id, "completed", {
+                    "path": target.relative_to(self.workspace).as_posix(),
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "format": "docx",
                 })
         except (OSError, UnicodeError, ValueError) as exc: return OperationResult(operation_id, "failed", {}, str(exc))
 
