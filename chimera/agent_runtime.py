@@ -345,6 +345,12 @@ class AgentRuntime:
         )
         if not foreground_retry_ready:
             aliases.pop("computer.cua_click_foreground", None)
+        foreground_draw_retry_ready = bool(owner_session_id) and any(
+            self.computer.cua_foreground_draw_retry_available(item["session_id"], owner_session_id)
+            for item in authorized_applications
+        )
+        if not foreground_draw_retry_ready:
+            aliases.pop("computer.cua_draw_path_foreground", None)
         catalog_tools = [
             {
                 "id": "agent.skill_list",
@@ -487,6 +493,7 @@ class AgentRuntime:
             "computer.cua_click": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
             "computer.cua_click_foreground": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
             "computer.cua_draw_path": {"session_id": str, "window_id": int, "snapshot_ref": str, "canvas_element_token": str, "strokes": list, "duration_ms": int, "steps": int},
+            "computer.cua_draw_path_foreground": {"session_id": str, "window_id": int, "snapshot_ref": str, "canvas_element_token": str, "strokes": list, "duration_ms": int, "steps": int},
             "computer.inspect_window": {"session_id": str},
             "computer.inspect_pattern_support": {"session_id": str, "reference_id": str},
             "computer.invoke_element": {"session_id": str, "reference_id": str},
@@ -546,6 +553,7 @@ class AgentRuntime:
             "computer.cua_click": {"session_id", "window_id", "snapshot_ref"},
             "computer.cua_click_foreground": {"session_id", "window_id", "snapshot_ref"},
             "computer.cua_draw_path": {"session_id", "window_id", "snapshot_ref", "canvas_element_token", "strokes"},
+            "computer.cua_draw_path_foreground": {"session_id", "window_id", "snapshot_ref", "canvas_element_token", "strokes", "duration_ms", "steps"},
         }.get(operation)
         if required_arguments:
             missing = required_arguments - set(arguments)
@@ -570,13 +578,14 @@ class AgentRuntime:
             "computer.cua_list_windows", "computer.cua_inspect_window",
             "computer.cua_capture_window", "computer.cua_click",
             "computer.cua_click_foreground", "computer.cua_draw_path",
+            "computer.cua_draw_path_foreground",
         }:
             if not arguments["session_id"].strip():
                 raise ValueError("session_id must be non-empty")
         if operation in {"computer.cua_inspect_window", "computer.cua_capture_window"}:
             if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
                 raise ValueError("window_id must be a positive integer")
-        if operation == "computer.cua_draw_path":
+        if operation in {"computer.cua_draw_path", "computer.cua_draw_path_foreground"}:
             if type(arguments["window_id"]) is not int or arguments["window_id"] <= 0:
                 raise ValueError("window_id must be a positive integer")
             strokes = arguments["strokes"]
@@ -1758,7 +1767,7 @@ class AgentRuntime:
             "computer.launch", "computer.visual_action",
             "computer.close_window", "computer.cua_capture_window",
             "computer.cua_click", "computer.cua_click_foreground",
-            "computer.cua_draw_path",
+            "computer.cua_draw_path", "computer.cua_draw_path_foreground",
         }:
             operation = pending["tool"]
             args = pending["arguments"]
@@ -1836,13 +1845,14 @@ class AgentRuntime:
                     button=args.get("button", "left"),
                     count=args.get("count", 1),
                 )
-            elif operation == "computer.cua_draw_path":
+            elif operation in {"computer.cua_draw_path", "computer.cua_draw_path_foreground"}:
                 result_data = self.computer.cua_draw_path(
                     args["session_id"], session_id, args["window_id"],
                     args["snapshot_ref"], args["canvas_element_token"],
                     args["strokes"],
                     duration_ms=args.get("duration_ms", 240),
                     steps=args.get("steps", 12),
+                    foreground=operation == "computer.cua_draw_path_foreground",
                 )
             elif operation == "computer.inspect_visual_target":
                 identity = self.computer.sessions.get(args["session_id"])

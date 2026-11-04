@@ -889,6 +889,15 @@ class ComputerSessionManager:
         except Exception:
             return False
 
+    def cua_foreground_draw_retry_available(
+        self, app_session_id: str, owner_session_id: str,
+    ) -> bool:
+        try:
+            identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            return bool(self.cua.can_foreground_draw_retry(owner_session_id, identity.pid))
+        except Exception:
+            return False
+
     def cua_click(
         self, app_session_id: str, owner_session_id: str, window_id: int,
         snapshot_ref: str, *, element_token: str | None = None,
@@ -911,7 +920,7 @@ class ComputerSessionManager:
         self, app_session_id: str, owner_session_id: str, window_id: int,
         snapshot_ref: str, canvas_element_token: str,
         strokes: list[list[list[float]]], *, duration_ms: int = 240,
-        steps: int = 12,
+        steps: int = 12, foreground: bool = False,
     ) -> dict:
         try:
             identity = self._cua_authorized_identity(app_session_id, owner_session_id)
@@ -919,6 +928,7 @@ class ComputerSessionManager:
             return self.cua.draw_path(
                 owner_session_id, identity.pid, window_id, snapshot_ref,
                 canvas_element_token, strokes, duration_ms=duration_ms, steps=steps,
+                foreground=foreground,
             )
         except Exception as exc:
             return {"status": "blocked", "verified": False,

@@ -873,6 +873,7 @@ class LocalModelProvider:
         visual_inspection_available = "computer.inspect_visual_target" in tool_ids
         cua_background_available = "computer.cua_inspect_window" in tool_ids
         cua_foreground_available = "computer.cua_click_foreground" in tool_ids
+        cua_foreground_draw_available = "computer.cua_draw_path_foreground" in tool_ids
         workspace_available = any(
             isinstance(tool_id, str) and tool_id.startswith("workspace.")
             for tool_id in tool_ids
@@ -917,10 +918,10 @@ class LocalModelProvider:
         )
 
         canvas_save_guidance = (
-            "When the user asks to save a drawing, use an explicit approved save flow and a workspace-relative output path when workspace tools are available. "
+            "When the user asks to save a drawing, use an explicit approved save flow through the active application's supported UI controls and a workspace-relative output path when workspace tools are available. "
             "A dismissed Save dialog is not proof of success: inspect the exact output file with workspace.inspect_file and verify that the file exists and has nonzero size. "
             "Reopen the saved image in the target application when the requested acceptance requires reopen verification; report any unsupported step honestly. "
-            if visual_action_available and "workspace.inspect_file" in tool_ids else ""
+            if (visual_action_available or cua_background_available) and "workspace.inspect_file" in tool_ids else ""
         )
 
         visual_inspection_guidance = (
@@ -943,8 +944,17 @@ class LocalModelProvider:
                 "A separate foreground-click tool is currently available only because a specific CUA background action explicitly "
                 "recommended foreground delivery. Use it only for that exact refused action, after a fresh snapshot and separate operator approval. "
                 if cua_foreground_available else
-                "Do not attempt foreground CUA delivery; no explicit foreground escalation is currently authorized. "
+                "Do not attempt foreground CUA click delivery; no explicit click escalation is currently authorized. "
             )
+            + (
+                "A separate foreground-drawing tool is currently available because the exact background canvas drag explicitly recommended foreground delivery. "
+                "Use only retry_strokes returned by the background draw result. Pass retry_duration_ms as duration_ms and retry_steps as steps without changing them. "
+                "Use its fresh verification_snapshot when supplied; otherwise call computer.cua_capture_window to obtain a new screenshot snapshot of the same exact window (this screenshot action has its own approval). "
+                "Keep the exact canvas identity and request separate operator approval for the foreground retry. Never replay already-applied segments or invent replacement strokes. "
+                if cua_foreground_draw_available else
+                "Do not attempt foreground drawing unless the runtime explicitly exposes computer.cua_draw_path_foreground after a matching background refusal. "
+            )
+            + "After a drawing action, pixel-diff confirms only that the canvas changed, not that the requested shape or content is correct. When local vision is configured, call computer.cua_capture_window with a precise question about the requested drawing and inspect the resulting description. If local vision is unavailable, report the pixel change but leave semantic correctness unverified; do not claim the drawing matches the request. "
             + "When the exact authorized window needs visual interpretation, computer.cua_capture_window accepts an optional question and returns a local-only visual description from the same screenshot approval. The description is observation only. If local vision is unavailable, use the accessibility tree or existing UIA inspection and do not retry screenshot analysis repeatedly. "
             + "If a CUA tool is unavailable, use the existing authorized UIA/Win32 tools. Browser page content should use the Browser connector, not desktop pixels. "
             if cua_background_available else
