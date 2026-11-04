@@ -81,11 +81,13 @@ class FakeAPI:
             self.values = kwargs
 
 
-def _png_bytes(draw: bool = False) -> bytes:
+def _png_bytes(draw_count: int | bool = 0) -> bytes:
     image = Image.new("RGB", (100, 100), "white")
-    if draw:
-        painter = ImageDraw.Draw(image)
-        painter.line((18, 18, 82, 82), fill="black", width=4)
+    painter = ImageDraw.Draw(image)
+    if int(draw_count) >= 1:
+        painter.line((18, 18, 42, 42), fill="black", width=4)
+    if int(draw_count) >= 2:
+        painter.line((42, 42, 82, 82), fill="black", width=4)
     stream = io.BytesIO()
     image.save(stream, format="PNG")
     return stream.getvalue()
@@ -120,7 +122,7 @@ class FakeDriver:
         self.drag_inputs = []
         self.shutdown_called = False
         self.snapshot_number = 0
-        self.after_draw = False
+        self.after_draw = 0
 
     async def list_apps(self, _request):
         return SimpleNamespace(apps=[
@@ -252,7 +254,7 @@ class FakeDriver:
                     recommended="foreground", reason="canvas did not apply background input",
                 ),
             )
-        self.after_draw = True
+        self.after_draw += 1
         return SimpleNamespace(
             effect=Effect.CONFIRMED,
             route=Route.ACCESSIBILITY,
