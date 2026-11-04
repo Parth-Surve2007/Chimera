@@ -22,7 +22,7 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 | Area | What is available |
 |---|---|
 | **Local reasoning** | Run a GGUF model through a persistent llama-server or an explicitly configured one-shot llama-cli runtime. |
-| **Computer control** | Discover and launch Windows applications, bind verified processes to the current conversation, inspect UI Automation controls, use bounded foreground-scoped input, and gracefully close exact windows after approval. |
+| **Computer control** | Discover and launch Windows applications, bind verified processes to the current conversation, inspect UI Automation controls, and use bounded scoped input. An optional Cua Driver backend adds snapshot-bound background clicks and canvas drags; foreground escalation always requires a separate approval. |
 | **Browser work** | Use an isolated visible Edge/Chrome profile to inspect pages, navigate, click unique controls, fill safe text fields, select native dropdowns, upload workspace files, capture screenshots, and download files. Mutations require approval. |
 | **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files, genuine Word DOCX documents, and verified PDFs after explicit approval. |
 | **3D workflows** | Ask the Blender connector to create a bounded primitive-based scene and render a PNG preview. |
@@ -224,6 +224,12 @@ The portable application bundles its Python runtime and Flet desktop client. The
 Install the source and test dependencies with:
 
     python -m pip install --user -e ".[test]"
+
+To enable the optional Cua Driver background desktop backend in a source run:
+
+    python -m pip install --user -e ".[computer-use]"
+
+The Windows portable build includes this optional SDK automatically. Source installs without it keep the existing UIA/Win32 desktop backends.
 
 Run the CI test selection:
 
