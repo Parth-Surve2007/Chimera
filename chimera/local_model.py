@@ -1,6 +1,7 @@
 """Strictly local llama.cpp provider; no network or hosted fallback exists here."""
 from dataclasses import dataclass
-import json, os, subprocess, time, shutil, threading, queue
+import json, os, re, subprocess, time, shutil, threading, queue
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable, Any
 from .contracts import TaskSpec, CapabilityProposal, ProposedFile, ClarificationQuestion, ReadinessAssessment
@@ -276,6 +277,34 @@ def _plain_completion(raw: str) -> str:
         if marker in text: text = text.split(marker, 1)[0]
     return text.strip()
 
+def _normalized_agent_text(value: str) -> str:
+    """Normalize a short text response for exact/near-exact prompt comparison."""
+    return " ".join(re.sub(r"[^\\w\\s]", " ", str(value).casefold()).split())
+
+
+def _is_unhelpful_prompt_echo(response: str, messages) -> bool:
+    """Reject a model message that only repeats the latest user request."""
+    latest_user = next(
+        (item for item in reversed(list(messages))
+         if str(getattr(item, "role", "user")).casefold() == "user"),
+        None,
+    )
+    if latest_user is None:
+        return False
+    request = str(getattr(latest_user, "content", "")).strip()
+    answer = str(response or "").strip()
+    request_norm = _normalized_agent_text(request)
+    answer_norm = _normalized_agent_text(answer)
+    if len(request_norm) < 24 or not answer_norm:
+        return False
+    if re.match(r"^(?:repeat|quote|echo|copy|transcribe)\\b", request.casefold()):
+        return False
+    if request_norm == answer_norm:
+        return True
+    size_ratio = min(len(request_norm), len(answer_norm)) / max(len(request_norm), len(answer_norm))
+    return size_ratio >= 0.90 and SequenceMatcher(None, request_norm, answer_norm).ratio() >= 0.965
+
+
 AGENT_DECISION_SCHEMA = {
     "type": "object",
     "oneOf": [
@@ -460,8 +489,26 @@ class LocalModelProvider:
             "known_folders": known_folders,
         }
 
+        tool_priority = {
+            "computer.list_applications": 0,
+            "computer.launch": 1,
+            "workspace.list_files": 2,
+            "workspace.search_files": 3,
+            "workspace.read_text": 4,
+            "workspace.create_file": 5,
+            "workspace.inspect_file": 6,
+            "workspace.search_text": 7,
+        }
+        available_tools = [
+            (index, item)
+            for index, item in enumerate((catalog or {}).get("tools", []))
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+        available_tools.sort(
+            key=lambda pair: (tool_priority.get(pair[1]["id"], 50), pair[0])
+        )
         compact_tools = []
-        for item in (catalog or {}).get("tools", [])[:36]:
+        for _, item in available_tools[:36]:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
                 continue
             compact = {
@@ -493,6 +540,8 @@ class LocalModelProvider:
                 '{"type":"message","content":"..."} OR '
                 '{"type":"tool_call","tool":"<exact tool id>","arguments":{...},"invocation_id":"optional"}. '
                 "Use only exact tool IDs and valid arguments from TOOLS. Never invent IDs or results. "
+                "Never echo, copy, or merely restate the latest USER message as the answer. "
+                "A message decision must provide useful information or ask one necessary clarification. "
                 "Treat the latest USER message as the task; earlier messages are context. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
                 "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
@@ -501,7 +550,10 @@ class LocalModelProvider:
                 "never invent Linux paths on Windows or pass an absolute host path to workspace.create_file. "
                 "For new files, use workspace.create_file, choose a supported text/source extension, and wait for exact Build Mode approval. "
                 "Do not overwrite existing files. Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
-                "Use computer.launch only when the user explicitly asks to open an application; its approval gate still applies. "
+                "For explicit app-opening requests, inspect computer.list_applications when useful and call computer.launch "
+                "with an app name or executable accepted by the tool. Launch requires approval. After launch, request exact "
+                "app authorization in Applications before interacting with its controls. Never claim an app is open until "
+                "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
                 "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
                 "\nWORKSPACE_SCOPE: " + json.dumps(workspace_state, ensure_ascii=False, separators=(",", ":")) +
@@ -526,6 +578,42 @@ class LocalModelProvider:
             cancel_event=cancel_event,
             on_delta=on_delta,
         )
+        parsed, metrics = self.structured_with_metrics(
+            prompt,
+            json_schema=AGENT_DECISION_SCHEMA,
+            cancel_event=cancel_event,
+            on_delta=on_delta,
+        )
+        if (
+            isinstance(parsed, dict)
+            and parsed.get("type") == "message"
+            and _is_unhelpful_prompt_echo(parsed.get("content", ""), recent)
+        ):
+            retry_prompt = (
+                prompt
+                + "\\n\\nRECOVERY: Your previous candidate only repeated the user's task and is invalid. "
+                "Re-evaluate the request from scratch. Use a registered tool when an action is possible. "
+                "For opening an application, use computer.list_applications and computer.launch if present. "
+                "If a capability or permission is missing, state the exact blocker in one helpful sentence. "
+                "Do not repeat the user request as your answer."
+            )
+            parsed, retry_metrics = self.structured_with_metrics(
+                retry_prompt,
+                json_schema=AGENT_DECISION_SCHEMA,
+                cancel_event=cancel_event,
+                on_delta=None,
+            )
+            metrics["echo_recovery_attempted"] = True
+            metrics["echo_recovery_duration_ms"] = retry_metrics.get("duration_ms")
+            if (
+                isinstance(parsed, dict)
+                and parsed.get("type") == "message"
+                and _is_unhelpful_prompt_echo(parsed.get("content", ""), recent)
+            ):
+                raise ValueError(
+                    "the local model repeated the task instead of answering or selecting a tool; "
+                    "try again or use a model better suited to tool calling"
+                )
         metrics["schema_provenance"] = "chimera.agent_decision.v3"
         metrics["prompt_chars"] = len(prompt)
         if not isinstance(parsed, dict):
