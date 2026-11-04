@@ -361,9 +361,17 @@ def test_standalone_launch_request_is_completed_from_confirmed_windows_result(tm
 
 
 def test_launch_completion_shortcut_does_not_skip_requested_follow_up_work():
+    assert AgentRuntime._is_terminal_launch_request("Open Notepad.")
     assert AgentRuntime._is_terminal_launch_request("Open Notepad. Do not create a text file.")
-    assert not AgentRuntime._is_terminal_launch_request("Open Word and create a document.")
-    assert not AgentRuntime._is_terminal_launch_request("Launch Notepad, then type hello.")
+    for request in (
+        "Open Word and create a document.",
+        "Launch Notepad, then type hello.",
+        "Open Notepad and read the current document.",
+        "Open Paint and inspect the canvas.",
+        "Launch Calculator and calculate 12 times 14.",
+        "Open Word, then save the document as a PDF.",
+    ):
+        assert not AgentRuntime._is_terminal_launch_request(request), request
 
 
 
