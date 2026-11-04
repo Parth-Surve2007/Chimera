@@ -312,11 +312,11 @@ class AgentRuntime:
         for key, value in aliases.items():
             # The Applications page performs live inventory discovery itself.
             # Never waste model context on OS helper windows or raw process dumps.
-            if key in {"computer.list_applications", "computer.list_windows"}:
+            if key == "computer.list_windows":
                 continue
             # Desktop actions are offered only after an exact process has been
             # explicitly authorized for this conversation.
-            if key.startswith("computer.") and key != "computer.launch" and not authorized_applications:
+            if key.startswith("computer.") and key not in {"computer.launch", "computer.list_applications"} and not authorized_applications:
                 continue
             catalog_tools.append({"id": key, **tool_catalog()["operations"][value]})
         try:
