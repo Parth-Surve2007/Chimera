@@ -188,8 +188,8 @@ def test_agent_decision_envelope_is_strict_and_includes_session_state(tmp_path):
     assert "do not call workspace tools" in prompts[0]
     from chimera.local_model import AGENT_DECISION_SCHEMA
     assert len(AGENT_DECISION_SCHEMA["oneOf"]) == 2
-    assert AGENT_DECISION_SCHEMA["oneOf"][0]["properties"]["type"]["const"] == "message"
-    assert AGENT_DECISION_SCHEMA["oneOf"][1]["properties"]["type"]["const"] == "tool_call"
+    assert AGENT_DECISION_SCHEMA["oneOf"][0]["properties"]["type"]["enum"] == ["message"]
+    assert AGENT_DECISION_SCHEMA["oneOf"][1]["properties"]["type"]["enum"] == ["tool_call"]
 
 
 def test_local_agent_decision_rejects_unsupported_envelopes(tmp_path):
