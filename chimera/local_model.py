@@ -899,9 +899,14 @@ class LocalModelProvider:
             "No workspace tools are available in this turn: do not call workspace tools or invent host filesystem paths. "
         )
         multi_window_guidance = (
-            "If an authorized application has multiple top-level windows, call computer.inspect_window first and select the exact visible hwnd by title/purpose. "
-            "Pass that hwnd to computer.inspect_elements; use depth 4-6 only when the needed controls are deeper, and keep the element limit bounded. "
-            if "computer.inspect_window" in tool_ids and "computer.inspect_elements" in tool_ids else ""
+            "For computer.inspect_window, pass exactly {session_id} and no other fields. It returns the authorized windows with their hwnd and title. "
+            "Do not pass hwnd, window_id, title, or filters to computer.inspect_window. Choose the exact returned hwnd, then pass it with session_id "
+            "to computer.inspect_elements; use optional depth and limit only when needed. "
+            if "computer.inspect_window" in tool_ids and "computer.inspect_elements" in tool_ids else
+            (
+                "For computer.inspect_window, pass exactly {session_id}; it returns authorized windows with hwnd and title. Do not pass hwnd or title to it. "
+                if "computer.inspect_window" in tool_ids else ""
+            )
         )
         app_control_guidance = (
             "Use fresh UIA references from inspect_elements; only invoke actions listed for the observed control. "
