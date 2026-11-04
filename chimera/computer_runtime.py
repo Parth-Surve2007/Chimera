@@ -699,6 +699,7 @@ class ComputerSessionManager:
                     rectangle=target["rectangle"],
                     action=action,
                     points=(options or {}).get("points"),
+                    strokes=(options or {}).get("strokes"),
                     button=(options or {}).get("button", "left"),
                     duration_ms=(options or {}).get("duration_ms", 250),
                     text=(options or {}).get("text"),
