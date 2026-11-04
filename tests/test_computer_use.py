@@ -788,7 +788,10 @@ def test_window_close_requires_approval_and_never_force_terminates(tmp_path, mon
     completed = backend.close(99, approved=True, expected_pid=4321)
     assert completed["status"] == "completed"
     assert completed["verified"] is True
-    assert state["messages"] == [(99, 0x0010, 0, 0)]
+    assert [
+        (getattr(hwnd, "value", hwnd), message, wparam, lparam)
+        for hwnd, message, wparam, lparam in state["messages"]
+    ] == [(99, 0x0010, 0, 0)]
 
 
 def test_computer_session_close_window_requires_fresh_observation_and_approval(tmp_path, monkeypatch):
