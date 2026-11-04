@@ -1596,6 +1596,39 @@ class AgentRuntime:
                 db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             if operation == "computer.launch":
                 result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
+                if (
+                    result_data.get("status") == "completed"
+                    and type(result_data.get("pid")) is int
+                    and result_data.get("verification") in {
+                        "visible_window_executable_match",
+                        "visible_window_process_match",
+                    }
+                ):
+                    try:
+                        identity = self.computer.create(
+                            result_data["pid"],
+                            result_data.get("executable"),
+                            owner_session_id=session_id,
+                        )
+                        result_data = {
+                            **result_data,
+                            "computer_session_id": identity.session_id,
+                            "control_authorized": True,
+                            "authorization_scope": "this conversation and exact process identity",
+                        }
+                    except Exception as exc:
+                        result_data = {
+                            **result_data,
+                            "control_authorized": False,
+                            "authorization_error": str(exc),
+                            "next_step": "The application opened, but its exact process identity could not be authorized. Use the Applications page to inspect and authorize the live process.",
+                        }
+                elif result_data.get("status") == "completed":
+                    result_data = {
+                        **result_data,
+                        "control_authorized": False,
+                        "next_step": "The window appeared, but its process could not be matched strongly enough for automatic authorization. Confirm the exact process on the Applications page.",
+                    }
             elif operation == "computer.screenshot":
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:
