@@ -304,6 +304,8 @@ class ScopedWindowsInputBackend:
         duration_ms: int = 250,
         text: str | None = None,
         key: str | None = None,
+        scroll_direction: str = "down",
+        scroll_steps: int = 3,
         approved: bool = False,
     ) -> dict:
         if not approved:
@@ -333,8 +335,11 @@ class ScopedWindowsInputBackend:
             if action == "type_text" and (not isinstance(text, str) or not text or len(text) > MAX_TEXT_CHARS):
                 raise ValueError(f"text must contain 1 to {MAX_TEXT_CHARS} characters")
             chord = self._key_chord(key) if action == "press_key" else []
-            if action == "scroll" and (type(duration_ms) is not int or duration_ms > 1000):
-                raise ValueError("scroll action duration is invalid")
+            if action == "scroll":
+                if scroll_direction not in {"up", "down"}:
+                    raise ValueError("scroll direction must be up or down")
+                if type(scroll_steps) is not int or not 1 <= scroll_steps <= MAX_SCROLL_STEPS:
+                    raise ValueError(f"scroll steps must be an integer from 1 to {MAX_SCROLL_STEPS}")
         except ValueError as exc:
             return ScopedInputResult("blocked", False, False, str(exc), action).to_dict()
 
@@ -406,7 +411,7 @@ class ScopedWindowsInputBackend:
                 elif action == "scroll":
                     move(mapped[0])
                     guard()
-                    native.send_mouse_wheel(3)
+                    native.send_mouse_wheel(scroll_steps if scroll_direction == "down" else -scroll_steps)
                     events += 1
                 elif action == "type_text":
                     # The observed target element is clicked only after process
