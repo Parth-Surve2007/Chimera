@@ -369,6 +369,8 @@ def test_browser_connector_is_registered_and_read_actions_are_read_only(tmp_path
     assert actions["application.browser.click"]["permission"] == "browser.input"
     assert actions["application.browser.navigate"]["permission"] == "browser.navigate"
     assert actions["application.browser.screenshot"]["requires_approval"] is True
+    assert actions["application.browser.upload_file"]["permission"] == "browser.upload"
+    assert actions["application.browser.upload_file"]["requires_approval"] is True
 
 
 
@@ -505,6 +507,13 @@ def test_browser_upload_rejects_non_file_inputs_and_workspace_escape(tmp_path):
     with connector.execution_context("session-1", tmp_path):
         with pytest.raises(ValueError, match="input\\[type=file\\]"):
             connector.execute_action("upload_file", arguments, approved=True)
+        file_input = FakeLocator()
+        file_input.evaluate = lambda _script: {
+            "tag": "input", "type": "file", "disabled": False,
+            "multiple": False, "accept": "",
+        }
+        page.locators[("label", "File")] = file_input
+        arguments["selector"] = "File"
         arguments["relative_path"] = "../outside.txt"
         with pytest.raises(ValueError, match="inside the selected workspace"):
             connector.execute_action("upload_file", arguments, approved=True)
