@@ -753,3 +753,42 @@ def test_short_confirmation_continues_prior_goal_instead_of_echoing_earlier_requ
     assert len(prompts) == 2
     assert "short confirmation such as yes" in prompts[0]
     assert "continue the unresolved goal" in prompts[1]
+
+
+def test_native_chat_recovery_instructions_are_added_to_system_message(tmp_path):
+    previous = "Can you create a new document in the workspace?"
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    server = tmp_path / "llama-server.exe"
+    server.write_bytes(b"fixture")
+    outputs = iter([
+        json.dumps({"type": "message", "content": previous}),
+        json.dumps({"type": "message", "content": "I will inspect installed apps before selecting a launch route."}),
+    ])
+    captured = []
+    provider = LocalModelProvider(LocalModelConfig(model, None, server_path=str(server)))
+
+    def fake_complete(prompt, max_tokens, **kwargs):
+        captured.append(kwargs["messages"])
+        return next(outputs), {"duration_ms": 3, "chat_template": True}
+
+    provider.server.complete = fake_complete
+    decision = provider.decide(
+        [
+            SimpleNamespace(role="assistant", content=previous),
+            SimpleNamespace(role="user", content="Open Paint and draw a portrait."),
+        ],
+        {"version": 1, "tools": [
+            {"id": "computer.list_installed_applications", "arguments": {}},
+            {"id": "computer.launch", "arguments": {"executable": "string"}},
+        ]},
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert decision["content"].startswith("I will inspect installed apps")
+    assert len(captured) == 2
+    assert "RECOVERY:" not in captured[0][0]["content"]
+    assert "RECOVERY:" in captured[1][0]["content"]
+    assert "repeated an earlier assistant answer" in captured[1][0]["content"]
+    assert [item["role"] for item in captured[1][1:]] == ["assistant", "user"]
