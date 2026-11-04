@@ -325,12 +325,11 @@ class WindowsComputerUse:
             "expected_process_names": expected_processes,
         }
 
-    @classmethod
-    def _resolve_launch_target(cls, application: str) -> dict | None:
+    def _resolve_launch_target(self, application: str) -> dict | None:
         raw = str(application or "").strip().strip('"')
         if raw.casefold().startswith("appsfolder:"):
-            return cls._resolve_start_menu_target(raw)
-        path = cls._resolve_executable(raw)
+            return self._resolve_start_menu_target(raw)
+        path = self._resolve_executable(raw)
         if path is not None:
             return {
                 "kind": "executable",
@@ -339,7 +338,7 @@ class WindowsComputerUse:
                 "display_name": path.stem,
                 "expected_process_names": [path.name],
             }
-        return cls._resolve_start_menu_target(raw)
+        return self._resolve_start_menu_target(raw)
 
     def launch(self, executable: str, approved: bool = False) -> dict:
         target = self._resolve_launch_target(executable)
