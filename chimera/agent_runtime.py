@@ -338,6 +338,13 @@ class AgentRuntime:
             if identity.owner_session_id == (session.get("session_id") if session else None)
             and self.computer._identity_is_current(identity)
         ]
+        owner_session_id = session.get("session_id") if session else None
+        foreground_retry_ready = bool(owner_session_id) and any(
+            self.computer.cua_foreground_retry_available(item["session_id"], owner_session_id)
+            for item in authorized_applications
+        )
+        if not foreground_retry_ready:
+            aliases.pop("computer.cua_click_foreground", None)
         catalog_tools = [
             {
                 "id": "agent.skill_list",
