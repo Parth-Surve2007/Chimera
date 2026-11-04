@@ -608,11 +608,14 @@ class ComputerSessionManager:
         target_hwnd = int(app["windows"][0]["hwnd"])
         generation = self.observations.get(session_id, (0, None))[0] + 1
         uia_elements = []
+        uia_error = None
         if self.uia:
             try:
                 uia_elements = self.uia.elements(target_hwnd, depth=depth, limit=limit)
-            except Exception:
-                self.uia = None
+            except Exception as exc:
+                # Provider failures are window/app-specific. Preserve the
+                # backend for other sessions and retry it on later observations.
+                uia_error = str(exc)[:240]
                 uia_elements = []
 
         # A successful provider query returning no usable runtime IDs is not
@@ -655,7 +658,11 @@ class ComputerSessionManager:
             app,
             app["windows"],
             elements,
-            limitation=None if backend == "uia" else "UIA unavailable or provider query failed; Win32 fallback used",
+            limitation=(
+                None if backend == "uia" else
+                "UIA unavailable or returned no usable elements; Win32 fallback used"
+                + (f" (UIA error: {uia_error})" if uia_error else "")
+            ),
         )
         self.observations[session_id] = (generation, observation)
         return observation
