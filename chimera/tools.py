@@ -22,7 +22,7 @@ OPERATIONS = {
     "search_text": {"description": "Search text in common source and text files", "arguments": {"query": "string"}, "permission": "workspace.read"},
     "read_text": {"description": "Read a bounded UTF-8 text file", "arguments": {"path": "string"}, "permission": "workspace.read"},
     "create_artifact": {"description": "Create a new Markdown or text artifact in the execution output directory", "arguments": {"name": "string", "content": "string"}, "permission": "execution.write"},
-    "create_file": {"description": "Create a new text file inside the attached workspace without overwriting existing files", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
+    "create_file": {"description": "Create a new text file inside the attached workspace without overwriting existing files. The path must be workspace-relative, such as hello.txt; never use an absolute path or host operating-system path.", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
     "computer.list_applications": {"description": "List currently visible Windows applications and observed window identities", "arguments": {}, "permission": "computer.observe"},
     "computer.list_windows": {"description": "List observed visible top-level windows and process identities", "arguments": {}, "permission": "computer.observe"},
     "computer.inspect_controls": {"description": "Inspect controls belonging to a freshly observed operator-authorized application", "arguments": {"session_id": "string", "hwnd": "integer"}, "permission": "computer.observe"},
@@ -122,14 +122,13 @@ class WorkspaceTools:
                 return OperationResult(operation_id, "completed", {"artifact": str(target), "bytes": len(content.encode("utf-8"))})
 
             if operation_id == "create_file":
-                if not approved:
-                    return OperationResult(operation_id, "awaiting_approval", {}, "explicit Build Mode write approval is required")
                 relative = arguments.get("path")
                 content = arguments.get("content")
                 if not isinstance(relative, str) or not relative.strip():
                     raise ValueError("file path must be a non-empty workspace-relative path")
-                if Path(relative).is_absolute():
-                    raise ValueError("file path must be relative to the attached workspace")
+                normalized_path = relative.replace("\\", "/")
+                if normalized_path.startswith("/") or Path(relative).is_absolute():
+                    raise ValueError("file path must be relative to the attached workspace; use a name such as hello.txt")
                 if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_FILE:
                     raise ValueError("file content exceeds the 2 MB limit")
                 target = self._path(relative)
@@ -137,6 +136,8 @@ class WorkspaceTools:
                     raise ValueError("new files must use .txt, .md, .json, or .csv extensions")
                 if target.exists():
                     raise ValueError("file already exists; refusing to overwrite")
+                if not approved:
+                    return OperationResult(operation_id, "awaiting_approval", {}, "explicit Build Mode write approval is required")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with target.open("x", encoding="utf-8", newline="") as stream:
                     stream.write(content)
