@@ -1402,6 +1402,44 @@ class MainWindow:
             border_radius=8, padding=ft.Padding.all(12), width=700,
         )
 
+    def _task_progress_card(self):
+        """Render persisted checklist state for the latest task in this conversation."""
+        try:
+            task = self.agent_runtime.task_store.latest_for_session(self.agent_session_id)
+            if not task:
+                return None
+            todos = self.agent_runtime.task_store.todos(task.task_id)
+        except Exception:
+            return None
+        if not todos:
+            return None
+        active = [item for item in todos if item["status"] != "cancelled"]
+        completed = sum(item["status"] == "completed" for item in active)
+        blocked = sum(item["status"] == "blocked" for item in active)
+        rows = []
+        for item in active:
+            marker = {"completed": "✓", "in_progress": "●", "pending": "○", "blocked": "!"}.get(item["status"], "○")
+            rows.append(ft.Row([
+                ft.Text(marker, color=FOCUS if item["status"] == "completed" else SECONDARY, size=12, width=18),
+                ft.Text(item["content"], color=TEXT, size=11, expand=True),
+                ft.Text(item["status"].replace("_", " ").upper(), color=MUTED, size=8),
+            ], spacing=8))
+        summary = f"{completed}/{len(active)} completed"
+        if blocked:
+            summary += f" · {blocked} blocked"
+        return ft.Container(
+            ft.Column([
+                ft.Row([
+                    ft.Text("TASK CHECKLIST", color=FOCUS, size=8, weight=ft.FontWeight.BOLD),
+                    ft.Container(expand=True),
+                    ft.Text(summary, color=MUTED, size=9),
+                ], spacing=8),
+                *rows,
+            ], spacing=8),
+            bgcolor=ELEVATED, border=ft.Border.all(1, BORDER),
+            border_radius=9, padding=ft.Padding.all(13), width=720,
+        )
+
     def _conversation_content(self):
         self.live_status_text = None
         content = []
@@ -1421,6 +1459,10 @@ class MainWindow:
         for role, value in self.conversation_messages:
             if role in {"user", "assistant"} and (role, value) not in stored_pairs:
                 content.append(self._chat_bubble(role, value))
+
+        progress_card = self._task_progress_card()
+        if progress_card is not None:
+            content.append(progress_card)
 
         if not content:
             suggestions = [

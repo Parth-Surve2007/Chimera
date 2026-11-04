@@ -92,18 +92,31 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 
 **Theme: Workspace Agent Maturity and Persistent Operator Goals**
 
-- [ ] Persistent task context across sessions (resume interrupted jobs)
+- [x] Persistent per-turn task checklist with stable item IDs, explicit statuses, SQLite persistence, and live workbench rendering
+- [ ] Persistent task context across sessions (resume interrupted jobs and continue the same multi-turn task)
 - [x] Operator-owned goal and ambition ledger: local SQLite storage, active/paused/completed/archived states, priorities, success criteria and evidence references
 - [x] Distinguish long-term goals, project milestones and individual task runs; completion requires operator-supplied evidence and is never inferred from an assistant message or task state
 - [x] Attach bounded active/paused goal summaries to local model reasoning as ephemeral read-only context; do not send persistent goals to hosted providers by default
 - [ ] Add semantic, project-scoped goal retrieval and operator-controlled context sharing for hosted models
-- [ ] Multi-step plan visualization in UI (dependency graph view)
+- [ ] Dependency-aware plan visualization in UI (task graph, prerequisites, approvals, and evidence)
+- [ ] Dynamic capability routing that exposes only the smallest relevant tool set to compact local models
 - [ ] Parallel task execution with safety barriers
 - [ ] Agent-generated sub-task delegation (spawn governed sub-agents)
 - [ ] Token-budget awareness: estimate and report context costs before long tasks
 - [ ] Skill lifecycle: versioned proposals, isolated regression tests, explicit promotion and rollback before reusable execution
 
 ---
+
+### Phase 5.4.1 — Small-Model Agent Harness
+
+- Persistent checklist state is owned by SQLite/runtime, not left only in model context.
+- The model creates and updates concise todo items through registered internal tools.
+- Checklist bookkeeping does not grant filesystem or application permissions.
+- The workbench renders the persisted checklist.
+- DOCX cleanup removes partial files only when the current invocation created them.
+- A checklist is progress metadata, not proof of a requested outcome.
+
+**Model boundary:** a 3B model can still misplan, choose the wrong tool, or report an incorrect result. The runtime improves structure and governance; it does not turn the model into a frontier model.
 
 ## Medium-Term (Phase 5.5)
 

@@ -310,6 +310,12 @@ class AgentRuntime:
             and self.computer._identity_is_current(identity)
         ]
         catalog_tools = []
+        active_task = self._tasks.get(session.get("session_id") if session else None)
+        if active_task:
+            catalog_tools.extend([
+                {"id": "agent.todo_read", "description": "Read the current task checklist.", "arguments": {}, "permission": "agent.progress"},
+                {"id": "agent.todo_write", "description": "Create or update a checklist. Each item has content and status: pending, in_progress, completed, or blocked.", "arguments": {"todos": [{"content": "string", "status": "pending|in_progress|completed|blocked"}]}, "permission": "agent.progress"},
+            ])
         for key, value in aliases.items():
             # The Applications page performs live inventory discovery itself.
             # Never waste model context on OS helper windows or raw process dumps.
@@ -349,9 +355,14 @@ class AgentRuntime:
             if not isinstance(value.get("content"), str) or not value["content"].strip(): raise ValueError("message content must be non-empty")
             return value
         tool = value.get("tool")
-        if not isinstance(tool, str) or not (tool.startswith("workspace.") or tool.startswith("computer.") or tool.startswith("application.")):
+        internal_tools = {"agent.todo_read", "agent.todo_write"}
+        if not isinstance(tool, str) or not (
+            tool.startswith("workspace.") or tool.startswith("computer.")
+            or tool.startswith("application.") or tool in internal_tools
+        ):
             raise ValueError(
-                f"tool identifier is invalid: {tool!r}; expected a registered workspace.*, computer.*, or application.* ID"
+                f"tool identifier is invalid: {tool!r}; expected a registered workspace.*, computer.*, or application.* ID "
+                "or one of the internal agent progress tools"
             )
         if not isinstance(value.get("arguments"), dict): raise ValueError("tool arguments must be an object")
         invocation = value.get("invocation_id")
@@ -374,6 +385,24 @@ class AgentRuntime:
             if not action:
                 raise ValueError(f"unregistered action '{action_id}' on application '{app_id}'")
             validate_application_arguments(action, arguments)
+            return
+        if operation == "agent.todo_read":
+            if arguments:
+                raise ValueError("agent.todo_read does not accept arguments")
+            return
+        if operation == "agent.todo_write":
+            if set(arguments) != {"todos"}:
+                raise ValueError("agent.todo_write requires only a todos array")
+            todos = arguments.get("todos")
+            if not isinstance(todos, list) or not todos or len(todos) > 16:
+                raise ValueError("todos must be a non-empty array of at most 16 items")
+            for item in todos:
+                if not isinstance(item, dict) or set(item) - {"content", "status"}:
+                    raise ValueError("each todo must contain only content and status")
+                if not isinstance(item.get("content"), str):
+                    raise ValueError("todo content must be a string")
+                if "status" in item and not isinstance(item["status"], str):
+                    raise ValueError("todo status must be a string")
             return
         contracts = {
             "list_files": {"relative": str, "recursive": bool},
@@ -706,9 +735,13 @@ class AgentRuntime:
                 return {"status": "completed", "message": assistant, "tools": []}
             if max_tools <= 0: raise RuntimeError("maximum tool-call limit reached")
             tool_id = decision["tool"]
+            is_agent_tool = tool_id in {"agent.todo_read", "agent.todo_write"}
             is_app_tool = tool_id.startswith("application.")
             app_connector, app_action = None, None
-            if is_app_tool:
+            if is_agent_tool:
+                operation = tool_id
+                permission = "agent.progress"
+            elif is_app_tool:
                 from .applications.registry import get_application_registry
                 from .applications.dispatch import decode_tool_id
                 decoded = decode_tool_id(tool_id)
@@ -723,7 +756,7 @@ class AgentRuntime:
                     raise ValueError(f"unregistered action '{action_id}' on application '{app_id}'")
                 operation = tool_id
                 permission = app_action.permission
-            else:
+            elif not is_agent_tool:
                 operation = tool_id.removeprefix("workspace.") if tool_id.startswith("workspace.") else tool_id
                 if operation not in tool_catalog()["operations"]: raise ValueError(f"unregistered tool: {tool_id}")
                 permission = tool_catalog()["operations"][operation]["permission"]
@@ -750,16 +783,19 @@ class AgentRuntime:
                     self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": reason})
                     continue
 
-            try:
-                TaskPolicy.validate(session.get("mode", "plan"), tool_id, permission)
-            except PermissionError as exc:
-                result_data = {"status": "blocked", "reason": str(exc), "tool": tool_id}
-                self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data, "status": "blocked", "error": str(exc)}, separators=(",", ":")))
-                self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": str(exc)})
-                continue
+            if not is_agent_tool:
+                try:
+                    TaskPolicy.validate(session.get("mode", "plan"), tool_id, permission)
+                except PermissionError as exc:
+                    result_data = {"status": "blocked", "reason": str(exc), "tool": tool_id}
+                    self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "result": result_data, "status": "blocked", "error": str(exc)}, separators=(",", ":")))
+                    self._record(session_id, "tool.failed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "blocked", "data": result_data, "error": str(exc)})
+                    continue
 
             needs_approval = False
-            if is_app_tool:
+            if is_agent_tool:
+                needs_approval = False
+            elif is_app_tool:
                 from .applications.dispatch import APPLICATION_READ_PERMISSIONS
                 needs_approval = app_action.requires_approval or (permission not in APPLICATION_READ_PERMISSIONS)
             else:
@@ -932,6 +968,20 @@ class AgentRuntime:
                     "status": result_status,
                     "error": result_error,
                 })()
+            elif is_agent_tool:
+                task_id = self._tasks.get(session_id)
+                if not task_id:
+                    result = type("ProgressResult", (), {"data": {}, "status": "failed", "error": "no active task"})()
+                elif tool_id == "agent.todo_read":
+                    result = type("ProgressResult", (), {
+                        "data": {"task_id": task_id, "todos": self.task_store.todos(task_id)},
+                        "status": "completed", "error": None,
+                    })()
+                else:
+                    result = type("ProgressResult", (), {
+                        "data": {"task_id": task_id, "todos": self.task_store.write_todos(task_id, decision["arguments"]["todos"])},
+                        "status": "completed", "error": None,
+                    })()
             else:
                 result = tools.run(operation, decision["arguments"])
             self.store.add_message(session_id, "tool", json.dumps({"invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"], "result": result.data, "status": result.status, "error": result.error}, separators=(",", ":")))
