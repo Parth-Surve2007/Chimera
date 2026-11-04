@@ -62,12 +62,25 @@ class TaskStore:
         return self.get(row[0]) if row else None
 
     def resume(self, task_id):
-        """Return a non-terminal task to running without changing its identity."""
+        """Resume without replaying steps whose side-effect outcome is uncertain."""
         task = self.get(task_id)
         if task is None:
             raise KeyError("task not found")
         if task.status in {"completed", "failed", "cancelled"}:
             raise ValueError("terminal tasks cannot be resumed")
+        for step in self.steps(task_id):
+            if step["status"] == "running":
+                self.step_transition(
+                    step["step_id"],
+                    "blocked",
+                    result=step["result"],
+                    error=(
+                        "Execution was interrupted after the action started. Its side-effect "
+                        "outcome is unknown. Re-observe the target and verify the postcondition "
+                        "before deciding whether a new action is required; do not replay blindly."
+                    ),
+                    invocation_id=step["invocation_id"],
+                )
         self.transition(task_id, "running")
 
     def context(self, task_id):
