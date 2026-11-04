@@ -1362,8 +1362,15 @@ class AgentRuntime:
                         isinstance(previous, dict)
                         and previous.get("tool") == tool_id
                         and previous.get("arguments") == decision["arguments"]
-                        and str(previous.get("status") or "").casefold()
-                        in {"failed", "blocked", "workspace_required", "uncertain", "background_unavailable", "partial"}
+                        and (
+                            str(previous.get("status") or "").casefold()
+                            in {"failed", "blocked", "workspace_required", "uncertain", "background_unavailable", "partial"}
+                            or (
+                                tool_id == "computer.launch"
+                                and isinstance(previous.get("result"), dict)
+                                and previous["result"].get("already_authorized") is True
+                            )
+                        )
                     ):
                         repeated_failures.append(previous)
                 if repeated_failures:
