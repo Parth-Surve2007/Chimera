@@ -666,3 +666,15 @@ def test_approved_skills_are_discovered_and_loaded_on_demand(tmp_path):
     assert loaded["reusable_steps"][0]["action"] == "workspace.create_document"
     assert "Do not" in loaded["notice"] or "Never" in loaded["notice"]
     assert "Unapproved procedure" not in json.dumps(provider.catalogs[0])
+
+
+
+def test_paint_draw_request_is_not_treated_as_a_terminal_launch(tmp_path):
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "chimera.db"),
+        DecidingProvider([{"type": "message", "content": "unused"}]),
+    )
+    assert runtime._is_terminal_launch_request("open Paint")
+    assert runtime._is_terminal_launch_request("Please launch Notepad.")
+    assert not runtime._is_terminal_launch_request("open ms paint and draw a house")
+    assert not runtime._is_terminal_launch_request("open Paint, then sketch a tree")
