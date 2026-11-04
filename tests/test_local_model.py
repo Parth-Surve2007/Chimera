@@ -1011,7 +1011,7 @@ def test_repeated_unavailable_desktop_tool_returns_safe_recovery_message(tmp_pat
     assert "No desktop action was executed" in decision["content"]
     assert len(schemas) == 2
     assert schemas[0]["oneOf"][1]["properties"]["tool"]["enum"] == [
-        "computer.list_applications",
         "computer.launch",
+        "computer.list_applications",
     ]
     assert decision["_metrics"]["unavailable_desktop_tool_blocked"] == "computer.inspect_window"
