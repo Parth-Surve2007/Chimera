@@ -435,9 +435,29 @@ class LocalModelProvider:
 
         recent = list(messages)[-6:]
         transcript = "\n".join(compact_message(item) for item in recent)
+        workspace_root = (session or {}).get("workspace")
+        known_folders = {}
+        if workspace_root:
+            root_path = Path(workspace_root).expanduser()
+            desktop_candidates = [Path.home() / "Desktop"]
+            one_drive = os.environ.get("OneDrive")
+            if one_drive:
+                desktop_candidates.append(Path(one_drive) / "Desktop")
+            for desktop in desktop_candidates:
+                try:
+                    if desktop.is_dir():
+                        known_folders["desktop"] = desktop.resolve().relative_to(root_path.resolve()).as_posix()
+                        break
+                except (OSError, ValueError):
+                    continue
+
         session_state = {
             "mode": (session or {}).get("mode", "plan"),
-            "workspace_attached": bool((session or {}).get("workspace")),
+            "workspace_attached": bool(workspace_root),
+        }
+        workspace_state = {
+            "root": str(workspace_root) if workspace_root else None,
+            "known_folders": known_folders,
         }
 
         compact_tools = []
@@ -475,12 +495,16 @@ class LocalModelProvider:
                 "Use only exact tool IDs and valid arguments from TOOLS. Never invent IDs or results. "
                 "Treat the latest USER message as the task; earlier messages are context. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
-                "Without an attached workspace, do not call workspace tools or inspect the desktop to guess a destination; "
-                "ask the operator to attach the exact target folder. To create a file in an attached workspace, use "
-                "workspace.create_file and wait for exact Build Mode approval. Use desktop inspection/actions only for an "
-                "application already listed in AUTHORIZED_APPLICATIONS. Use computer.launch only when the user explicitly "
-                "asks to open an application; its approval gate still applies. After a tool result, use actual evidence.\n"
+                "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
+                "Without an active workspace scope, do not call workspace tools; use WORKSPACE_SCOPE.root as the current file boundary. "
+                "Use only workspace-relative paths. Use WORKSPACE_SCOPE.known_folders.desktop for Desktop requests when present; "
+                "never invent Linux paths on Windows or pass an absolute host path to workspace.create_file. "
+                "For new files, use workspace.create_file, choose a supported text/source extension, and wait for exact Build Mode approval. "
+                "Do not overwrite existing files. Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
+                "Use computer.launch only when the user explicitly asks to open an application; its approval gate still applies. "
+                "After a tool result, use actual evidence.\n"
                 "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
+                "\nWORKSPACE_SCOPE: " + json.dumps(workspace_state, ensure_ascii=False, separators=(",", ":")) +
                 "\nTOOLS: " + json.dumps(compact_catalog, ensure_ascii=False, separators=(",", ":")) +
                 "\nAUTHORIZED_APPLICATIONS: " + json.dumps(authorized, separators=(",", ":")) +
                 "\nCONVERSATION:\n" + transcript

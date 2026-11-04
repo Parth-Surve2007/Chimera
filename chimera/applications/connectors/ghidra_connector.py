@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -75,10 +76,10 @@ class GhidraConnector(BaseApplicationConnector):
             actions=actions,
             supported_file_extensions=[".exe", ".dll", ".so", ".dylib", ".elf", ".bin", ".o"],
             known_limitations=[
-                "Requires Java Runtime Environment (JDK 17+) for headless analysis.",
+                "Current Ghidra 12.2 releases require a 64-bit JDK 25+ for headless analysis.",
                 "Automated binary execution is prohibited; analysis is strictly static.",
             ],
-            preconditions=["JDK 17+ installed", "GHIDRA_HOME configured or standard directory present"],
+            preconditions=["64-bit JDK 25+ installed for Ghidra 12.2", "Ghidra installed and discoverable"],
         )
         super().__init__(manifest)
         self._custom_install_path = install_path
@@ -123,6 +124,29 @@ class GhidraConnector(BaseApplicationConnector):
                         ghidra_home = str(sp)
                         break
 
+        if not executable and os.name == "nt":
+            # Winget installs Ghidra beneath the current user's LocalAppData tree.
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            winget_root = (
+                Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
+                if local_app_data else None
+            )
+            install_roots = []
+            chimera_install = Path(local_app_data) / "Programs" / "Chimera" / "Ghidra" if local_app_data else None
+            if chimera_install and chimera_install.is_dir():
+                install_roots.append(chimera_install)
+            if winget_root and winget_root.is_dir():
+                install_roots.extend(
+                    winget_root.glob("NationalSecurityAgency.Ghidra_*")
+                )
+            for package_root in sorted(install_roots, key=lambda item: str(item), reverse=True):
+                candidates = list(package_root.glob("**/support/analyzeHeadless.bat"))
+                if candidates:
+                    headless = candidates[0]
+                    executable = str(headless)
+                    ghidra_home = str(headless.parents[1])
+                    break
+
         # Check running process
         is_running = False
         try:
@@ -138,6 +162,42 @@ class GhidraConnector(BaseApplicationConnector):
         self.manifest.installation_path = ghidra_home
         self.manifest.is_running = is_running
         self.manifest.metadata["headless_executable"] = executable
+        java_candidates = []
+        java_home = os.environ.get("JAVA_HOME")
+        if os.name == "nt":
+            adoptium = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Eclipse Adoptium"
+            if adoptium.is_dir():
+                java_candidates.extend(
+                    path / "bin" / "java.exe"
+                    for path in sorted(adoptium.glob("jdk-25*"), reverse=True)
+                )
+        if java_home:
+            java_candidates.append(
+                Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java")
+            )
+
+        def is_jdk_25_or_newer(executable: Path) -> bool:
+            if not executable.is_file():
+                return False
+            try:
+                result = subprocess.run(
+                    [str(executable), "-version"],
+                    capture_output=True, text=True, timeout=4, check=False,
+                )
+                output = (result.stdout or "") + (result.stderr or "")
+                match = re.search(
+                    r'(?:version\s+["\']?|openjdk\s+)(\d+)',
+                    output,
+                    re.IGNORECASE,
+                )
+                return bool(match and int(match.group(1)) >= 25)
+            except (OSError, subprocess.SubprocessError, ValueError):
+                return False
+
+        self.manifest.metadata["jdk_available"] = any(
+            is_jdk_25_or_newer(path) for path in java_candidates
+        )
+        self.manifest.metadata["jdk_requirement"] = "64-bit JDK 25+ for Ghidra 12.2"
         return self.manifest
 
     def execute_action(self, action_id: str, arguments: dict[str, Any], approved: bool = False) -> dict[str, Any]:

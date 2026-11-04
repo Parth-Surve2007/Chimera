@@ -127,6 +127,19 @@ class AgentSessionStore:
         keys = ("session_id", "workspace", "title", "model", "mode", "state", "created_at", "updated_at")
         return [dict(zip(keys, row)) for row in rows]
 
+    def set_workspace(self, session_id: str, workspace: Path) -> None:
+        """Persist a workspace scope for an existing conversation."""
+        path = Path(workspace).expanduser().resolve()
+        if not path.is_dir():
+            raise ValueError("workspace must be an existing directory")
+        with sqlite3.connect(self.db_path) as db:
+            cursor = db.execute(
+                "UPDATE agent_sessions SET workspace=?, updated_at=? WHERE session_id=?",
+                (str(path), _now(), session_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError("agent session not found")
+
     def add_message(self, session_id: str, role: str, content: str) -> AgentMessage:
         if role not in {"user", "assistant", "tool", "system"}:
             raise ValueError("unsupported message role")
@@ -202,6 +215,26 @@ class AgentRuntime:
         self._cancel_events = {}
         self.computer = ComputerSessionManager()
         self._computer_sessions = {}
+
+    def _artifact_output_dir(self, workspace: Path, session_id: str) -> Path:
+        """Place Chimera's private support artifacts under app data when in scope.
+
+        With a whole-drive workspace, writing a hidden directory directly under
+        C:\\ is undesirable and may fail under normal user permissions. The
+        app-data directory is already inside the selected drive for Windows
+        source and packaged runs. Narrow workspaces retain their local fallback.
+        """
+        workspace = Path(workspace).resolve()
+        # Only a filesystem root (C:\\, /, etc.) uses the app-data support
+        # directory. Project folders retain the historical in-workspace folder.
+        if workspace == Path(workspace.anchor).resolve():
+            candidate = self.store.db_path.parent / "agent-artifacts" / session_id
+            try:
+                candidate.resolve().relative_to(workspace)
+                return candidate
+            except ValueError:
+                pass
+        return workspace / ".chimera-agent-artifacts" / session_id
 
     def subscribe(self, session_id: str, callback):
         with self._listener_lock: self._listeners.setdefault(session_id, []).append(callback)
@@ -619,7 +652,7 @@ class AgentRuntime:
             else:
                 from .tools import WorkspaceTools
                 result = WorkspaceTools(
-                    workspace, workspace / ".chimera-agent-artifacts" / session_id
+                    workspace, self._artifact_output_dir(workspace, session_id)
                 ).run(operation, arguments, approved=approved)
                 status, data, error = result.status, result.data, result.error
         except Exception as exc:
@@ -646,7 +679,7 @@ class AgentRuntime:
         workspace = Path(session["workspace"]) if session.get("workspace") else None
         tools = None
         if workspace is not None and workspace.is_dir():
-            tools = WorkspaceTools(workspace, workspace / ".chimera-agent-artifacts" / session_id)
+            tools = WorkspaceTools(workspace, self._artifact_output_dir(workspace, session_id))
         for _ in range(max_turns):
             if session_id in self._cancelled:
                 self._cancelled.discard(session_id)
@@ -695,7 +728,7 @@ class AgentRuntime:
                     self._record(session_id, "tool.completed", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "status": "workspace_required", "data": result_data})
                     continue
                 workspace = current_workspace
-                tools = WorkspaceTools(workspace, workspace / ".chimera-agent-artifacts" / session_id)
+                tools = WorkspaceTools(workspace, self._artifact_output_dir(workspace, session_id))
 
             if is_app_tool:
                 valid, reason, _ = app_connector.validate_action_call(app_action.action_id, decision["arguments"], mode=session.get("mode", "plan"))
@@ -974,7 +1007,7 @@ class AgentRuntime:
             if spec["permission"] == "workspace.read":
                 raise PermissionError("workspace reads do not require approval")
             result = WorkspaceTools(
-                workspace, workspace / ".chimera-agent-artifacts" / session_id
+                workspace, self._artifact_output_dir(workspace, session_id)
             ).run(operation, pending["arguments"], approved=True)
         self.store.clear_pending_tool(session_id)
         self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "tool": pending["tool"], "arguments": pending["arguments"], "result": result.data, "status": result.status, "error": result.error}))

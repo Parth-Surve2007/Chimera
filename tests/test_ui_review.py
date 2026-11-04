@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import pytest
 def test_flet_ui_uses_dark_emperor_tokens_and_persistent_service():
     from chimera import ui
@@ -38,3 +39,79 @@ def test_traceability_rows_preserve_uncovered_and_partial_requirements():
 def test_legacy_traceability_is_unavailable():
     from chimera.ui import traceability_rows
     assert traceability_rows(None)[0][1] == "unavailable"
+
+
+def test_default_workspace_root_uses_system_drive_on_windows(tmp_path):
+    from chimera.ui import default_workspace_root
+
+    assert str(default_workspace_root(system_drive="D:", platform="nt")) == "D:\\"
+    assert default_workspace_root(platform="posix", home=tmp_path) == tmp_path.resolve()
+
+
+def test_ui_uses_default_drive_without_workspace_picker_and_keeps_navigation():
+    ui = (Path(__file__).parents[1] / "chimera" / "ui.py").read_text(encoding="utf-8")
+    assert "default_workspace_root()" in ui
+    assert "workspace_picker" not in ui
+    assert "workspace_path_field" not in ui
+    assert "ATTACH PROJECT" not in ui
+    assert "DARK EMPEROR / LOCAL-FIRST" not in ui
+    assert "self._chat_sidebar()," in ui
+
+
+def test_non_chat_pages_keep_left_navigation_mounted():
+    from types import SimpleNamespace
+    from chimera import ui
+    from chimera.ui import MainWindow
+
+    window = object.__new__(MainWindow)
+    window.active_page = "applications"
+    window.agent_session_id = "nav-test"
+    window.agent_store = SimpleNamespace(list_sessions=lambda limit=6: [])
+    window.page = SimpleNamespace(update=lambda: None)
+    window.body = ui.ft.Container(expand=True)
+
+    window._set([ui.ft.Text("Applications", color=ui.TEXT)])
+
+    assert isinstance(window.body.content, ui.ft.Row)
+    assert len(window.body.content.controls) == 2
+    assert window.body.content.controls[0].width == 238
+
+
+def test_resuming_legacy_conversation_migrates_it_to_default_drive(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from chimera import ui
+    from chimera.ui import MainWindow
+
+    target_root = tmp_path / "drive"
+    target_root.mkdir()
+    old_workspace = tmp_path / "old-project"
+    old_workspace.mkdir()
+    saved = {}
+
+    class Store:
+        def session(self, session_id):
+            return {"workspace": str(old_workspace)}
+
+        def set_workspace(self, session_id, workspace):
+            saved["workspace"] = workspace
+
+        def messages(self, session_id):
+            return []
+
+        def pending_tool(self, session_id):
+            return None
+
+    window = object.__new__(MainWindow)
+    window.agent_store = Store()
+    window.agent_session_id = "legacy-session"
+    window.drawer = None
+    window.local_verification = None
+    window.last_turn_notice = None
+    window._bind_agent_session = lambda: None
+    window._show_overview = lambda: None
+
+    monkeypatch.setattr(ui, "default_workspace_root", lambda: target_root)
+    window._resume_agent_session("legacy-session")
+
+    assert window.workspace_path == target_root
+    assert saved["workspace"] == target_root
