@@ -88,9 +88,11 @@ class ProfileStore:
             match = item.get("match")
             if not isinstance(profile_id, str) or not profile_id.strip() or len(profile_id) > 100:
                 raise ValueError("profile_id must contain 1 to 100 characters")
-            if profile_id in seen:
+            profile_id = profile_id.strip()
+            profile_key = profile_id.casefold()
+            if profile_key in seen:
                 raise ValueError(f"duplicate application profile id: {profile_id}")
-            seen.add(profile_id)
+            seen.add(profile_key)
             if type(version) is not int or not 1 <= version <= 10000:
                 raise ValueError("profile version must be an integer from 1 to 10000")
             if not isinstance(match, dict) or not match or set(match) - cls.MATCH_KEYS:
@@ -308,7 +310,7 @@ class DesktopApplicationProfileRegistry:
 
     def __init__(self, custom_profiles: list[dict] | None = None):
         self.profiles = list(_BUILTIN_DESKTOP_PROFILES)
-        known_ids = {item["profile_id"] for item in self.profiles}
+        known_ids = {item["profile_id"].casefold() for item in self.profiles}
         try:
             sanitized = ProfileStore.validate(custom_profiles or [])
         except (TypeError, ValueError):
@@ -317,9 +319,10 @@ class DesktopApplicationProfileRegistry:
             profile_id = item["profile_id"]
             # Custom profiles cannot shadow a shipped profile or another
             # custom profile. They only influence target ranking/guidance.
-            if profile_id in known_ids:
+            profile_key = profile_id.casefold()
+            if profile_key in known_ids:
                 continue
-            known_ids.add(profile_id)
+            known_ids.add(profile_key)
             self.profiles.append({
                 "profile_id": profile_id,
                 "version": item["version"],
