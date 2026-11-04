@@ -19,6 +19,7 @@ class ApplicationIdentity:
     process_create_time: float
     owner_session_id: str | None
     session_id: str
+    authorized_hwnds: tuple[int, ...] = ()
 
 @dataclass(frozen=True)
 class ElementReference:
@@ -491,6 +492,8 @@ class ComputerSessionManager:
         _generation, observation = self.observations.get(session_id, (0, None))
         if observation is None or time.time() - observation.created_at > self.observation_ttl:
             raise ValueError("fresh authorized window observation required")
+        if identity.authorized_hwnds and int(hwnd) not in identity.authorized_hwnds:
+            raise ValueError("window is outside the launch-approved HWND set")
         if not any(int(window.get("hwnd", 0)) == int(hwnd) and int(window.get("pid", 0)) == identity.pid for window in observation.windows):
             raise ValueError("window does not belong to the exact authorized process")
         if self.backend.window_process_id(int(hwnd)) != identity.pid:
@@ -515,7 +518,21 @@ class ComputerSessionManager:
         identity = self.sessions.get(session_id)
         if not identity: raise KeyError("computer session not found")
         if not self._identity_is_current(identity): raise RuntimeError("authorized process identity is no longer valid")
-        windows = [item for item in self.backend.list_applications() if item["pid"] == identity.pid and (item.get("executable") or "").casefold() == identity.executable.casefold()]
+        windows = [
+            item for item in self.backend.list_applications()
+            if item["pid"] == identity.pid
+            and (item.get("executable") or "").casefold() == identity.executable.casefold()
+            and (
+                not identity.authorized_hwnds
+                or any(int(window.get("hwnd", 0)) in identity.authorized_hwnds for window in item.get("windows", []))
+            )
+        ]
+        if identity.authorized_hwnds:
+            for item in windows:
+                item["windows"] = [
+                    window for window in item.get("windows", [])
+                    if int(window.get("hwnd", 0)) in identity.authorized_hwnds
+                ]
         if not windows: raise RuntimeError("authorized application window is no longer available")
         generation = self.observations.get(session_id, (0, None))[0] + 1; app = windows[0]; elements = []
         if self.uia:
