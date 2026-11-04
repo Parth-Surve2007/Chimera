@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -163,10 +164,6 @@ class GhidraConnector(BaseApplicationConnector):
         self.manifest.metadata["headless_executable"] = executable
         java_candidates = []
         java_home = os.environ.get("JAVA_HOME")
-        if java_home:
-            java_candidates.append(
-                Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java")
-            )
         if os.name == "nt":
             adoptium = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Eclipse Adoptium"
             if adoptium.is_dir():
@@ -174,7 +171,32 @@ class GhidraConnector(BaseApplicationConnector):
                     path / "bin" / "java.exe"
                     for path in sorted(adoptium.glob("jdk-25*"), reverse=True)
                 )
-        self.manifest.metadata["jdk_available"] = any(path.is_file() for path in java_candidates)
+        if java_home:
+            java_candidates.append(
+                Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java")
+            )
+
+        def is_jdk_25_or_newer(executable: Path) -> bool:
+            if not executable.is_file():
+                return False
+            try:
+                result = subprocess.run(
+                    [str(executable), "-version"],
+                    capture_output=True, text=True, timeout=4, check=False,
+                )
+                output = (result.stdout or "") + (result.stderr or "")
+                match = re.search(
+                    r'(?:version\s+["\']?|openjdk\s+)(\d+)',
+                    output,
+                    re.IGNORECASE,
+                )
+                return bool(match and int(match.group(1)) >= 25)
+            except (OSError, subprocess.SubprocessError, ValueError):
+                return False
+
+        self.manifest.metadata["jdk_available"] = any(
+            is_jdk_25_or_newer(path) for path in java_candidates
+        )
         self.manifest.metadata["jdk_requirement"] = "64-bit JDK 25+ for Ghidra 12.2"
         return self.manifest
 
