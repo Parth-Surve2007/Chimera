@@ -22,7 +22,7 @@ Think less “chat window with a thousand promises,” more **a capable workbenc
 | Area | What is available |
 |---|---|
 | **Local reasoning** | Run a GGUF model through a persistent llama-server or an explicitly configured one-shot llama-cli runtime. |
-| **Computer control** | Discover visible and installed Windows applications (including Start-menu packaged apps), authorize one exact running process, inspect its UI Automation tree, and use supported semantic controls. |
+| **Computer control** | Discover visible and installed Windows applications (including Start-menu packaged apps), authorize one exact running process, inspect its UI Automation tree, invoke semantic controls, and use bounded foreground-scoped pointer/keyboard actions against freshly observed elements after approval. |
 | **Local files** | Read, list, inspect, and search files under the default system-drive scope. Create text/source files, genuine Word DOCX documents, and verified PDFs after explicit approval. |
 | **3D workflows** | Ask the Blender connector to create a bounded primitive-based scene and render a PNG preview. |
 | **Reverse engineering** | Use REA for built-in static artifact inspection, strings, file-format detection, and available analysis backends. Connect Ghidra when installed. |
@@ -131,7 +131,7 @@ Supported interactions depend on the live control patterns and include:
 
 Every action uses a fresh element reference and revalidates the authorized process. State-changing actions require explicit operator approval. An accepted InvokePattern call is not treated as proof of the resulting task outcome: Chimera must inspect a fresh observation.
 
-Chimera does **not** currently use global blind keyboard injection, blind focus changes, or remote window closing. Some applications expose very little UI Automation information, so discoverability does not guarantee that every control in that application can be automated.
+Chimera does **not** use unscoped global input, background-window input, clipboard injection, or blind focus changes. Its scoped input broker can act only on a fresh UIA element rectangle inside the exact authorized foreground window, after approval. Some applications expose very little UI Automation information, so discoverability does not guarantee that every control in that application can be automated.
 
 ### Dependencies
 
@@ -244,6 +244,7 @@ Compile-check the application and tests:
     ├── builtin_capabilities.py # First-party capability inventory
     ├── computer_use.py         # Windows desktop discovery and interaction
     ├── computer_runtime.py     # Process authorization and UIA evidence
+    ├── scoped_input.py         # Approved foreground-scoped pointer and keyboard input
     ├── applications/           # Connector SDK, registry and app integrations
     ├── reverse_engineering/    # REA static analysis engine
     ├── goals.py                # Operator-owned goals and evidence
