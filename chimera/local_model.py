@@ -454,7 +454,9 @@ class LocalModelProvider:
         session_state = {
             "mode": (session or {}).get("mode", "plan"),
             "workspace_attached": bool(workspace_root),
-            "workspace_root": str(workspace_root) if workspace_root else None,
+        }
+        workspace_state = {
+            "root": str(workspace_root) if workspace_root else None,
             "known_folders": known_folders,
         }
 
@@ -494,13 +496,15 @@ class LocalModelProvider:
                 "Treat the latest USER message as the task; earlier messages are context. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
                 "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
-                "Use only workspace-relative paths for workspace tools. Use SESSION.known_folders.desktop for Desktop requests when present; "
+                "Without an active workspace scope, do not call workspace tools; use WORKSPACE_SCOPE.root as the current file boundary. "
+                "Use only workspace-relative paths. Use WORKSPACE_SCOPE.known_folders.desktop for Desktop requests when present; "
                 "never invent Linux paths on Windows or pass an absolute host path to workspace.create_file. "
                 "For new files, use workspace.create_file, choose a supported text/source extension, and wait for exact Build Mode approval. "
                 "Do not overwrite existing files. Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "Use computer.launch only when the user explicitly asks to open an application; its approval gate still applies. "
                 "After a tool result, use actual evidence.\n"
                 "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
+                "\nWORKSPACE_SCOPE: " + json.dumps(workspace_state, ensure_ascii=False, separators=(",", ":")) +
                 "\nTOOLS: " + json.dumps(compact_catalog, ensure_ascii=False, separators=(",", ":")) +
                 "\nAUTHORIZED_APPLICATIONS: " + json.dumps(authorized, separators=(",", ":")) +
                 "\nCONVERSATION:\n" + transcript
