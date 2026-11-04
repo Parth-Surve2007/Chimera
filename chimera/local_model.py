@@ -756,9 +756,10 @@ class LocalModelProvider:
             for tool_id in tool_ids
         )
         workspace_guidance = (
-            "Use only workspace-relative paths under WORKSPACE_SCOPE.root. Use the known_folders.desktop alias for Desktop requests. "
-            "Use create_document for real DOCX and create_file for plain text/source; never downgrade formats or overwrite. "
-            "Require exact Build Mode approval and report success only after independent file hash/size verification. "
+            "Choose by format: use workspace.create_document for a real .docx and workspace.create_file for plain .txt/source. "
+            "Never silently downgrade a requested .docx to .txt. Use only workspace-relative paths under WORKSPACE_SCOPE.root and "
+            "WORKSPACE_SCOPE.known_folders.desktop for Desktop requests. Never overwrite; require exact Build Mode approval and "
+            "report success only after independent file hash/size verification. "
             if workspace_available else ""
         )
         app_control_guidance = (
