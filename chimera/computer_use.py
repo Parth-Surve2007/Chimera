@@ -232,7 +232,7 @@ class WindowsComputerUse:
             )
             if result.returncode != 0 or not result.stdout.strip():
                 return []
-            payload = json.loads(result.stdout.lstrip("\\ufeff"))
+            payload = json.loads(result.stdout.lstrip("\ufeff"))
         except (OSError, subprocess.TimeoutExpired, TypeError, ValueError, json.JSONDecodeError):
             return []
         if isinstance(payload, dict):
