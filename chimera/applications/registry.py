@@ -59,7 +59,9 @@ def get_application_registry() -> ApplicationRegistry:
         from .connectors.ghidra_connector import GhidraConnector
         from .connectors.rea_connector import ReaConnector
         from .connectors.blender_connector import BlenderConnector
+        from .connectors.browser_connector import BrowserConnector
         _GLOBAL_APP_REGISTRY.register(GhidraConnector())
         _GLOBAL_APP_REGISTRY.register(ReaConnector())
         _GLOBAL_APP_REGISTRY.register(BlenderConnector())
+        _GLOBAL_APP_REGISTRY.register(BrowserConnector())
     return _GLOBAL_APP_REGISTRY
