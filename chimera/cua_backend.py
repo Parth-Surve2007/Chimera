@@ -157,6 +157,9 @@ class CuaDriverBackend:
         self._lock = threading.RLock()
         self._snapshots: dict[str, _Snapshot] = {}
         self._foreground_escalations: set[tuple[str, int, int]] = set()
+        # Foreground drawing is a separate, one-shot escalation tied to the exact
+        # owner, process, window, canvas geometry and original stroke plan.
+        self._foreground_draw_escalations: dict[tuple[str, int, int], dict] = {}
         self.version = getattr(api, "__version__", "unknown") if api else "unknown"
 
     @classmethod
@@ -761,10 +764,39 @@ class CuaDriverBackend:
         except Exception:
             return None
 
+    def can_foreground_draw_retry(self, owner_session_id: str, pid: int) -> bool:
+        """Return whether one exact canvas draw has an unexpired foreground retry."""
+        now = time.time()
+        with self._lock:
+            expired = [
+                key for key, value in self._foreground_draw_escalations.items()
+                if value.get("expires_at", 0) <= now
+            ]
+            for key in expired:
+                self._foreground_draw_escalations.pop(key, None)
+            return any(
+                key[0] == owner_session_id and key[1] == pid
+                for key in self._foreground_draw_escalations
+            )
+
+    @staticmethod
+    def _draw_digest(strokes: list[list[list[float]]]) -> str:
+        payload = json.dumps(strokes, separators=(",", ":"), allow_nan=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _same_canvas_signature(left: tuple[str, str, dict], right: tuple[str, str, dict]) -> bool:
+        if left[:2] != right[:2]:
+            return False
+        a, b = left[2], right[2]
+        if not a or not b or set(a) != set(b):
+            return False
+        return all(abs(float(a[key]) - float(b[key])) <= 2.0 for key in ("x", "y", "w", "h"))
+
     def draw_path(self, owner_session_id: str, pid: int, window_id: int,
                   snapshot_ref: str, canvas_element_token: str,
                   strokes: list[list[list[float]]], *, duration_ms: int = 240,
-                  steps: int = 12) -> dict:
+                  steps: int = 12, foreground: bool = False) -> dict:
         original, blocked = self._snapshot_for_action(owner_session_id, pid, window_id, snapshot_ref)
         if blocked:
             return blocked
@@ -793,6 +825,26 @@ class CuaDriverBackend:
 
         initial_element = original.elements[canvas_element_token]
         signature = self._canvas_signature(initial_element)
+        draw_key = (owner_session_id, pid, window_id)
+        try:
+            stroke_digest = self._draw_digest(strokes)
+        except (TypeError, ValueError):
+            return {"status": "blocked", "verified": False, "reason": "drawing paths must be finite JSON numbers"}
+        if foreground:
+            with self._lock:
+                retry = self._foreground_draw_escalations.get(draw_key)
+                if retry and retry.get("expires_at", 0) <= time.time():
+                    self._foreground_draw_escalations.pop(draw_key, None)
+                    retry = None
+            if retry is None:
+                return {"status": "blocked", "verified": False, "reason": "foreground drawing requires an exact prior background refusal recommending foreground delivery"}
+            if retry.get("stroke_digest") != stroke_digest:
+                return {"status": "blocked", "verified": False, "reason": "foreground retry does not match the exact stroke plan that was refused"}
+            if not self._same_canvas_signature(retry.get("canvas_signature", ("", "", {})), signature):
+                return {"status": "blocked", "verified": False, "reason": "foreground retry canvas differs from the canvas that refused background drawing"}
+            # Consume before sending any foreground input. A retry is one-shot.
+            with self._lock:
+                self._foreground_draw_escalations.pop(draw_key, None)
         frame = signature[2]
         if not frame:
             return {"status": "blocked", "reason": "canvas element does not expose a usable frame"}
@@ -859,26 +911,73 @@ class CuaDriverBackend:
                             steps=steps,
                             button=self._api.ClickButton.LEFT,
                             modifier=None,
+                            delivery_mode=(
+                                self._api.InputDeliveryMode.FOREGROUND
+                                if foreground else self._api.InputDeliveryMode.BACKGROUND
+                            ),
                         ),
                     )
+                    summary = self._action_summary(drag_result)
                     drag_error = bool(_get(drag_result, "is_error", False))
-                    drag_text = str(_get(drag_result, "text") or "")
+                    drag_text = str(
+                        _get(drag_result, "text")
+                        or summary.get("driver_summary")
+                        or summary.get("driver_error")
+                        or ""
+                    )
+                    driver_effect = summary.get("driver_effect", "unknown")
+                    prior_segments = len(segment_results)
                     segment_results.append({
                         "stroke_index": stroke_index,
                         "segment_index": point_index,
                         "is_error": drag_error,
+                        "effect": driver_effect,
+                        "delivery": "foreground" if foreground else "background",
                         "text": drag_text[:500],
                     })
-                    if drag_error or "background_unavailable" in drag_text.casefold():
+                    refused = (
+                        drag_error
+                        or driver_effect in {"refused", "suspected_noop", "partial"}
+                        or "background_unavailable" in drag_text.casefold()
+                    )
+                    if refused:
                         with self._lock:
                             self._snapshots.pop(current_ref, None)
+                        escalation = summary.get("escalation") or {}
+                        recommends_foreground = (
+                            escalation.get("target") == "foreground"
+                            or _find_foreground_recommendation(drag_result)
+                        )
+                        if (
+                            not foreground and prior_segments == 0
+                            and recommends_foreground
+                        ):
+                            with self._lock:
+                                self._foreground_draw_escalations[draw_key] = {
+                                    "stroke_digest": stroke_digest,
+                                    "canvas_signature": signature,
+                                    "expires_at": time.time() + self.SNAPSHOT_TTL_SECONDS,
+                                }
+                            return {
+                                "status": "background_unavailable",
+                                "verified": False,
+                                "foreground_escalation_used": False,
+                                "foreground_retry_available": True,
+                                "foreground_retry": "computer.cua_draw_path_foreground",
+                                "snapshot_invalidated": True,
+                                "segments_sent": 0,
+                                "reason": drag_text[:1000] or "Cua Driver reported that this canvas did not accept background drawing",
+                                "segment_results": segment_results[-12:],
+                                "next_step": "Take a fresh screenshot snapshot of the same canvas, then request separate operator approval for the exact foreground drawing retry.",
+                            }
                         return {
-                            "status": "background_unavailable" if "background_unavailable" in drag_text.casefold() else "partial",
+                            "status": "partial" if prior_segments else "blocked",
                             "verified": False,
-                            "segments_sent": len(segment_results),
-                            "reason": drag_text[:1000] or "Cua Driver refused a background drag segment",
+                            "foreground_escalation_used": bool(foreground),
+                            "segments_sent": prior_segments,
+                            "reason": drag_text[:1000] or f"Cua Driver reported draw effect: {driver_effect}",
                             "segment_results": segment_results[-12:],
-                            "note": "No foreground drag was attempted. Do not retry blindly; inspect the current window first.",
+                            "note": "No automatic retry was attempted. Inspect the current canvas before planning another action.",
                         }
 
                     # Snapshot after every drag. Tokens are refreshed and the
@@ -941,8 +1040,9 @@ class CuaDriverBackend:
 
             pixel_verified = changed_fraction is not None and changed_fraction > 0.00001
             return {
-                "status": "completed",
+                "status": "completed" if pixel_verified else "uncertain",
                 "accepted_segments": len(segment_results),
+                "foreground_delivery_used": bool(foreground),
                 "verified": bool(pixel_verified),
                 "verification_type": "pixel_diff_only" if pixel_verified else "not_verified",
                 "semantic_verified": False,
@@ -957,11 +1057,27 @@ class CuaDriverBackend:
         except Exception as exc:
             with self._lock:
                 self._snapshots.pop(current_ref, None)
+            error_result = self._exception_result(exc)
+            recommended = error_result.get("foreground_retry_available") is True
+            if not foreground and not segment_results and recommended:
+                with self._lock:
+                    self._foreground_draw_escalations[draw_key] = {
+                        "stroke_digest": stroke_digest,
+                        "canvas_signature": signature,
+                        "expires_at": time.time() + self.SNAPSHOT_TTL_SECONDS,
+                    }
+                return {
+                    **error_result,
+                    "foreground_retry": "computer.cua_draw_path_foreground",
+                    "segments_sent": 0,
+                    "next_step": "Take a fresh screenshot snapshot of the same canvas, then request separate operator approval for the exact foreground drawing retry.",
+                }
             return {
-                "status": "partial" if segment_results else "failed",
+                "status": "partial" if segment_results else error_result.get("status", "failed"),
                 "verified": False,
+                "foreground_delivery_used": bool(foreground),
                 "accepted_segments": len(segment_results),
-                "reason": f"{type(exc).__name__}: {exc}",
+                "reason": error_result.get("reason") or f"{type(exc).__name__}: {exc}",
                 "segment_results": segment_results[-12:],
                 "note": "Some segments may have been delivered. Observe current application state before attempting any further input.",
             }
