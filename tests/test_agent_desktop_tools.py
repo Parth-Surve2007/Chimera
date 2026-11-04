@@ -598,24 +598,22 @@ def test_invalid_readonly_computer_arguments_return_one_repair_observation(tmp_p
 
         def __init__(self):
             self.calls = 0
+            self.seen_tool_ids = set()
+            self.tool_feedback = []
 
         def decide(self, messages, catalog, session=None):
             self.calls += 1
-            tool_ids = {item["id"] for item in catalog["tools"]}
-            assert "computer.inspect_window" in tool_ids
+            self.seen_tool_ids = {item["id"] for item in catalog["tools"]}
             if self.calls == 1:
                 return {
                     "type": "tool_call",
                     "tool": "computer.inspect_window",
                     "arguments": {"session_id": "not-authorized", "hwnd": 123},
                 }
-            tool_feedback = [
+            self.tool_feedback = [
                 item.content for item in messages
                 if getattr(item, "role", None) == "tool"
             ]
-            assert tool_feedback
-            assert "Allowed arguments: session_id" in tool_feedback[-1]
-            assert "No action was performed" in tool_feedback[-1]
             return {
                 "type": "message",
                 "content": "I corrected the inspection arguments. No application was inspected.",
@@ -630,6 +628,10 @@ def test_invalid_readonly_computer_arguments_return_one_repair_observation(tmp_p
 
     assert result["status"] == "completed", result
     assert provider.calls == 2
+    assert "computer.inspect_window" in provider.seen_tool_ids
+    assert provider.tool_feedback
+    assert "Allowed arguments: session_id" in provider.tool_feedback[-1]
+    assert "No action was performed" in provider.tool_feedback[-1]
     tool_messages = [
         __import__("json").loads(item.content)
         for item in store.messages(session_id)
