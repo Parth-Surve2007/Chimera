@@ -582,6 +582,15 @@ class ComputerSessionManager:
                         "backend": "scoped_win32_input",
                     }
                 action = (options or {}).get("action")
+                if action == "type_text":
+                    control_type = str(target.get("control_type") or "").casefold()
+                    patterns = " ".join(str(item) for item in target.get("patterns", [])).casefold()
+                    if control_type not in {"edit", "document", "combobox"} and "value" not in patterns and "text" not in patterns:
+                        return {
+                            "status": "blocked", "verified": False,
+                            "reason": "type_text is limited to observed editable UI Automation controls",
+                            "backend": "scoped_win32_input",
+                        }
                 native = self.visual_input._native()
                 if native.foreground_hwnd() != reference.hwnd or native.foreground_pid() != identity.pid:
                     try:
@@ -597,15 +606,6 @@ class ComputerSessionManager:
                         "reason": "the exact authorized application window could not be made foreground",
                         "backend": "scoped_win32_input",
                     }
-                if action == "type_text":
-                    control_type = str(target.get("control_type") or "").casefold()
-                    patterns = " ".join(str(item) for item in target.get("patterns", [])).casefold()
-                    if control_type not in {"edit", "document", "combobox"} and "value" not in patterns and "text" not in patterns:
-                        return {
-                            "status": "blocked", "verified": False,
-                            "reason": "type_text is limited to observed editable UI Automation controls",
-                            "backend": "scoped_win32_input",
-                        }
                 if action in {"type_text", "press_key"}:
                     focus_result = self.uia.focus_element(reference.hwnd, reference.runtime_id, identity.pid)
                     if focus_result.get("status") != "completed":
