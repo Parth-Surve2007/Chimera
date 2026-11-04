@@ -551,7 +551,7 @@ class LocalModelProvider:
                 "For new files, use workspace.create_file, choose a supported text/source extension, and wait for exact Build Mode approval. "
                 "Do not overwrite existing files. Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "For explicit app-opening requests, inspect computer.list_applications when useful and call computer.launch "
-                "with a known app name such as Word or Excel, or an exact executable path. Launch requires approval. After launch, request exact 
+                "with a known app name such as Word or Excel, or an exact executable path. Launch requires approval. After launch, request exact "
                 "app authorization in Applications before interacting with its controls. Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
