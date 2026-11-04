@@ -96,7 +96,9 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 - [x] Bind an approved application launch to the exact visible HWNDs observed by the launcher; restrict later observations and actions to those HWNDs.
 - [x] Continue the local agent loop after approval when a launch is successfully authorized; expose canvas interaction early in the compact-model tool catalogue.
 - [ ] Run live Windows acceptance for Paint: identify its real canvas element, draw disconnected shapes, save a PNG, reopen it and verify its dimensions/content.
-- [ ] Add local vision-capable observation for semantic screenshot understanding; pixel-diff alone is not semantic correctness.
+- [x] Add an opt-in local vision GGUF provider and bounded multimodal llama-server transport for custom-control screenshot descriptions.
+- [x] Require explicit screenshot approval and fresh UIA/process/window/foreground checks before local visual inspection; remote image URLs and hosted fallback are disabled.
+- [ ] Add real vision-model acceptance on the target RTX 3050 with a user-selected compatible multimodal GGUF; verify control targeting and drawing semantics on live Paint.
 - [ ] Expand app-specific adapters for Office, editors, file managers, graphics tools, CAD/EDA and media tools.
 
 **Acceptance boundary:** Automated tests validate the scoped input and authorization contracts. They do not prove that every installed Windows application or Paint workflow succeeds on a user's desktop. Application/version/action support must be certified with live acceptance evidence.
