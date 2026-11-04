@@ -150,7 +150,7 @@ class WindowsComputerUse:
                 try:
                     import winreg
                     app_path_key = (
-                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\"
+                        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"
                         + executable_name
                     )
                     roots = [
