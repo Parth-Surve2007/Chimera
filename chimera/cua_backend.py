@@ -856,21 +856,6 @@ class CuaDriverBackend:
             stroke_digest = self._draw_digest(strokes, duration_ms, steps)
         except (TypeError, ValueError):
             return {"status": "blocked", "verified": False, "reason": "drawing paths must be finite JSON numbers"}
-        if foreground:
-            with self._lock:
-                retry = self._foreground_draw_escalations.get(draw_key)
-                if retry and retry.get("expires_at", 0) <= time.time():
-                    self._foreground_draw_escalations.pop(draw_key, None)
-                    retry = None
-            if retry is None:
-                return {"status": "blocked", "verified": False, "reason": "foreground drawing requires an exact prior background refusal recommending foreground delivery"}
-            if retry.get("stroke_digest") != stroke_digest:
-                return {"status": "blocked", "verified": False, "reason": "foreground retry does not match the exact stroke plan that was refused"}
-            if not self._same_canvas_signature(retry.get("canvas_signature", ("", "", {})), signature):
-                return {"status": "blocked", "verified": False, "reason": "foreground retry canvas differs from the canvas that refused background drawing"}
-            # Consume before sending any foreground input. A retry is one-shot.
-            with self._lock:
-                self._foreground_draw_escalations.pop(draw_key, None)
         frame = signature[2]
         if not frame:
             return {"status": "blocked", "reason": "canvas element does not expose a usable frame"}
@@ -882,6 +867,37 @@ class CuaDriverBackend:
             before_crop = self._crop_frame(before_image, local_canvas_frame)
         except ValueError as exc:
             return {"status": "blocked", "reason": str(exc)}
+
+        if foreground:
+            # Validate and consume under one lock. This makes the foreground
+            # escalation a true one-shot even if two callers race.
+            with self._lock:
+                retry = self._foreground_draw_escalations.get(draw_key)
+                if retry is None:
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "foreground drawing requires an exact prior background refusal recommending foreground delivery",
+                    }
+                if retry.get("expires_at", 0) <= time.time():
+                    self._foreground_draw_escalations.pop(draw_key, None)
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "foreground drawing retry expired; inspect the canvas and request a new background attempt",
+                    }
+                if retry.get("stroke_digest") != stroke_digest:
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "foreground retry does not match the exact stroke plan that was refused",
+                    }
+                if not self._same_canvas_signature(
+                    retry.get("canvas_signature", ("", "", {})), signature,
+                ):
+                    return {
+                        "status": "blocked", "verified": False,
+                        "reason": "foreground retry canvas differs from the canvas that refused background drawing",
+                    }
+                self._foreground_draw_escalations.pop(draw_key, None)
+
         current_state = original.state
         current_ref = snapshot_ref
         segment_results = []
