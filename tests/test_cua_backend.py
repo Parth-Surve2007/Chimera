@@ -19,6 +19,7 @@ class DeliveryMode(Enum):
 
 class Effect(Enum):
     CONFIRMED = "confirmed"
+    UNVERIFIABLE = "unverifiable"
     REFUSED = "refused"
 
 
@@ -103,9 +104,13 @@ class FakeToolRefusal(Exception):
 
 
 class FakeDriver:
-    def __init__(self, *, refuse_background=False, refuse_background_draw=False):
+    def __init__(
+        self, *, refuse_background=False, refuse_background_draw=False,
+        unverifiable_background_draw=False,
+    ):
         self.refuse_background = refuse_background
         self.refuse_background_draw = refuse_background_draw
+        self.unverifiable_background_draw = unverifiable_background_draw
         self.click_inputs = []
         self.drag_inputs = []
         self.shutdown_called = False
@@ -209,6 +214,20 @@ class FakeDriver:
             and self.refuse_background_draw
         ):
             raise FakeToolRefusal()
+        if (
+            request.values["delivery_mode"] is DeliveryMode.BACKGROUND
+            and self.unverifiable_background_draw
+        ):
+            return SimpleNamespace(
+                effect=Effect.UNVERIFIABLE,
+                route=Route.ACCESSIBILITY,
+                summary="Background drag delivery is unverifiable.",
+                error=None,
+                hint="Foreground delivery may be required by this canvas.",
+                escalation=SimpleNamespace(
+                    recommended="foreground", reason="canvas did not apply background input",
+                ),
+            )
         self.after_draw = True
         return SimpleNamespace(
             effect=Effect.CONFIRMED,
@@ -418,6 +437,40 @@ def test_cua_canvas_background_refusal_enables_only_exact_approved_foreground_re
         )
         assert second_retry["status"] == "blocked"
         assert len(driver.drag_inputs) == 2
+    finally:
+        backend.close()
+
+
+def test_cua_unverifiable_noop_uses_fresh_pixel_evidence_and_retries_only_remaining_strokes():
+    driver = FakeDriver(unverifiable_background_draw=True)
+    backend = _backend(driver)
+    strokes = [[[0.1, 0.1], [0.4, 0.4], [0.9, 0.9]]]
+    try:
+        initial = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        result = backend.draw_path(
+            "conversation-a", 4321, 77, initial["snapshot_ref"],
+            initial["elements"][0]["element_token"], strokes,
+        )
+        assert result["status"] == "background_unavailable"
+        assert result["foreground_retry_available"] is True
+        assert result["segments_sent"] == 0
+        assert result["retry_strokes"] == [[[0.1, 0.1], [0.4, 0.4], [0.9, 0.9]]]
+        assert result["snapshot_ref_after"]
+        assert result["verification_snapshot"]["snapshot_ref"] == result["snapshot_ref_after"]
+        assert backend.can_foreground_draw_retry("conversation-a", 4321) is True
+        assert driver.drag_inputs[0]["delivery_mode"] is DeliveryMode.BACKGROUND
+
+        retry = backend.draw_path(
+            "conversation-a", 4321, 77, result["snapshot_ref_after"],
+            result["verification_snapshot"]["elements"][0]["element_token"],
+            result["retry_strokes"], foreground=True,
+        )
+        assert retry["status"] == "completed"
+        assert retry["verified"] is True
+        assert retry["foreground_delivery_used"] is True
+        assert driver.drag_inputs[-1]["delivery_mode"] is DeliveryMode.FOREGROUND
     finally:
         backend.close()
 
