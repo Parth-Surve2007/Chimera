@@ -132,6 +132,8 @@ Chimera's provider registry supports 8 adapter types through a unified interface
 - Recommended persistent mode: configure `CHIMERA_MODEL_PATH` (GGUF) and `CHIMERA_LLAMA_SERVER` (llama.cpp server). Chimera starts the selected server at app launch, binds it to loopback, and keeps the model resident for the session.
 - Explicit one-shot mode: configure `CHIMERA_MODEL_PATH` and `CHIMERA_LLAMA_CLI` without selecting a server. The CLI loads the GGUF for each request and is visibly labelled as one-shot mode.
 - Runtime selection is strict: a selected server failure fails the request. Chimera does not switch to CLI, another local model, or a hosted provider.
+- Agent decisions use a two-branch JSON Schema contract (`message` or `tool_call`) through llama-server's `/completion` `json_schema` field; the CLI path uses the matching `--json-schema` constraint.
+- Local-server HTTP errors preserve the bounded server response body, HTTP status, endpoint and safe request configuration for actionable diagnostics. Conversation prompts are not included in those diagnostics.
 - Tuning: `CHIMERA_MODEL_CONTEXT`, `CHIMERA_MODEL_MAX_TOKENS`, `CHIMERA_MODEL_TIMEOUT`, `CHIMERA_MODEL_THREADS`, `CHIMERA_MODEL_GPU_LAYERS`
 - For a compact 3B model, Q4_K_M is a balanced quality/memory starting point; Q5_K_M may improve fidelity but consumes more memory. Quantization is part of the GGUF file, not a runtime conversion.
 - Model weights are never downloaded automatically. Use the Model Bay to select a model and runtime explicitly.
@@ -380,16 +382,33 @@ chimera
 
 ### Windows Build (Optional)
 
-```powershell
-python -m pip install pyinstaller
-powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
-```
-
-Launch packaged build:
+Use Python 3.11. From the repository root, install the project and packaging tools:
 
 ```powershell
-scripts\run_chimera.bat
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[test]" pyinstaller
 ```
+
+Build the Windows desktop app:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
+```
+
+The build script runs the tests and compile checks, stages the version-matched Flet desktop client, and creates these local outputs:
+
+- `dist\Chimera\Chimera.exe` plus its complete `_internal\` runtime folder.
+- `dist\Chimera-Windows-portable.zip`, containing the portable app files.
+
+Run the app from the folder:
+
+```powershell
+.\dist\Chimera\Chimera.exe
+```
+
+Keep `Chimera.exe` and the entire `_internal\` folder together. The generated `dist\` folder is git-ignored; rebuild it locally after pulling source changes. GitHub Actions also uploads the `dist\` outputs as the `Chimera-Windows-portable` artifact after the Windows package smoke test passes.
 
 ---
 
@@ -429,7 +448,7 @@ Models are selected explicitly through the UI or configuration. Chimera never si
 
 ### Basic Conversation
 
-The desktop app opens directly into the continuous chat workbench. Its Oxide / Fieldwork interface uses warm graphite, parchment, signal-lime and kiln-coral accents rather than the typical blue-violet AI palette. Three panels keep recent threads and tools on the left, the conversation and composer in the centre, and live model/workspace/goal context on the right. Protected operations remain visible inline and require exact approval.
+The desktop app opens directly into the continuous chat workbench. Its Xerxes-inspired Dark Emperor interface uses a true-black canvas, graphite panels, white text, warm gold focus states and restrained ember-coral feedback. Three panels keep recent threads and tools on the left, the conversation and composer in the centre, and live model/workspace/goal context on the right. Protected operations remain visible inline and require exact approval.
 
 After launch:
 1. Open **Settings** and configure a local GGUF plus either llama.cpp CLI or server runtime if they were not auto-discovered.
