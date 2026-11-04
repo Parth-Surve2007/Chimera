@@ -475,3 +475,49 @@ def test_native_computer_launch_exception_becomes_failed_tool_result(test_env, m
     launch_result = next(item for item in messages if item.get("tool") == "computer.launch")
     assert launch_result["status"] == "failed"
     assert "Windows refused to start" in launch_result["error"]
+
+
+
+def test_computer_close_window_requires_agent_approval_and_exact_conversation_scope(test_env, monkeypatch):
+    from types import SimpleNamespace
+
+    store, workspace = test_env["store"], test_env["tmp_path"]
+    provider = MockScriptedProvider([
+        {
+            "type": "tool_call",
+            "tool": "computer.close_window",
+            "invocation_id": "close-notepad-window",
+            "arguments": {"session_id": "authorized-notepad", "hwnd": 99},
+        },
+        {"type": "message", "content": "The Notepad window was closed."},
+    ])
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace=workspace, mode="build")
+    identity = SimpleNamespace(
+        pid=4242, executable="C:/Windows/System32/notepad.exe",
+        owner_session_id=session_id, session_id="authorized-notepad",
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    monkeypatch.setattr(
+        runtime.computer, "_identity_is_current",
+        lambda current: current is identity,
+    )
+    calls = []
+
+    def close_window(app_session_id, hwnd, approved=False):
+        calls.append((app_session_id, hwnd, approved))
+        return {"status": "completed", "verified": True, "hwnd": hwnd, "method": "WM_CLOSE"}
+
+    monkeypatch.setattr(runtime.computer, "close_window", close_window)
+
+    pending = runtime.send(session_id, "Close the Notepad window.")
+    assert pending["status"] == "awaiting_approval"
+    assert calls == []
+
+    completed = runtime.approve_pending(session_id, True)
+    assert completed["status"] == "completed"
+    assert calls == [("authorized-notepad", 99, True)]
+    tool_messages = [json.loads(item.content) for item in store.messages(session_id) if item.role == "tool"]
+    close_result = next(item for item in tool_messages if item.get("tool") == "computer.close_window")
+    assert close_result["status"] == "completed"
+    assert close_result["result"]["verified"] is True
