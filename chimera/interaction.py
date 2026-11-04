@@ -123,12 +123,16 @@ class BrowserBackendDescriptor:
 
 
 class VisualPerceptionProvider(Protocol):
-    def inspect(self, image_path: str) -> dict[str, Any]: ...
+    def inspect_image(self, image: Any, question: str, cancel_event=None) -> dict[str, Any]: ...
 
 
 class UnavailableVisualProvider:
-    def inspect(self, image_path: str) -> dict[str, Any]:
-        return {"status": "unavailable", "reason": "no compatible local vision provider configured", "image": image_path}
+    def inspect_image(self, image: Any, question: str = "", cancel_event=None) -> dict[str, Any]:
+        return {
+            "status": "unavailable",
+            "reason": "no compatible local vision provider configured",
+            "hosted_fallback": False,
+        }
 
 
 class InteractionStrategyEngine:
