@@ -269,12 +269,12 @@ def test_agent_application_inventory_ignores_irrelevant_model_arguments(tmp_path
         def decide(self, messages, catalog, session=None):
             return next(self.decisions)
 
-    expected_inventory = [{
+    expected_inventory = {"items": [{
         "name": "Microsoft Word",
         "pid": 1234,
         "executable": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
         "windows": [{"hwnd": 77, "pid": 1234, "title": "Document1 - Word"}],
-    }]
+    }]}
     monkeypatch.setattr(WindowsComputerUse, "list_applications", lambda self: expected_inventory)
 
     runtime = AgentRuntime(
