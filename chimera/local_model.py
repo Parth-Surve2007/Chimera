@@ -906,11 +906,19 @@ class LocalModelProvider:
             if app_control_available else ""
         )
         visual_guidance = (
-            "For custom canvases, target the largest visible enabled canvas-like child, not the title bar or whole window. "
-            "Use its fresh reference_id. Use stroke for one path or multi_stroke for 1-16 pen-up paths, 2-64 points each, <=256 total; "
-            "coordinates are normalized relative to that element (0.02-0.98). Approval is required. Re-observe and require verified=true "
-            "plus changed_fraction>0 before reporting pixel change; pixel change alone does not prove the requested drawing is correct. "
+            "For a drawing request, inspect the authorized app's exact window and select the real canvas-like child, never the whole window. "
+            "Create one pen-up path per disconnected shape/component; never join separate shapes with a stray connecting line. "
+            "Use multi_stroke for 1-16 distinct paths, 2-64 points each and <=256 total points; use fresh canvas-reference-relative normalized coordinates (0.02-0.98). "
+            "Do not reuse a reference after a new observation. Wait for the exact action approval, inspect its status/verified/changed_fraction, then take a fresh observation. "
+            "If pixel change is unverified, diagnose the new observation before any retry; never repeat the same stroke blindly. Pixel change does not prove semantic drawing correctness. "
             if visual_action_available else ""
+        )
+
+        canvas_save_guidance = (
+            "When the user asks to save a drawing, use an explicit approved save flow and a workspace-relative output path when workspace tools are available. "
+            "A dismissed Save dialog is not proof of success: inspect the exact output file with workspace.inspect_file and verify that the file exists and has nonzero size. "
+            "Reopen the saved image in the target application when the requested acceptance requires reopen verification; report any unsupported step honestly. "
+            if visual_action_available and "workspace.inspect_file" in tool_ids else ""
         )
 
         visual_inspection_guidance = (
@@ -951,7 +959,7 @@ class LocalModelProvider:
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
                 "Never guess an application ID. After an approved computer.launch, continue only when its result has control_authorized=true and computer_session_id; inspect that session. Otherwise stop and report the authorization blocker. Never bypass Applications authorization. "
-                + multi_window_guidance + app_control_guidance + visual_guidance + visual_inspection_guidance +
+                + multi_window_guidance + app_control_guidance + visual_guidance + canvas_save_guidance + visual_inspection_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
