@@ -755,3 +755,64 @@ def test_visual_action_blocks_noneditable_text_targets(tmp_path, monkeypatch):
     )
     assert result["status"] == "blocked"
     assert "editable UI Automation controls" in result["reason"]
+
+
+
+def test_window_close_requires_approval_and_never_force_terminates(tmp_path, monkeypatch):
+    from chimera import computer_use
+
+    monkeypatch.setattr(computer_use, "_is_windows_platform", lambda: True)
+    backend = object.__new__(WindowsComputerUse)
+    state = {"open": True, "messages": []}
+
+    def post_message(hwnd, message, wparam, lparam):
+        state["messages"].append((hwnd, message, wparam, lparam))
+        state["open"] = False
+        return True
+
+    backend.user32 = SimpleNamespace(
+        IsWindow=lambda _hwnd: state["open"],
+        PostMessageW=post_message,
+    )
+    backend.window_process_id = lambda _hwnd: 4321 if state["open"] else None
+
+    pending = backend.close(99, approved=False, expected_pid=4321)
+    assert pending["status"] == "awaiting_approval"
+    assert state["messages"] == []
+
+    wrong_pid = backend.close(99, approved=True, expected_pid=9999)
+    assert wrong_pid["status"] == "blocked"
+    assert state["messages"] == []
+
+    completed = backend.close(99, approved=True, expected_pid=4321)
+    assert completed["status"] == "completed"
+    assert completed["verified"] is True
+    assert state["messages"] == [(99, 0x0010, 0, 0)]
+
+
+def test_computer_session_close_window_requires_fresh_observation_and_approval(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    _seed_uia_reference(manager, monkeypatch)
+    calls = []
+    manager.backend.close = lambda hwnd, approved=False, expected_pid=None: (
+        calls.append((hwnd, approved, expected_pid))
+        or {"status": "completed", "verified": True, "hwnd": hwnd}
+    )
+
+    pending = manager.close_window("agent-session", 99, approved=False)
+    assert pending["status"] == "awaiting_approval"
+    assert calls == []
+
+    completed = manager.close_window("agent-session", 99, approved=True)
+    assert completed["status"] == "completed"
+    assert calls == [(99, True, 4321)]
+
+
+def test_computer_session_close_window_rejects_stale_or_foreign_hwnd(tmp_path, monkeypatch):
+    manager = ComputerSessionManager(tmp_path)
+    _seed_uia_reference(manager, monkeypatch)
+    manager.backend.window_process_id = lambda _hwnd: 9999
+
+    result = manager.close_window("agent-session", 99, approved=True)
+    assert result["status"] == "blocked"
+    assert "exact authorized process" in result["reason"]
