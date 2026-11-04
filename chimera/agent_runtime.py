@@ -577,6 +577,14 @@ class AgentRuntime:
             text,
         ))
 
+    @staticmethod
+    def _is_explicit_resume_task(content: str) -> bool:
+        import re
+        return bool(re.match(
+            r"^\\s*(?:resume|continue)\\s+(?:the\\s+)?(?:previous|paused)\\s+task\\b",
+            str(content or "").casefold(),
+        ))
+
     def send(self, session_id: str, content: str) -> dict:
         session = self.store.session(session_id)
         if not session:
@@ -600,13 +608,24 @@ class AgentRuntime:
         cancel_event = threading.Event()
         self._cancel_events[session_id] = cancel_event
         active_task = self.task_store.active_for_session(session_id)
-        if active_task and not self._is_explicit_new_task(content):
-            task_id = active_task.task_id
+        explicit_new = self._is_explicit_new_task(content)
+        resume_task = (
+            self.task_store.paused_for_session(session_id)
+            if self._is_explicit_resume_task(content) else None
+        )
+        if explicit_new and active_task:
+            self.task_store.transition(active_task.task_id, "paused")
+            active_task = None
+
+        selected_task = resume_task or active_task
+        if selected_task:
+            task_id = selected_task.task_id
             self.task_store.resume(task_id)
             self._record(session_id, "task.resumed", {
                 "task_id": task_id,
-                "objective": active_task.objective,
+                "objective": selected_task.objective,
                 "continuation_message_id": message.message_id,
+                "explicit_resume": bool(resume_task),
             })
         else:
             task_id = self.task_store.create(
@@ -624,7 +643,7 @@ class AgentRuntime:
         self._record(session_id, "turn.started", {
             "message_id": message.message_id,
             "task_id": task_id,
-            "continuation": bool(active_task and task_id == active_task.task_id),
+            "continuation": bool(selected_task),
         })
         try:
             self._active_providers[session_id] = self._provider_for(session_id)
