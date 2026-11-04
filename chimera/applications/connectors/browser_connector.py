@@ -230,7 +230,7 @@ class BrowserConnector(BaseApplicationConnector):
                     base = os.environ.get(env_name)
                     if base:
                         values.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
-                found = shutil.which("chrome") or shutil.which("chrome.exe") or shutil.which("google-chrome")
+                found = shutil.which("chrome") or shutil.which("chrome.exe") or shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
             if found:
                 values.insert(0, Path(found))
             candidate = next((path.resolve() for path in values if path.is_file()), None)
@@ -317,7 +317,7 @@ class BrowserConnector(BaseApplicationConnector):
     def _profile_directory(workspace: Path, session_id: str) -> Path:
         profile = (workspace / ".chimera" / "browser" / BrowserConnector._session_key(session_id) / "profile").resolve()
         root = (workspace / ".chimera" / "browser").resolve()
-        if root not in profile.parents:
+        if workspace not in root.parents or root not in profile.parents:
             raise ValueError("browser profile escaped the selected workspace")
         profile.mkdir(parents=True, exist_ok=True)
         return profile
@@ -527,6 +527,26 @@ class BrowserConnector(BaseApplicationConnector):
         return runtime, page
 
     @staticmethod
+    def _workspace_file(workspace: Path, relative_value: Any, suffix: str | None = None) -> Path:
+        import ntpath
+        if not isinstance(relative_value, str) or not relative_value.strip():
+            raise ValueError("output path must be a non-empty workspace-relative string")
+        relative = relative_value.replace("\\", "/")
+        drive, _ = ntpath.splitdrive(relative_value)
+        if drive or relative.startswith("/") or Path(relative_value).is_absolute():
+            raise ValueError("output path must be relative to the selected workspace")
+        if any(part in {"", ".", ".."} for part in relative.split("/")):
+            raise ValueError("output path contains an unsafe path component")
+        target = (workspace / relative).resolve()
+        if workspace not in target.parents:
+            raise ValueError("output path escapes the selected workspace")
+        if suffix and target.suffix.casefold() != suffix:
+            raise ValueError(f"output path must use the {suffix} extension")
+        if target.exists() or target.is_symlink():
+            raise FileExistsError("output path already exists; refusing to overwrite")
+        return target
+
+    @staticmethod
     def _locator(page, kind: str, selector: str, role: str | None = None):
         BrowserConnector._selector_kind(kind, role)
         if not isinstance(selector, str) or not selector.strip() or len(selector) > 300:
@@ -668,11 +688,16 @@ class BrowserConnector(BaseApplicationConnector):
                     "field_value_matches": True, "url": page.url,
                 }
             key = str(arguments.get("key") or "").upper()
-            allowed_keys = {"ENTER", "TAB", "ESC", "ESCAPE", "BACKSPACE", "DELETE", "SPACE", "ARROWUP", "ARROWDOWN", "ARROWLEFT", "ARROWRIGHT"}
-            if key not in allowed_keys:
+            key_map = {
+                "ENTER": "Enter", "TAB": "Tab", "ESC": "Escape", "ESCAPE": "Escape",
+                "BACKSPACE": "Backspace", "DELETE": "Delete", "SPACE": "Space",
+                "ARROWUP": "ArrowUp", "ARROWDOWN": "ArrowDown",
+                "ARROWLEFT": "ArrowLeft", "ARROWRIGHT": "ArrowRight",
+            }
+            if key not in key_map:
                 raise ValueError("press key is not in the browser application-key allowlist")
-            locator.press(key, timeout=5000)
-            return {"status": "completed", "accepted": True, "url": page.url, "key": key}
+            locator.press(key_map[key], timeout=5000)
+            return {"status": "completed", "accepted": True, "url": page.url, "key": key_map[key]}
         if action_id == "download":
             if not approved:
                 return {"status": "awaiting_approval", "permission": "browser.download"}
@@ -680,14 +705,7 @@ class BrowserConnector(BaseApplicationConnector):
             locator = self._unique_visible(self._locator(
                 page, arguments["selector_kind"], arguments["selector"]
             ))
-            relative = arguments["relative_path"].replace("\\", "/")
-            if not relative or relative.startswith("/") or any(part in {"", ".", ".."} for part in relative.split("/")):
-                raise ValueError("download path must be a safe workspace-relative path")
-            target = (runtime.workspace / relative).resolve()
-            if runtime.workspace not in target.parents:
-                raise ValueError("download path escapes the selected workspace")
-            if target.exists() or target.is_symlink():
-                raise FileExistsError("download target already exists")
+            target = self._workspace_file(runtime.workspace, arguments["relative_path"])
             target.parent.mkdir(parents=True, exist_ok=True)
             with page.expect_download(timeout=20_000) as download_info:
                 locator.click(timeout=5000)
@@ -707,15 +725,10 @@ class BrowserConnector(BaseApplicationConnector):
                 "suggested_filename": Path(download.suggested_filename).name,
             }
         if action_id == "screenshot":
+            if not approved:
+                return {"status": "awaiting_approval", "permission": "browser.screenshot"}
             runtime, page = self._page(arguments)
-            relative = arguments["relative_path"].replace("\\", "/")
-            if not relative or relative.startswith("/") or any(part in {"", ".", ".."} for part in relative.split("/")):
-                raise ValueError("screenshot path must be workspace-relative")
-            target = (runtime.workspace / relative).resolve()
-            if runtime.workspace not in target.parents or target.suffix.casefold() != ".png":
-                raise ValueError("screenshot path must be a workspace-contained .png file")
-            if target.exists() or target.is_symlink():
-                raise FileExistsError("screenshot target already exists")
+            target = self._workspace_file(runtime.workspace, arguments["relative_path"], suffix=".png")
             target.parent.mkdir(parents=True, exist_ok=True)
             payload = page.screenshot(path=str(target), full_page=True, timeout=10_000)
             return {
