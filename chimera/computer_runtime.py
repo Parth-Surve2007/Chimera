@@ -414,9 +414,10 @@ class ComputerSessionManager:
         """Authorize one live process, optionally restricted to launch-observed HWNDs.
 
         A per-user WindowsApps execution alias can resolve to a different final
-        image path. That exception requires a matching executable basename and
-        exact visible HWNDs still owned by the verified PID. Later observations
-        and actions are restricted to that HWND set.
+        image path. That exception requires the WindowsApps path shape, exact
+        visible HWNDs still owned by the verified PID, and either a matching
+        executable basename or matching app title/class evidence. Later
+        observations and actions are restricted to that HWND set.
         """
         try:
             import psutil
