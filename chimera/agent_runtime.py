@@ -1082,8 +1082,9 @@ class AgentRuntime:
                 next((item.content for item in reversed(self.store.messages(session_id)) if item.role == "user"), "")
             )
         ):
-            executable = Path(str(result.data.get("executable") or pending["arguments"].get("executable") or "Application"))
-            application = executable.stem.replace("_", " ").strip() or "Application"
+            executable_text = str(result.data.get("executable") or pending["arguments"].get("executable") or "Application")
+            executable_name = executable_text.replace("\\\\", "/").rsplit("/", 1)[-1]
+            application = Path(executable_name).stem.replace("_", " ").strip() or "Application"
             windows = result.data.get("windows") or []
             window_titles = [
                 str(item.get("title") or "").strip()
