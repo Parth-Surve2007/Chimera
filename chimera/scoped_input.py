@@ -353,7 +353,8 @@ class ScopedWindowsInputBackend:
             if not native.window_exists(hwnd) or native.window_pid(hwnd) != expected_pid:
                 return ScopedInputResult("blocked", False, False, "HWND no longer belongs to the authorized process", action).to_dict()
             try:
-                native.focus_window(hwnd)
+                if native.foreground_pid() != expected_pid:
+                    native.focus_window(hwnd)
             except Exception as exc:
                 return ScopedInputResult("awaiting_operator_focus", False, False, str(exc), action).to_dict()
             if native.foreground_pid() != expected_pid:
