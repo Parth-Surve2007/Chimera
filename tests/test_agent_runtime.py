@@ -678,3 +678,52 @@ def test_paint_draw_request_is_not_treated_as_a_terminal_launch(tmp_path):
     assert runtime._is_terminal_launch_request("Please launch Notepad.")
     assert not runtime._is_terminal_launch_request("open ms paint and draw a house")
     assert not runtime._is_terminal_launch_request("open Paint, then sketch a tree")
+
+
+
+def test_agent_runtime_requires_pdf_approval_then_verifies_the_real_file(tmp_path):
+    from pypdf import PdfReader
+
+    source = "Actual source text from the approved task.\nSecond line with café and €."
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "workspace.create_pdf",
+            "arguments": {
+                "path": "Notepad-Export.pdf",
+                "title": "Notepad Export",
+                "content": source,
+            },
+            "invocation_id": "pdf-export-1",
+        },
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    pending = runtime.send(session_id, "Create a PDF from the Notepad text.")
+    assert pending["status"] == "awaiting_approval"
+    target = tmp_path / "Notepad-Export.pdf"
+    assert not target.exists()
+
+    completed = runtime.approve_pending(session_id, True)
+    assert completed["status"] == "completed"
+    assert completed["verification"]["path"] == "Notepad-Export.pdf"
+    assert completed["verification"]["bytes"] == target.stat().st_size
+    assert completed["verification"]["sha256"]
+    reader = PdfReader(str(target), strict=True)
+    extracted = "\\n".join(page.extract_text() or "" for page in reader.pages)
+    normalize = lambda value: " ".join(value.replace("\\u00a0", " ").split())
+    assert normalize("Notepad Export\\n" + source) == normalize(extracted)
+
+    tool_result = next(
+        json.loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool" and '"workspace.create_pdf"' in item.content
+    )
+    assert tool_result["status"] == "completed"
+    assert tool_result["result"]["independent_verification"] is True
+    assert tool_result["result"]["text_verified"] is True
+    task = runtime.task_store.latest_for_session(session_id)
+    assert task.status == "completed"
+    assert runtime.task_store.steps(task.task_id)[0]["status"] == "completed"
