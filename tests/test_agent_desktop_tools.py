@@ -887,3 +887,78 @@ def test_packaged_notepad_launch_authorizes_actual_windowsapps_process_before_in
         ],
         "expected_application_name": "Notepad",
     }]
+
+
+
+def test_invalid_launch_arguments_get_one_safe_correction_before_approval(tmp_path, monkeypatch):
+    class RepairingLaunchProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+            self.tool_feedback = []
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.launch",
+                    "arguments": {
+                        "executable": "Notepad",
+                        "browser_name": "Notepad",
+                    },
+                    "invocation_id": "invalid-launch-arguments",
+                }
+            self.tool_feedback = [
+                item.content for item in messages
+                if getattr(item, "role", None) == "tool"
+            ]
+            return {
+                "type": "tool_call",
+                "tool": "computer.launch",
+                "arguments": {"executable": "Notepad"},
+                "invocation_id": "corrected-launch-arguments",
+            }
+
+    launch_calls = []
+
+    def fake_launch(self, executable, approved=False):
+        launch_calls.append((executable, approved))
+        return {
+            "status": "awaiting_approval",
+            "application": r"C:\Windows\System32\notepad.exe",
+            "requested_application": executable,
+            "display_name": "Notepad",
+            "permission": "computer.launch",
+        }
+
+    monkeypatch.setattr(WindowsComputerUse, "launch", fake_launch)
+    provider = RepairingLaunchProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    result = runtime.send(session_id, "Open Notepad.")
+
+    assert result["status"] == "awaiting_approval"
+    assert result["tool"] == "computer.launch"
+    assert provider.calls == 2
+    assert provider.tool_feedback
+    assert "unsupported arguments for computer.launch" in provider.tool_feedback[-1]
+    assert "Allowed arguments: executable" in provider.tool_feedback[-1]
+    assert "No action was performed" in provider.tool_feedback[-1]
+    assert launch_calls == [("Notepad", False)]
+    tool_messages = [
+        __import__("json").loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["status"] == "failed"
+    assert tool_messages[0]["result"]["status"] == "invalid_arguments"
+    assert not any(
+        event.event_type == "tool.call.requested"
+        and event.payload.get("arguments", {}).get("browser_name")
+        for event in store.events(session_id)
+    )

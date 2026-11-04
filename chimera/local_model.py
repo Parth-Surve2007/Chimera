@@ -984,7 +984,13 @@ class LocalModelProvider:
                 "Mark an item completed only when actual tool evidence supports the outcome; mark it blocked when a real prerequisite is missing. "
                 "A checklist is progress metadata, never permission to execute an action or proof that work succeeded. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
-                + workspace_guidance +
+                + workspace_guidance + (
+                    "COMPUTER LAUNCH CONTRACT: computer.launch accepts exactly one argument: "
+                    '{"executable":"<installed app name or exact executable path>"}. '
+                    "For Notepad use {\"executable\":\"Notepad\"}. Never add browser_name, app_name, application, or any other key. "
+                    "The runtime will request operator approval before it starts the app. "
+                    if "computer.launch" in tool_ids else ""
+                ) +
                 "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "For explicit app-opening requests, inspect computer.list_applications for already-open apps. "
                 "Use computer.list_installed_applications to discover installed Start-menu apps, including packaged apps, "
@@ -1019,7 +1025,31 @@ class LocalModelProvider:
             item["id"] for item in compact_tools if isinstance(item.get("id"), str)
         )
         decision_schema = json.loads(json.dumps(AGENT_DECISION_SCHEMA))
-        if available_tool_ids:
+        if "computer.launch" in available_tool_ids:
+            # Give app launch its own constrained branch. The generic tool-call
+            # branch accepts arbitrary keys for compatibility with the wider
+            # ecosystem; that is too permissive for launch, where only the
+            # exact executable selector is valid.
+            other_tool_ids = [
+                tool_id for tool_id in available_tool_ids
+                if tool_id != "computer.launch"
+            ]
+            branches = [decision_schema["oneOf"][0]]
+            generic_tool_call = json.loads(json.dumps(decision_schema["oneOf"][1]))
+            if other_tool_ids:
+                generic_tool_call["properties"]["tool"]["enum"] = other_tool_ids
+                branches.append(generic_tool_call)
+            launch_tool_call = json.loads(json.dumps(decision_schema["oneOf"][1]))
+            launch_tool_call["properties"]["tool"]["enum"] = ["computer.launch"]
+            launch_tool_call["properties"]["arguments"] = {
+                "type": "object",
+                "properties": {"executable": {"type": "string"}},
+                "required": ["executable"],
+                "additionalProperties": False,
+            }
+            branches.append(launch_tool_call)
+            decision_schema["oneOf"] = branches
+        elif available_tool_ids:
             decision_schema["oneOf"][1]["properties"]["tool"]["enum"] = available_tool_ids
         else:
             decision_schema["oneOf"] = [decision_schema["oneOf"][0]]
