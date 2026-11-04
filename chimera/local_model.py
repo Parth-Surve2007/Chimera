@@ -366,6 +366,41 @@ def _is_repeated_assistant_response(response: str, messages) -> bool:
     return False
 
 
+def _is_stale_user_request_echo(response: str, messages) -> bool:
+    """Detect the earlier task being echoed after a short confirmation like 'yes'."""
+    history = list(messages)
+    latest_user_index = max(
+        (index for index, item in enumerate(history)
+         if str(getattr(item, "role", "user")).casefold() == "user"),
+        default=-1,
+    )
+    if latest_user_index <= 0:
+        return False
+    latest = _normalized_agent_text(getattr(history[latest_user_index], "content", ""))
+    confirmations = {
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead",
+        "do it", "please do", "proceed", "continue", "sounds good",
+        "thats right", "correct", "of course",
+    }
+    if latest not in confirmations:
+        return False
+    answer = _normalized_agent_text(response)
+    if len(answer) < 18:
+        return False
+    previous_user_requests = [
+        _normalized_agent_text(getattr(item, "content", ""))
+        for item in history[:latest_user_index]
+        if str(getattr(item, "role", "")).casefold() == "user"
+    ][-4:]
+    for previous in previous_user_requests:
+        if len(previous) < 24:
+            continue
+        ratio = min(len(answer), len(previous)) / max(len(answer), len(previous))
+        if ratio >= 0.88 and SequenceMatcher(None, answer, previous).ratio() >= 0.94:
+            return True
+    return False
+
+
 def _repetition_recovery_message(messages) -> str:
     """Produce a grounded fallback rather than replaying stale assistant text."""
     history = list(messages)
@@ -395,6 +430,15 @@ def _repetition_recovery_message(messages) -> str:
         return (
             f"I couldn't complete the latest step because {tool} returned {status}: {detail}. "
             "I did not complete the requested outcome, and I won't claim that I did."
+        )
+    if _is_stale_user_request_echo(
+        str(getattr(history[latest_user_index], "content", "")),
+        history,
+    ):
+        return (
+            "Your latest message was a confirmation to continue the earlier task. "
+            "I repeated the original request instead of acting on it. No new action was taken, "
+            "and the requested task remains incomplete."
         )
     return (
         "I repeated an earlier response instead of addressing your latest request, even after retrying. "
@@ -694,6 +738,9 @@ class LocalModelProvider:
                 "Use only exact tool IDs and valid arguments from TOOLS. Never invent IDs or results. "
                 "Never echo the latest USER message or repeat an earlier ASSISTANT answer. "
                 "Address the newest request with a useful answer or one necessary clarification. "
+                "When the latest user message is a short confirmation such as yes, okay or go ahead, continue the unresolved goal "
+                "from earlier messages and the persistent checklist; do not treat the confirmation as a new standalone task. "
+                "Do not repeat an earlier user request as your answer, and do not switch to document creation unless the goal requires it. "
                 "Check intent, preconditions, the best registered capability, latest tool evidence and the next useful step. "
                 "Keep reasoning private. Respect tool failures: never claim success or repeat identical arguments. "
                 "Choose an alternate registered route only when evidence supports it; otherwise explain the blocker. "
@@ -792,6 +839,15 @@ class LocalModelProvider:
         elif (
             isinstance(parsed, dict)
             and parsed.get("type") == "message"
+            and _is_stale_user_request_echo(parsed.get("content", ""), recent)
+        ):
+            recovery_reason = (
+                "The previous candidate repeated an earlier user task after the latest user message "
+                "was a short confirmation. Continue the unresolved goal; do not echo the old request."
+            )
+        elif (
+            isinstance(parsed, dict)
+            and parsed.get("type") == "message"
             and _is_repeated_assistant_response(parsed.get("content", ""), recent)
         ):
             recovery_reason = "The previous candidate repeated an earlier assistant answer and ignored the latest user request."
@@ -845,7 +901,10 @@ class LocalModelProvider:
             if (
                 isinstance(parsed, dict)
                 and parsed.get("type") == "message"
-                and _is_repeated_assistant_response(parsed.get("content", ""), recent)
+                and (
+                    _is_stale_user_request_echo(parsed.get("content", ""), recent)
+                    or _is_repeated_assistant_response(parsed.get("content", ""), recent)
+                )
             ):
                 metrics["repeated_assistant_response_blocked"] = True
                 parsed = {
