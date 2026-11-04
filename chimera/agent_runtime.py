@@ -483,7 +483,7 @@ class AgentRuntime:
             "computer.cua_list_apps": {},
             "computer.cua_list_windows": {"session_id": str},
             "computer.cua_inspect_window": {"session_id": str, "window_id": int},
-            "computer.cua_capture_window": {"session_id": str, "window_id": int},
+            "computer.cua_capture_window": {"session_id": str, "window_id": int, "question": str},
             "computer.cua_click": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
             "computer.cua_click_foreground": {"session_id": str, "window_id": int, "snapshot_ref": str, "element_token": str, "x": (int, float), "y": (int, float), "button": str, "count": int},
             "computer.cua_draw_path": {"session_id": str, "window_id": int, "snapshot_ref": str, "canvas_element_token": str, "strokes": list, "duration_ms": int, "steps": int},
@@ -1823,6 +1823,7 @@ class AgentRuntime:
                 result_data = self.computer.cua_inspect_window(
                     args["session_id"], session_id, args["window_id"],
                     include_screenshot=True,
+                    question=args.get("question"),
                 )
             elif operation in {"computer.cua_click", "computer.cua_click_foreground"}:
                 result_data = self.computer.cua_click(

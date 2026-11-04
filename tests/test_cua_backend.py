@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import pytest
 import io
 from enum import Enum
 from types import SimpleNamespace
@@ -404,3 +405,220 @@ def test_cua_discovery_contract_returns_bounded_application_and_exact_window_met
         assert windows["windows"][0]["pid"] == 4321
     finally:
         backend.close()
+
+
+def test_cua_snapshot_image_is_available_only_for_the_exact_fresh_screenshot():
+    driver = FakeDriver()
+    backend = _backend(driver)
+    try:
+        state = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        image, error = backend.snapshot_image(
+            "conversation-a", 4321, 77, state["snapshot_ref"],
+        )
+        assert error is None
+        assert image is not None
+        assert image.size == (100, 100)
+
+        foreign, foreign_error = backend.snapshot_image(
+            "conversation-b", 4321, 77, state["snapshot_ref"],
+        )
+        assert foreign is None
+        assert "different conversation" in foreign_error
+    finally:
+        backend.close()
+
+
+def test_agent_runtime_validates_cua_click_forms_before_permission_prompt():
+    from chimera.agent_runtime import AgentRuntime
+
+    valid_token = {
+        "session_id": "authorized-session",
+        "window_id": 77,
+        "snapshot_ref": "fresh-snapshot",
+        "element_token": "s00000001:1",
+    }
+    assert AgentRuntime._validate_arguments(
+        "computer.cua_click", valid_token,
+    ) is None
+
+    valid_pixels = {
+        "session_id": "authorized-session",
+        "window_id": 77,
+        "snapshot_ref": "fresh-snapshot",
+        "x": 32.5,
+        "y": 48,
+    }
+    assert AgentRuntime._validate_arguments(
+        "computer.cua_click", valid_pixels,
+    ) is None
+
+    invalid = [
+        {key: value for key, value in valid_token.items() if key != "element_token"},
+        {**valid_token, "x": 1, "y": 2},
+        {**valid_pixels, "y": True},
+        {**valid_token, "window_id": True},
+    ]
+    for arguments in invalid:
+        with pytest.raises(ValueError):
+            AgentRuntime._validate_arguments("computer.cua_click", arguments)
+
+
+def test_cua_mutations_remain_build_mode_only_and_registered_as_approved_actions():
+    from chimera.task_execution import TaskPolicy
+    from chimera.tools import tool_catalog
+
+    operations = tool_catalog()["operations"]
+    assert operations["computer.cua_click"]["permission"] == "computer.input"
+    assert operations["computer.cua_draw_path"]["permission"] == "computer.input"
+    assert operations["computer.cua_capture_window"]["permission"] == "computer.screenshot"
+    assert operations["computer.cua_click_foreground"]["permission"] == "computer.input.foreground"
+
+    with pytest.raises(PermissionError, match="read-only"):
+        TaskPolicy.validate(
+            "plan", "computer.cua_click_foreground", "computer.input.foreground",
+        )
+    assert TaskPolicy.validate(
+        "build", "computer.cua_click_foreground", "computer.input.foreground",
+    )
+
+
+def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import chimera.agent_runtime as agent_runtime_module
+    import chimera.applications.registry as application_registry_module
+    import chimera.applications.dispatch as application_dispatch_module
+    from chimera.agent_runtime import AgentRuntime, AgentSessionStore
+
+    class FakeComputer:
+        def __init__(self):
+            self.uia = object()
+            self.visual_perception = object()
+            self.cua = object()
+            self.sessions = {
+                "cua-session": SimpleNamespace(
+                    session_id="cua-session",
+                    pid=4321,
+                    executable="C:/Windows/mspaint.exe",
+                    process_create_time=12.0,
+                    owner_session_id="conversation-a",
+                )
+            }
+            self.foreground_ready = False
+
+        def _identity_is_current(self, _identity):
+            return True
+
+        def interaction_inventory(self):
+            return []
+
+        def cua_foreground_retry_available(self, _app_session_id, _owner_session_id):
+            return self.foreground_ready
+
+    fake_computer = FakeComputer()
+    # This is a pure catalog-policy test. Do not initialize COM/UIA or scan
+    # installed application connectors on the hosted Windows test runner.
+    monkeypatch.setattr(
+        agent_runtime_module, "ComputerSessionManager",
+        lambda: fake_computer,
+    )
+    empty_registry = SimpleNamespace(discover_all=lambda: None)
+    monkeypatch.setattr(
+        application_registry_module, "get_application_registry",
+        lambda: empty_registry,
+    )
+    monkeypatch.setattr(
+        application_dispatch_module, "application_tool_catalog",
+        lambda _registry: [],
+    )
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "agent.sqlite"),
+        provider=object(),
+    )
+    session = {"session_id": "conversation-a", "workspace": None, "mode": "build"}
+
+    before = runtime._protocol_catalog(session)
+    before_ids = {item["id"] for item in before["tools"]}
+    assert "computer.cua_click" in before_ids
+    assert "computer.cua_click_foreground" not in before_ids
+
+    fake_computer.foreground_ready = True
+    after = runtime._protocol_catalog(session)
+    after_ids = {item["id"] for item in after["tools"]}
+    assert "computer.cua_click_foreground" in after_ids
+
+
+def test_manager_restricts_cua_windows_to_launch_approved_hwnd_set():
+    from types import SimpleNamespace
+    from chimera.computer_runtime import ComputerSessionManager
+
+    class FakeWindowsBackend:
+        def window_process_id(self, hwnd):
+            return 4321 if hwnd in {77, 78} else None
+
+    class FakeCua:
+        def __init__(self):
+            self.inspect_calls = []
+            self.click_calls = []
+            self.draw_calls = []
+
+        def list_windows(self, pid):
+            return {
+                "status": "completed",
+                "windows": [
+                    {"pid": pid, "window_id": 77, "title": "Approved"},
+                    {"pid": pid, "window_id": 78, "title": "Same process, unapproved window"},
+                ],
+                "count": 2,
+            }
+
+        def inspect_window(self, owner, pid, window_id, **kwargs):
+            self.inspect_calls.append((owner, pid, window_id))
+            return {"status": "completed", "snapshot_ref": "fresh"}
+
+        def click(self, *args, **kwargs):
+            self.click_calls.append((args, kwargs))
+            return {"status": "action_returned"}
+
+        def draw_path(self, *args, **kwargs):
+            self.draw_calls.append((args, kwargs))
+            return {"status": "completed"}
+
+    manager = ComputerSessionManager.__new__(ComputerSessionManager)
+    manager.backend = FakeWindowsBackend()
+    manager.cua = FakeCua()
+    identity = SimpleNamespace(
+        pid=4321,
+        executable="C:/Windows/mspaint.exe",
+        authorized_hwnds=(77,),
+    )
+    manager._cua_authorized_identity = lambda _app, _owner: identity
+
+    listing = manager.cua_list_windows("app-session", "conversation-a")
+    assert listing["status"] == "completed"
+    assert [window["window_id"] for window in listing["windows"]] == [77]
+    assert listing["rejected_unapproved_windows"] == 1
+
+    approved_inspection = manager.cua_inspect_window(
+        "app-session", "conversation-a", 77,
+    )
+    assert approved_inspection["status"] == "completed"
+    rejected_inspection = manager.cua_inspect_window(
+        "app-session", "conversation-a", 78,
+    )
+    assert rejected_inspection["status"] == "blocked"
+    assert len(manager.cua.inspect_calls) == 1
+
+    rejected_click = manager.cua_click(
+        "app-session", "conversation-a", 78, "snapshot",
+        element_token="s00000001:1",
+    )
+    assert rejected_click["status"] == "blocked"
+    rejected_draw = manager.cua_draw_path(
+        "app-session", "conversation-a", 78, "snapshot",
+        "s00000001:1", [[[0.1, 0.1], [0.9, 0.9]]],
+    )
+    assert rejected_draw["status"] == "blocked"
+    assert manager.cua.click_calls == []
+    assert manager.cua.draw_calls == []
