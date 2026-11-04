@@ -1013,3 +1013,64 @@ def test_repeated_unavailable_desktop_tool_returns_safe_recovery_message(tmp_pat
         "computer.list_applications",
     ]
     assert decision["_metrics"]["unavailable_desktop_tool_blocked"] == "computer.inspect_window"
+
+
+
+def test_computer_launch_arguments_are_constrained_to_executable(tmp_path):
+    captured = {}
+    provider = LocalModelProvider(
+        LocalModelConfig(None, None, context=4096, max_tokens=384)
+    )
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["schema"] = kwargs["json_schema"]
+        return {
+            "type": "message",
+            "content": "Ready to request Notepad launch approval.",
+        }, {"context": 4096}
+
+    provider.structured_with_metrics = fake_structured
+    decision = provider.decide(
+        [SimpleNamespace(role="user", content="Open Notepad.")],
+        {
+            "version": 1,
+            "tools": [
+                {
+                    "id": "computer.launch",
+                    "description": (
+                        "Launch one installed Windows app after approval. "
+                        "EXACTLY one argument: executable (string), e.g. Notepad. "
+                        "Never pass browser_name or app_name."
+                    ),
+                    "arguments": {"executable": "string"},
+                    "permission": "computer.launch",
+                },
+                {
+                    "id": "computer.list_applications",
+                    "description": "List visible applications.",
+                    "arguments": {},
+                    "permission": "computer.observe",
+                },
+            ],
+            "authorized_applications": [],
+        },
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert "For Notepad use {\"executable\":\"Notepad\"}" in captured["prompt"]
+    assert "Never add browser_name" in captured["prompt"]
+    launch_variant = next(
+        variant for variant in captured["schema"]["oneOf"]
+        if variant.get("properties", {}).get("tool", {}).get("enum") == ["computer.launch"]
+    )
+    arguments = launch_variant["properties"]["arguments"]
+    assert arguments["properties"] == {"executable": {"type": "string"}}
+    assert arguments["required"] == ["executable"]
+    assert arguments["additionalProperties"] is False
+    generic_variant = next(
+        variant for variant in captured["schema"]["oneOf"]
+        if "computer.list_applications" in variant.get("properties", {}).get("tool", {}).get("enum", [])
+    )
+    assert "computer.launch" not in generic_variant["properties"]["tool"]["enum"]
