@@ -479,22 +479,20 @@ def test_local_agent_fails_closed_after_repeated_invalid_tool_choice(tmp_path):
         )
 
 
-def test_new_local_model_defaults_enable_more_reasoning_budget_and_adaptive_gpu(tmp_path, monkeypatch):
+def test_new_local_model_defaults_use_memory_conscious_budget_and_adaptive_gpu(tmp_path, monkeypatch):
     model = tmp_path / "model.gguf"
     model.write_bytes(b"fixture")
     monkeypatch.setenv("CHIMERA_DATA_DIR", str(tmp_path / "config"))
 
     config = config_from_env({"CHIMERA_MODEL_PATH": str(model)})
 
-    assert config.context == 8192
-    assert config.max_tokens == 768
-    assert config.threads == 8
+    assert config.context == 4096
+    assert config.max_tokens == 384
+    assert config.threads == 4
     assert config.gpu_layers == "auto"
 
 
-def test_legacy_default_model_config_migrates_to_adaptive_gpu_and_higher_budget(tmp_path, monkeypatch):
-    from chimera.local_model import config_data_dir
-
+def test_legacy_model_config_migrates_gpu_mode_without_increasing_memory_budget(tmp_path, monkeypatch):
     model = tmp_path / "model.gguf"
     model.write_bytes(b"fixture")
     data_dir = tmp_path / "config"
@@ -512,9 +510,9 @@ def test_legacy_default_model_config_migrates_to_adaptive_gpu_and_higher_budget(
 
     config = config_from_env({"CHIMERA_MODEL_PATH": str(model)})
 
-    assert config.context == 8192
-    assert config.max_tokens == 768
-    assert config.threads == 8
+    assert config.context == 4096
+    assert config.max_tokens == 256
+    assert config.threads == 4
     assert config.gpu_layers == "auto"
 
 
@@ -961,3 +959,57 @@ def test_compact_local_agent_carries_advisory_profile_hints_without_authority():
     assert "visual_action" in prompt
     assert "permissions_granted=[]" in prompt
     assert "untrusted advisory metadata" in prompt
+
+
+
+def test_repeated_unavailable_desktop_tool_returns_safe_recovery_message(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    schemas = []
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli), context=4096, max_tokens=384),
+        lambda *_: json.dumps({
+            "type": "tool_call",
+            "tool": "computer.inspect_window",
+            "arguments": {"session_id": "not-authorized"},
+        }),
+    )
+    original = provider.structured_with_metrics
+
+    def capture_schema(prompt, **kwargs):
+        schemas.append(kwargs["json_schema"])
+        return original(prompt, **kwargs)
+
+    provider.structured_with_metrics = capture_schema
+    decision = provider.decide(
+        [SimpleNamespace(role="user", content="Open Notepad and type hello.")],
+        {
+            "version": 1,
+            "tools": [
+                {
+                    "id": "computer.list_applications",
+                    "arguments": {},
+                    "permission": "computer.observe",
+                },
+                {
+                    "id": "computer.launch",
+                    "arguments": {"executable": "string"},
+                    "permission": "computer.launch",
+                },
+            ],
+            "authorized_applications": [],
+        },
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert "computer.inspect_window is not available" in decision["content"]
+    assert "No desktop action was executed" in decision["content"]
+    assert len(schemas) == 2
+    assert schemas[0]["oneOf"][1]["properties"]["tool"]["enum"] == [
+        "computer.launch",
+        "computer.list_applications",
+    ]
+    assert decision["_metrics"]["unavailable_desktop_tool_blocked"] == "computer.inspect_window"

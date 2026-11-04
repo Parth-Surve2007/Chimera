@@ -527,8 +527,13 @@ class AgentRuntime:
             "computer.list_windows", "computer.cua_list_apps",
         }:
             return
-        if set(arguments) - set(expected):
-            raise ValueError(f"unsupported arguments for {operation}")
+        unsupported = sorted(set(arguments) - set(expected))
+        if unsupported:
+            allowed = ", ".join(sorted(expected)) or "(no arguments)"
+            raise ValueError(
+                f"unsupported arguments for {operation}: {unsupported}. "
+                f"Allowed arguments: {allowed}"
+            )
         for name, kind in expected.items():
             if name not in arguments:
                 continue
@@ -1181,7 +1186,6 @@ class AgentRuntime:
                 if operation not in tool_catalog()["operations"]: raise ValueError(f"unregistered tool: {tool_id}")
                 permission = tool_catalog()["operations"][operation]["permission"]
 
-            self._validate_arguments(operation, decision["arguments"])
             invocation = decision.get("invocation_id") or uuid.uuid4().hex
 
             # A small model can loop on the same failing tool call. Detect an
@@ -1267,6 +1271,46 @@ class AgentRuntime:
                             "tool": tool_id,
                         }
                     continue
+
+            # Reject malformed calls before any policy check or side effect,
+            # but return a structured observation so the model can repair one
+            # bad argument set instead of failing the entire user turn.
+            try:
+                self._validate_arguments(operation, decision["arguments"])
+            except (TypeError, ValueError) as exc:
+                # Keep connector and write-action contracts fail-closed. One
+                # bounded repair is appropriate only for read-only computer
+                # observations, where rejecting extra selector fields cannot
+                # conceal or partially execute a mutation.
+                if not (tool_id.startswith("computer.") and permission == "computer.observe"):
+                    raise
+                validation_error = (
+                    "Tool arguments were rejected before execution: "
+                    + " ".join(str(exc).split())[:420]
+                    + ". No action was performed. Reissue this tool with only its registered arguments."
+                )
+                payload = {
+                    "invocation_id": invocation,
+                    "tool": tool_id,
+                    "arguments": decision["arguments"],
+                    "result": {"status": "invalid_arguments", "reason": validation_error},
+                    "status": "failed",
+                    "error": validation_error,
+                }
+                self.store.add_message(
+                    session_id, "tool",
+                    json.dumps(payload, separators=(",", ":")),
+                )
+                self._record(session_id, "tool.failed", {
+                    "turn_id": turn_id,
+                    "invocation_id": invocation,
+                    "tool": tool_id,
+                    "status": "failed",
+                    "data": payload["result"],
+                    "error": validation_error,
+                })
+                max_tools -= 1
+                continue
 
             self._record(session_id, "tool.call.requested", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"]})
             if tool_id.startswith("workspace."):

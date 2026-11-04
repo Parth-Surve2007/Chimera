@@ -329,6 +329,32 @@ class WindowsComputerUse:
         raw = str(application or "").strip().strip('"')
         if raw.casefold().startswith("appsfolder:"):
             return self._resolve_start_menu_target(raw)
+
+        # Explicit paths are an operator-selected executable identity and must
+        # never be reinterpreted as a Start-menu shortcut.
+        direct = Path(raw).expanduser()
+        if direct.is_absolute() or any(separator in raw for separator in ("\\", "/", ":")):
+            path = self._resolve_executable(raw)
+            if path is None:
+                return None
+            return {
+                "kind": "executable",
+                "application": str(path),
+                "path": path,
+                "display_name": path.stem,
+                "expected_process_names": [path.name],
+            }
+
+        # Prefer the exact Start-menu identity for bare names. Modern packaged
+        # Windows apps (notably Windows 11 Notepad) may redirect a System32
+        # execution alias to a WindowsApps process with a different image path.
+        # Activating the exact AUMID gives the runtime the real live PID/window
+        # to authorize instead of comparing that redirected process to the
+        # alias stub executable.
+        start_menu_target = self._resolve_start_menu_target(raw)
+        if start_menu_target is not None:
+            return start_menu_target
+
         path = self._resolve_executable(raw)
         if path is not None:
             return {
@@ -338,7 +364,7 @@ class WindowsComputerUse:
                 "display_name": path.stem,
                 "expected_process_names": [path.name],
             }
-        return self._resolve_start_menu_target(raw)
+        return None
 
     def launch(self, executable: str, approved: bool = False) -> dict:
         target = self._resolve_launch_target(executable)

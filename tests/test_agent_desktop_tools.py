@@ -127,8 +127,11 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
     assert "No user-facing applications found" not in captured["prompt"]
 
 
-def test_new_local_model_context_default_is_eight_k():
-    assert LocalModelConfig(None, None).context == 8192
+def test_new_local_model_context_default_is_memory_conscious():
+    config = LocalModelConfig(None, None)
+    assert config.context == 4096
+    assert config.max_tokens == 384
+    assert config.threads == 4
 
 
 def test_ui_removes_verify_controls_and_optional_langflow_setup():
@@ -144,6 +147,8 @@ def test_ui_removes_verify_controls_and_optional_langflow_setup():
     assert "auto_scroll=True" in ui
     assert "self._context_rail()," not in ui
     assert "list_sessions(limit=6)" in ui
+    assert "APPLY LOW-MEMORY PRESET" in ui
+    assert "def _apply_low_memory_preset" in ui
 
 
 def test_workspace_file_creation_rejects_absolute_host_paths_before_approval(tmp_path):
@@ -584,3 +589,301 @@ def test_authorized_notepad_text_flows_through_approval_into_verified_pdf(tmp_pa
     assert export_result["status"] == "completed"
     assert export_result["result"]["independent_verification"] is True
     assert export_result["result"]["text_verified"] is True
+
+
+
+def test_invalid_readonly_computer_arguments_return_one_repair_observation(tmp_path):
+    class RepairingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+            self.seen_tool_ids = set()
+            self.tool_feedback = []
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            self.seen_tool_ids = {item["id"] for item in catalog["tools"]}
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.inspect_window",
+                    "arguments": {"session_id": "not-authorized", "hwnd": 123},
+                }
+            self.tool_feedback = [
+                item.content for item in messages
+                if getattr(item, "role", None) == "tool"
+            ]
+            return {
+                "type": "message",
+                "content": "I corrected the inspection arguments. No application was inspected.",
+            }
+
+    provider = RepairingProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    identity = SimpleNamespace(
+        session_id="authorized-notepad",
+        owner_session_id=session_id,
+        pid=4242,
+        executable="C:/Windows/System32/notepad.exe",
+        process_create_time=1.0,
+        authorized_hwnds=(),
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    runtime.computer._identity_is_current = lambda current: current is identity
+
+    result = runtime.send(session_id, "Inspect the authorized application windows.")
+
+    assert result["status"] == "completed", result
+    assert provider.calls == 2
+    assert "computer.inspect_window" in provider.seen_tool_ids
+    assert provider.tool_feedback
+    assert "Allowed arguments: session_id" in provider.tool_feedback[-1]
+    assert "No action was performed" in provider.tool_feedback[-1]
+    tool_messages = [
+        __import__("json").loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool"] == "computer.inspect_window"
+    assert tool_messages[0]["status"] == "failed"
+    assert tool_messages[0]["result"]["status"] == "invalid_arguments"
+    assert not any(
+        event.event_type == "tool.call.requested"
+        for event in store.events(session_id)
+    )
+
+
+def test_local_model_prompt_states_inspect_window_argument_contract():
+    captured = {}
+    provider = LocalModelProvider(LocalModelConfig(None, None, context=4096, max_tokens=384))
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"type": "message", "content": "Waiting for an authorized application."}, {"context": 4096}
+
+    provider.structured_with_metrics = fake_structured
+    provider.decide(
+        [SimpleNamespace(role="user", content="Inspect the app windows.")],
+        {
+            "tools": [
+                {
+                    "id": "computer.inspect_window",
+                    "description": "List authorized app windows. Pass only session_id.",
+                    "arguments": {"session_id": "string"},
+                    "permission": "computer.observe",
+                },
+                {
+                    "id": "computer.inspect_elements",
+                    "description": "Inspect the selected UI window.",
+                    "arguments": {
+                        "session_id": "string",
+                        "hwnd": "integer",
+                        "depth": "integer",
+                        "limit": "integer",
+                    },
+                    "permission": "computer.observe",
+                },
+            ],
+            "authorized_applications": [],
+        },
+    )
+
+    assert "pass exactly {session_id}" in captured["prompt"]
+    assert "Do not pass hwnd, window_id, title, or filters" in captured["prompt"]
+    assert "pass it with session_id to computer.inspect_elements" in captured["prompt"]
+
+
+
+def test_repeated_invalid_desktop_arguments_are_blocked_after_one_retry(tmp_path):
+    class RepeatingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            return {
+                "type": "tool_call",
+                "tool": "computer.inspect_window",
+                "arguments": {"session_id": "not-authorized", "hwnd": 123},
+            }
+
+    provider = RepeatingProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    identity = SimpleNamespace(
+        session_id="authorized-notepad",
+        owner_session_id=session_id,
+        pid=4242,
+        executable="C:/Windows/System32/notepad.exe",
+        process_create_time=1.0,
+        authorized_hwnds=(),
+    )
+    runtime.computer.sessions[identity.session_id] = identity
+    runtime.computer._identity_is_current = lambda current: current is identity
+
+    result = runtime.send(session_id, "Inspect the authorized application windows.")
+
+    assert result["status"] == "failed"
+    assert provider.calls == 3
+    messages = [
+        __import__("json").loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert len(messages) == 3
+    assert messages[0]["result"]["status"] == "invalid_arguments"
+    assert messages[1]["status"] == "blocked"
+    assert messages[2]["status"] == "blocked"
+    assert not any(
+        event.event_type == "tool.call.requested"
+        for event in store.events(session_id)
+    )
+
+
+
+def test_packaged_notepad_launch_authorizes_actual_windowsapps_process_before_inspection(tmp_path, monkeypatch):
+    class LaunchAndInspectProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.calls = 0
+            self.inspection_was_advertised = False
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            ids = {item["id"] for item in catalog["tools"]}
+            if self.calls == 1:
+                assert "computer.launch" in ids
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.launch",
+                    "arguments": {"executable": "Notepad"},
+                    "invocation_id": "launch-packaged-notepad",
+                }
+            if self.calls == 2:
+                self.inspection_was_advertised = "computer.inspect_window" in ids
+                assert self.inspection_was_advertised
+                return {
+                    "type": "tool_call",
+                    "tool": "computer.inspect_window",
+                    "arguments": {"session_id": "packaged-notepad-session"},
+                    "invocation_id": "inspect-packaged-notepad",
+                }
+            observed = [
+                item.content for item in messages
+                if getattr(item, "role", None) == "tool"
+            ]
+            assert any("Untitled - Notepad" in item for item in observed)
+            return {
+                "type": "message",
+                "content": "Notepad was opened, authorized, and its window was inspected.",
+            }
+
+    import chimera.agent_runtime as agent_runtime_module
+
+    packaged_application = "appsfolder:Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+    launch_calls = []
+
+    def fake_launch(self, executable, approved=False):
+        launch_calls.append((executable, approved))
+        if not approved:
+            return {
+                "status": "awaiting_approval",
+                "application": packaged_application,
+                "requested_application": "Notepad",
+                "display_name": "Notepad",
+                "launch_kind": "appsfolder",
+                "permission": "computer.launch",
+            }
+        return {
+            "status": "completed",
+            "pid": 456,
+            "spawned_pid": 111,
+            "executable": None,
+            "application": packaged_application,
+            "display_name": "Notepad",
+            "launch_kind": "appsfolder",
+            "verification": "visible_window_process_match",
+            "windows": [
+                {"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"},
+            ],
+        }
+
+    monkeypatch.setattr(agent_runtime_module.WindowsComputerUse, "launch", fake_launch)
+    provider = LaunchAndInspectProvider()
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "chimera.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    authorization_calls = []
+
+    def authorize_actual_process(
+        pid,
+        executable=None,
+        owner_session_id=None,
+        authorized_windows=None,
+        expected_application_name=None,
+    ):
+        authorization_calls.append({
+            "pid": pid,
+            "executable": executable,
+            "owner_session_id": owner_session_id,
+            "authorized_windows": authorized_windows,
+            "expected_application_name": expected_application_name,
+        })
+        identity = SimpleNamespace(
+            session_id="packaged-notepad-session",
+            owner_session_id=session_id,
+            pid=pid,
+            executable=r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad\Notepad.exe",
+            process_create_time=1.0,
+            authorized_hwnds=(77,),
+        )
+        runtime.computer.sessions[identity.session_id] = identity
+        return identity
+
+    monkeypatch.setattr(runtime.computer, "create", authorize_actual_process)
+    monkeypatch.setattr(
+        runtime.computer,
+        "_identity_is_current",
+        lambda identity: identity is runtime.computer.sessions.get(identity.session_id),
+    )
+    monkeypatch.setattr(
+        runtime.computer,
+        "observe",
+        lambda app_session_id: SimpleNamespace(
+            session_id=app_session_id,
+            windows=[{"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"}],
+            backend="uia",
+            application={"profile": {"display_name": "Windows Notepad"}},
+        ),
+    )
+
+    pending = runtime.send(
+        session_id,
+        "Open Notepad and inspect its window.",
+    )
+    assert pending["status"] == "awaiting_approval"
+    assert pending["tool"] == "computer.launch"
+
+    result = runtime.approve_pending(session_id, True)
+
+    assert result["status"] == "completed"
+    assert "Notepad was opened, authorized, and its window was inspected." in result["message"].content
+    assert provider.calls == 3
+    assert provider.inspection_was_advertised is True
+    assert launch_calls == [("C:\\Windows\\System32\\notepad.exe", False), (packaged_application, True)] or launch_calls == [("Notepad", False), (packaged_application, True)]
+    assert authorization_calls == [{
+        "pid": 456,
+        "executable": None,
+        "owner_session_id": session_id,
+        "authorized_windows": [
+            {"hwnd": 77, "pid": 456, "title": "Untitled - Notepad"},
+        ],
+        "expected_application_name": "Notepad",
+    }]

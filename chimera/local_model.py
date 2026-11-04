@@ -63,10 +63,10 @@ def _run_streaming(command, timeout, cancel_event=None, on_stdout=None):
 class LocalModelConfig:
     model_path: Path | None
     cli_path: str | None
-    context: int = 8192
-    max_tokens: int = 768
+    context: int = 4096
+    max_tokens: int = 384
     timeout: float = 120
-    threads: int = 8
+    threads: int = 4
     gpu_layers: int | str = "auto"
     server_path: str | None = None
 
@@ -165,23 +165,16 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
         except ValueError: raise ValueError(f"{name} must be a positive integer")
         if value < 1: raise ValueError(f"{name} must be a positive integer")
         return value
-    # Version-one configurations inherited conservative defaults, including
-    # an explicit zero GPU layers. Migrate those old defaults once to
-    # llama.cpp's memory-aware auto offload while preserving custom tuning.
-    legacy_config = "config_version" not in persisted
-    context_default = persisted.get("context", 8192)
-    token_default = persisted.get("max_tokens", 768)
-    thread_default = persisted.get("threads", 8)
+    # Preserve existing user-selected inference budgets. Only migrate the
+    # legacy explicit CPU-only offload setting to llama.cpp's adaptive mode;
+    # never silently increase context, output tokens, or CPU thread count.
+    legacy_config = bool(persisted) and "config_version" not in persisted
+    context_default = persisted.get("context", 4096)
+    token_default = persisted.get("max_tokens", 384)
+    thread_default = persisted.get("threads", 4)
     gpu_default = persisted.get("gpu_layers", "auto")
-    if legacy_config:
-        if context_default == 4096:
-            context_default = 8192
-        if token_default == 256:
-            token_default = 768
-        if thread_default == 4:
-            thread_default = 8
-        if gpu_default == 0:
-            gpu_default = "auto"
+    if legacy_config and gpu_default == 0:
+        gpu_default = "auto"
     raw_gpu_layers = str(env.get("CHIMERA_MODEL_GPU_LAYERS", gpu_default)).strip().casefold()
     if raw_gpu_layers == "auto":
         gpu_layers = "auto"
@@ -899,9 +892,14 @@ class LocalModelProvider:
             "No workspace tools are available in this turn: do not call workspace tools or invent host filesystem paths. "
         )
         multi_window_guidance = (
-            "If an authorized application has multiple top-level windows, call computer.inspect_window first and select the exact visible hwnd by title/purpose. "
-            "Pass that hwnd to computer.inspect_elements; use depth 4-6 only when the needed controls are deeper, and keep the element limit bounded. "
-            if "computer.inspect_window" in tool_ids and "computer.inspect_elements" in tool_ids else ""
+            "For computer.inspect_window, pass exactly {session_id} and no other fields. It returns the authorized windows with their hwnd and title. "
+            "Do not pass hwnd, window_id, title, or filters to computer.inspect_window. Choose the exact returned hwnd, then pass it with session_id "
+            "to computer.inspect_elements; use optional depth and limit only when needed. "
+            if "computer.inspect_window" in tool_ids and "computer.inspect_elements" in tool_ids else
+            (
+                "For computer.inspect_window, pass exactly {session_id}; it returns authorized windows with hwnd and title. Do not pass hwnd or title to it. "
+                if "computer.inspect_window" in tool_ids else ""
+            )
         )
         app_control_guidance = (
             "Use fresh UIA references from inspect_elements; only invoke actions listed for the observed control. "
@@ -1141,10 +1139,21 @@ class LocalModelProvider:
             if isinstance(parsed, dict) and parsed.get("type") == "tool_call":
                 selected_tool = parsed.get("tool")
                 if not isinstance(selected_tool, str) or selected_tool not in available_tool_ids:
-                    raise ValueError(
-                        f"the local model selected an unregistered tool ID {selected_tool!r}; "
-                        "no tool was executed. For code questions, ask for the code directly in chat."
-                    )
+                    if isinstance(selected_tool, str) and selected_tool.startswith("computer."):
+                        metrics["unavailable_desktop_tool_blocked"] = selected_tool
+                        parsed = {
+                            "type": "message",
+                            "content": (
+                                f"I couldn't safely continue because {selected_tool} is not available in this conversation. "
+                                "No desktop action was executed. Open Applications, refresh the live application list, and authorize "
+                                "the exact running app for this conversation. Then start a new request so I can inspect the authorized window."
+                            ),
+                        }
+                    else:
+                        raise ValueError(
+                            f"the local model selected an unregistered tool ID {selected_tool!r}; "
+                            "no tool was executed. For code questions, ask for the code directly in chat."
+                        )
         metrics["schema_provenance"] = "chimera.agent_decision.v3"
         metrics["prompt_chars"] = len(prompt)
         if not isinstance(parsed, dict):
