@@ -1512,10 +1512,60 @@ class AgentRuntime:
                 needs_approval = permission not in {"workspace.read", "computer.observe"}
 
             if tool_id == "computer.launch":
+                requested_application = str(decision["arguments"].get("executable", "")).strip()
+                existing_application = self._authorized_application_for_launch(
+                    session_id, requested_application,
+                )
+                if existing_application is not None:
+                    identity, windows, target = existing_application
+                    initial_observation = self._authorized_observation_summary(identity.session_id)
+                    result_data = {
+                        "status": "completed",
+                        "already_authorized": True,
+                        "execution": "reused_existing_authorization",
+                        "requested_application": requested_application,
+                        "application": target.get("application"),
+                        "display_name": target.get("display_name"),
+                        "pid": identity.pid,
+                        "executable": identity.executable,
+                        "windows": windows,
+                        "computer_session_id": identity.session_id,
+                        "control_authorized": True,
+                        "authorization_scope": "this conversation and exact process identity",
+                        "initial_observation": initial_observation,
+                        "next_step": (
+                            "This application is already open and authorized. Do not launch it again. "
+                            "Continue the user's requested work using this computer_session_id and the fresh "
+                            "initial_observation elements. For text entry, target the observed editor control."
+                        ),
+                    }
+                    payload = {
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "arguments": decision["arguments"],
+                        "result": result_data,
+                        "status": "completed",
+                        "error": None,
+                    }
+                    self.store.add_message(
+                        session_id, "tool",
+                        json.dumps(payload, separators=(",", ":")),
+                    )
+                    self._record(session_id, "tool.completed", {
+                        "turn_id": turn_id,
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "status": "completed",
+                        "data": result_data,
+                        "already_authorized": True,
+                    })
+                    max_tools -= 1
+                    continue
+
                 # Resolve the friendly app name before presenting the approval
                 # card so the operator approves one exact executable.
                 launch_preflight = WindowsComputerUse(workspace).launch(
-                    decision["arguments"].get("executable", ""), approved=False
+                    requested_application, approved=False
                 )
                 if launch_preflight.get("status") != "awaiting_approval":
                     error = launch_preflight.get("reason", "application executable could not be resolved")
