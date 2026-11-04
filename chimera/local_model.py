@@ -755,7 +755,7 @@ class LocalModelProvider:
                 "do not invent a python, code, shell, or execution tool. Only call an external action tool when the user explicitly asks "
                 "you to create/edit a file, run something, or interact with an application. You may use agent.todo_write and agent.todo_read "
                 "to maintain progress metadata for a multi-step request; these internal tools do not execute external actions or grant permissions. "
-                "Treat the latest USER message as the task; earlier messages are context. "
+                "Treat the latest USER message as an update; confirmations resume the unresolved goal identified in prior messages and the checklist. "
                 "For multiple meaningful steps, first call agent.todo_write with a concise checklist of 2-8 outcome steps. "
                 "Set exactly one next item to in_progress and the rest to pending. Do not create a checklist for greetings, simple answers, or one-step requests. "
                 "After real tool results or verified milestones, update the checklist. Use agent.todo_read when resuming or when progress is unclear. "
