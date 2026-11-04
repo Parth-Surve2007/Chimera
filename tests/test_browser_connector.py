@@ -44,7 +44,9 @@ class FakeLocator:
     def is_editable(self):
         return self._editable
 
-    def evaluate(self, _script):
+    def evaluate(self, script):
+        if "isContentEditable" in script:
+            return self._value
         return {
             "tag": "input", "type": self._type, "role": "",
             "disabled": not self._enabled, "readOnly": False,
