@@ -455,6 +455,20 @@ class WindowsComputerUse:
         self.user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
         return int(pid.value) if pid.value else None
 
+    def window_rect(self, hwnd: int) -> dict | None:
+        """Return current screen-space bounds for a live top-level HWND."""
+        if not _is_windows_platform() or not self.user32.IsWindow(hwnd):
+            return None
+        rect = wintypes.RECT()
+        if not self.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+            return None
+        if rect.right <= rect.left or rect.bottom <= rect.top:
+            return None
+        return {
+            "left": int(rect.left), "top": int(rect.top),
+            "right": int(rect.right), "bottom": int(rect.bottom),
+        }
+
     def controls(self, hwnd: int) -> list[dict]:
         if not _is_windows_platform() or not self.user32.IsWindow(hwnd): return []
         result = []; enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
