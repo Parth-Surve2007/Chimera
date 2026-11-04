@@ -370,3 +370,99 @@ def test_agent_echo_guard_fails_closed_after_second_echo(tmp_path):
             {"version": 1, "tools": []},
             session={"mode": "build", "workspace": str(tmp_path)},
         )
+
+
+
+def test_local_agent_retries_an_unregistered_tool_id_as_a_chat_answer(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    request = "Can you write code for palindrome check in Python?"
+    prompts = []
+    schemas = []
+    outputs = iter([
+        json.dumps({"type": "tool_call", "tool": "python", "arguments": {"code": "print('x')"}}),
+        json.dumps({
+            "type": "message",
+            "content": "def is_palindrome(value):\\n    cleaned = ''.join(ch.casefold() for ch in value if ch.isalnum())\\n    return cleaned == cleaned[::-1]",
+        }),
+    ])
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda prompt, _config: prompts.append(prompt) or next(outputs),
+    )
+    original = provider.structured_with_metrics
+
+    def capture_schema(prompt, **kwargs):
+        schemas.append(kwargs["json_schema"])
+        return original(prompt, **kwargs)
+
+    provider.structured_with_metrics = capture_schema
+    catalog = {
+        "version": 1,
+        "tools": [
+            {"id": "workspace.create_file", "description": "Create a file", "arguments": {"path": "string", "content": "string"}},
+            {"id": "computer.launch", "description": "Launch an app", "arguments": {"executable": "string"}},
+        ],
+    }
+
+    decision = provider.decide(
+        [SimpleNamespace(role="user", content=request)],
+        catalog,
+        session={"mode": "plan", "workspace": str(tmp_path)},
+    )
+
+    assert decision["type"] == "message"
+    assert "is_palindrome" in decision["content"]
+    assert len(prompts) == 2
+    assert "unregistered tool ID: 'python'" in prompts[1]
+    assert "answer the code directly" in prompts[1]
+    assert schemas[0]["oneOf"][1]["properties"]["tool"]["enum"] == [
+        "computer.launch", "workspace.create_file"
+    ]
+    assert schemas[1] == schemas[0]
+
+
+def test_local_agent_without_tools_uses_message_only_decision_schema(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    schemas = []
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: json.dumps({"type": "message", "content": "Here is the code."}),
+    )
+    original = provider.structured_with_metrics
+
+    def capture_schema(prompt, **kwargs):
+        schemas.append(kwargs["json_schema"])
+        return original(prompt, **kwargs)
+
+    provider.structured_with_metrics = capture_schema
+    decision = provider.decide(
+        [SimpleNamespace(role="user", content="Write a palindrome function.")],
+        {"version": 1, "tools": []},
+    )
+
+    assert decision["type"] == "message"
+    assert len(schemas[0]["oneOf"]) == 1
+    assert schemas[0]["oneOf"][0]["properties"]["type"]["enum"] == ["message"]
+
+
+def test_local_agent_fails_closed_after_repeated_invalid_tool_choice(tmp_path):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture")
+    cli = tmp_path / "llama-cli.exe"
+    cli.write_bytes(b"fixture")
+    provider = LocalModelProvider(
+        LocalModelConfig(model, str(cli)),
+        lambda *_: json.dumps({"type": "tool_call", "tool": "python", "arguments": {}}),
+    )
+
+    with pytest.raises(ValueError, match="unregistered tool ID 'python'.*no tool was executed"):
+        provider.decide(
+            [SimpleNamespace(role="user", content="Write a palindrome function.")],
+            {"version": 1, "tools": [{"id": "workspace.create_file", "arguments": {}}]},
+        )
