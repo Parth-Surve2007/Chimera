@@ -269,12 +269,12 @@ def test_agent_application_inventory_ignores_irrelevant_model_arguments(tmp_path
         def decide(self, messages, catalog, session=None):
             return next(self.decisions)
 
-    expected_inventory = {"items": [{
+    expected_inventory = [{
         "name": "Microsoft Word",
         "pid": 1234,
         "executable": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
         "windows": [{"hwnd": 77, "pid": 1234, "title": "Document1 - Word"}],
-    }]}
+    }]
     monkeypatch.setattr(WindowsComputerUse, "list_applications", lambda self: expected_inventory)
 
     runtime = AgentRuntime(
@@ -293,7 +293,7 @@ def test_agent_application_inventory_ignores_irrelevant_model_arguments(tmp_path
     assert tool_messages
     payload = json.loads(tool_messages[0].content)
     assert payload["status"] == "completed"
-    assert payload["result"] == expected_inventory
+    assert payload["result"] == {"items": expected_inventory}
 
 
 def test_application_inventory_remains_tolerant_only_for_no_argument_reads():
