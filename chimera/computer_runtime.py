@@ -792,20 +792,60 @@ class ComputerSessionManager:
 
     def cua_inspect_window(
         self, app_session_id: str, owner_session_id: str, window_id: int,
-        *, include_screenshot: bool = False,
+        *, include_screenshot: bool = False, question: str | None = None,
     ) -> dict:
         try:
             identity = self._cua_authorized_identity(app_session_id, owner_session_id)
+            capture_pixels = bool(include_screenshot or question)
             result = self.cua.inspect_window(
                 owner_session_id, identity.pid, window_id,
-                include_screenshot=include_screenshot,
+                include_screenshot=capture_pixels,
             )
-            return {
+            result = {
                 **result,
                 "authorized_session_id": app_session_id,
                 "authorized_pid": identity.pid,
                 "executable": identity.executable,
             }
+            if question is not None:
+                if not isinstance(question, str) or not 1 <= len(question.strip()) <= 2000:
+                    return {**result, "visual_inspection": {
+                        "status": "blocked",
+                        "reason": "question must contain 1 to 2000 characters",
+                    }}
+                if self.visual_perception is None:
+                    result["visual_inspection"] = {
+                        "status": "unavailable",
+                        "reason": (
+                            "no local vision model is configured; set CHIMERA_VISION_MODEL_PATH "
+                            "and CHIMERA_VISION_SERVER to user-supplied local assets"
+                        ),
+                        "hosted_fallback": False,
+                    }
+                elif result.get("status") not in {"completed", "degraded"} or not result.get("snapshot_ref"):
+                    result["visual_inspection"] = {
+                        "status": "blocked",
+                        "reason": "a fresh complete CUA screenshot snapshot is required",
+                    }
+                else:
+                    image, image_error = self.cua.snapshot_image(
+                        owner_session_id, identity.pid, window_id,
+                        result["snapshot_ref"],
+                    )
+                    if image is None:
+                        result["visual_inspection"] = {
+                            "status": "blocked",
+                            "reason": image_error or "CUA screenshot pixels are unavailable",
+                        }
+                    else:
+                        visual = self.visual_perception.inspect_image(image, question)
+                        result["visual_inspection"] = {
+                            **visual,
+                            "verified": False,
+                            "evidence_scope": "fresh_authorized_cua_window_screenshot",
+                            "note": "Visual descriptions are observations, not proof that an action succeeded.",
+                        }
+            return result
         except Exception as exc:
             return {"status": "blocked", "reason": f"{type(exc).__name__}: {exc}"}
 
