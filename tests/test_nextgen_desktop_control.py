@@ -152,3 +152,72 @@ def test_interaction_strategy_routes_semantic_and_visual_actions_by_evidence(tmp
         evidence={"fresh_window": True, "geometry": True},
     )
     assert unavailable["selected"] is None
+
+
+def test_ui_automation_observation_targets_exact_authorized_window_and_bounds_tree(tmp_path):
+    from chimera.computer_runtime import ApplicationIdentity, ComputerSessionManager
+
+    manager = ComputerSessionManager(tmp_path)
+    session_id = "multi-window-conversation"
+    computer_session_id = "multi-window-app"
+    pid = 4321
+    identity = ApplicationIdentity(
+        pid, "C:/Apps/editor.exe", 123.0, session_id,
+        computer_session_id, (77, 88),
+    )
+    manager.sessions[computer_session_id] = identity
+    manager._identity_is_current = lambda current: current is identity
+    manager.backend.window_process_id = lambda hwnd: pid if hwnd in {77, 88} else None
+    manager.backend.list_applications = lambda: [{
+        "pid": pid,
+        "executable": identity.executable,
+        "windows": [
+            {"hwnd": 77, "pid": pid, "title": "Project A"},
+            {"hwnd": 88, "pid": pid, "title": "Project B"},
+        ],
+    }]
+
+    class FakeUIA:
+        def __init__(self):
+            self.calls = []
+
+        def elements(self, hwnd, depth=3, limit=250):
+            self.calls.append((hwnd, depth, limit))
+            return [{
+                "runtime_id": f"element-{hwnd}",
+                "parent": hwnd,
+                "process_id": pid,
+                "name": f"Document {hwnd}",
+                "control_type": "Document",
+                "rectangle": {"left": 0, "top": 0, "right": 300, "bottom": 200},
+                "enabled": True,
+                "offscreen": False,
+                "patterns": ["Text"],
+            }]
+
+    fake_uia = FakeUIA()
+    manager.uia = fake_uia
+
+    observation = manager.observe(
+        computer_session_id, hwnd=88, depth=5, limit=310,
+    )
+
+    assert fake_uia.calls == [(88, 5, 310)]
+    assert [window["hwnd"] for window in observation.windows] == [88]
+    assert observation.elements[0]["name"] == "Document 88"
+    assert observation.elements[0]["session_id"] == session_id or observation.elements[0]["session_id"] == computer_session_id
+    assert len(observation.elements[0]["reference_id"]) == 32
+
+    try:
+        manager.observe(computer_session_id, hwnd=99)
+    except PermissionError as exc:
+        assert "authorized process" in str(exc)
+    else:
+        raise AssertionError("a foreign HWND was accepted")
+
+    try:
+        manager.observe(computer_session_id, hwnd=88, depth=9)
+    except ValueError as exc:
+        assert "depth" in str(exc)
+    else:
+        raise AssertionError("unbounded UIA depth was accepted")
