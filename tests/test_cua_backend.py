@@ -417,6 +417,13 @@ def test_cua_canvas_background_refusal_enables_only_exact_approved_foreground_re
         assert len(driver.drag_inputs) == 1
 
         # The same plan may be retried once, but only with a fresh token/snapshot.
+        changed_timing = backend.draw_path(
+            "conversation-a", 4321, 77, fresh["snapshot_ref"],
+            fresh_token, strokes, duration_ms=300, foreground=True,
+        )
+        assert changed_timing["status"] == "blocked"
+        assert len(driver.drag_inputs) == 1
+
         accepted = backend.draw_path(
             "conversation-a", 4321, 77, fresh["snapshot_ref"],
             fresh_token, strokes, foreground=True,
