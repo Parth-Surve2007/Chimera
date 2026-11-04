@@ -634,6 +634,106 @@ class LocalModelProvider:
                     content = heading + ":\n" + (
                         "\n".join(lines) if lines else "No matching applications found."
                     )
+                elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_elements":
+                    result = payload.get("result") or {}
+                    data = result.get("items", result) if isinstance(result, dict) else {}
+                    elements = data.get("elements", []) if isinstance(data, dict) else []
+                    if not isinstance(elements, list):
+                        elements = []
+
+                    def element_rank(element):
+                        if not isinstance(element, dict):
+                            return (-1, -1, -1)
+                        control = str(element.get("control_type") or "").casefold()
+                        name = str(element.get("name") or "").casefold()
+                        visible = not bool(element.get("offscreen", False))
+                        enabled = bool(element.get("enabled", False))
+                        rect = element.get("rectangle") or {}
+                        try:
+                            area = max(0, int(rect.get("right", 0)) - int(rect.get("left", 0))) * max(
+                                0, int(rect.get("bottom", 0)) - int(rect.get("top", 0))
+                            )
+                        except (TypeError, ValueError):
+                            area = 0
+                        semantic = (
+                            5 if control in {"canvas", "document"} else
+                            4 if control in {"custom", "pane"} else
+                            3 if any(word in name for word in ("canvas", "document", "editor", "drawing", "sheet", "slide")) else
+                            1 if control not in {"window", "titlebar", "menu"} else 0
+                        )
+                        return (int(visible and enabled), semantic, min(area, 2_000_000))
+
+                    ranked = sorted(
+                        (item for item in elements if isinstance(item, dict)),
+                        key=element_rank,
+                        reverse=True,
+                    )
+                    detail_limit = 20 if self.config.context >= 8192 else 12
+                    lines = []
+                    for element in ranked[:detail_limit]:
+                        rect = element.get("rectangle")
+                        if isinstance(rect, dict):
+                            bounds = ",".join(
+                                str(rect.get(key, "?")) for key in ("left", "top", "right", "bottom")
+                            )
+                        else:
+                            bounds = "unavailable"
+                        patterns = [
+                            str(value)[:32] for value in (element.get("patterns") or [])[:8]
+                        ]
+                        actions = [
+                            str(value)[:32] for value in (element.get("available_actions") or [])[:8]
+                        ]
+                        lines.append(
+                            "- ref={ref} | {type} | {name} | rect={rect} | enabled={enabled} "
+                            "| offscreen={offscreen} | patterns={patterns} | actions={actions}".format(
+                                ref=str(element.get("reference_id") or "")[:40],
+                                type=str(element.get("control_type") or "?")[:32],
+                                name=" ".join(str(element.get("name") or "").split())[:90] or "(unnamed)",
+                                rect=bounds,
+                                enabled=bool(element.get("enabled", False)),
+                                offscreen=bool(element.get("offscreen", False)),
+                                patterns=",".join(patterns) or "-",
+                                actions=",".join(actions) or "-",
+                            )
+                        )
+                    content = (
+                        "Fresh UI Automation observation"
+                        f" | hwnd={((data.get('windows') or [{}])[0].get('hwnd') if isinstance(data.get('windows'), list) and data.get('windows') else '?')}"
+                        f" | backend={data.get('backend', '?')}"
+                        f" | generation={data.get('generation', '?')}"
+                        f" | elements={len(elements)}\n"
+                        + ("\n".join(lines) if lines else "No accessible UIA elements were returned.")
+                        + "\nReferences are short-lived; use only these exact reference IDs from this observation."
+                    )
+                elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_window":
+                    result = payload.get("result") or {}
+                    data = result.get("items", result) if isinstance(result, dict) else {}
+                    windows = data.get("windows", []) if isinstance(data, dict) else []
+                    lines = []
+                    for window in windows[:12] if isinstance(windows, list) else []:
+                        if isinstance(window, dict):
+                            lines.append(
+                                f"- hwnd={window.get('hwnd')} | title={' '.join(str(window.get('title') or '').split())[:100]} "
+                                f"| pid={window.get('pid')} | class={str(window.get('class_name') or '')[:48]}"
+                            )
+                    content = "Authorized application windows:\n" + (
+                        "\n".join(lines) if lines else "No authorized windows were observed."
+                    ) + "\nChoose the exact visible window HWND before inspecting its controls."
+                elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_visual_target":
+                    result = payload.get("result") or {}
+                    if isinstance(result, dict) and isinstance(result.get("items"), dict):
+                        result = result["items"]
+                    content = (
+                        "Local visual observation (not action proof): "
+                        + json.dumps({
+                            key: result.get(key) for key in (
+                                "status", "description", "reason", "reference_id",
+                                "target_name", "target_control_type", "target_rectangle",
+                                "evidence_scope", "hosted_fallback",
+                            ) if key in result
+                        }, ensure_ascii=False, separators=(",", ":"))[:2600]
+                    ) if isinstance(result, dict) else "Visual inspection returned no structured result."
                 else:
                     content = content[:700]
             elif role == "user":
