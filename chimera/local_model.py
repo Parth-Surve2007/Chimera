@@ -697,13 +697,26 @@ class LocalModelProvider:
                                 actions=",".join(actions) or "-",
                             )
                         )
+                    profile = data.get("application_profile") if isinstance(data, dict) else None
+                    profile_lines = []
+                    if isinstance(profile, dict):
+                        profile_lines.append(
+                            f"Matched app profile: {profile.get('display_name', profile.get('profile_id', 'application'))} "
+                            f"| advisory_only={bool(profile.get('advisory_only', True))} "
+                            f"| permissions_granted={profile.get('permissions_granted', [])}"
+                        )
+                        for hint in profile.get("target_hints", [])[:6]:
+                            if isinstance(hint, str):
+                                profile_lines.append(f"  Profile hint: {hint[:300]}")
                     content = (
                         "Fresh UI Automation observation"
                         f" | hwnd={((data.get('windows') or [{}])[0].get('hwnd') if isinstance(data.get('windows'), list) and data.get('windows') else '?')}"
                         f" | backend={data.get('backend', '?')}"
                         f" | generation={data.get('generation', '?')}"
                         f" | elements={len(elements)}\n"
+                        + ("\n".join(profile_lines) + "\n" if profile_lines else "")
                         + ("\n".join(lines) if lines else "No accessible UIA elements were returned.")
+                        + "\nProfile hints are advisory only; target and act only on fresh observed UIA references."
                         + "\nReferences are short-lived; use only these exact reference IDs from this observation."
                     )
                 elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_window":
@@ -717,9 +730,17 @@ class LocalModelProvider:
                                 f"- hwnd={window.get('hwnd')} | title={' '.join(str(window.get('title') or '').split())[:100]} "
                                 f"| pid={window.get('pid')} | class={str(window.get('class_name') or '')[:48]}"
                             )
+                    profile = data.get("application_profile") if isinstance(data, dict) else None
+                    profile_hint = ""
+                    if isinstance(profile, dict):
+                        profile_hint = (
+                            f"\nAdvisory app profile: {profile.get('display_name', profile.get('profile_id', 'application'))}. "
+                            + " ".join(str(value)[:260] for value in profile.get("target_hints", [])[:4])
+                            + " Profile grants no permissions; use current live observations."
+                        )
                     content = "Authorized application windows:\n" + (
                         "\n".join(lines) if lines else "No authorized windows were observed."
-                    ) + "\nChoose the exact visible window HWND before inspecting its controls."
+                    ) + "\nChoose the exact visible window HWND before inspecting its controls." + profile_hint
                 elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_visual_target":
                     result = payload.get("result") or {}
                     if isinstance(result, dict) and isinstance(result.get("items"), dict):
