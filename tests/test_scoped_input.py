@@ -160,7 +160,7 @@ def test_foreground_change_aborts_remaining_stroke_and_releases_button():
     )
 
     assert result["status"] == "blocked"
-    assert "foreground ownership changed" in result["reason"]
+    assert "foreground window changed" in result["reason"]
     assert native.events[-1] == ("button", "left", False)
     assert len([event for event in native.events if event[0] == "move"]) == 1
 
