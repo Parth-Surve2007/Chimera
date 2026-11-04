@@ -57,6 +57,61 @@ def _enum_name(value: Any) -> str | None:
     return None
 
 
+def _find_code(value: Any, *, depth: int = 0) -> str | None:
+    if depth > 5 or value is None:
+        return None
+    if isinstance(value, str):
+        if "background_unavailable" in value.casefold():
+            return "background_unavailable"
+        return None
+    if isinstance(value, dict):
+        for key in ("code", "error_code", "kind", "name"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and "background_unavailable" in candidate.casefold():
+                return "background_unavailable"
+        for key in ("error", "details", "structured", "structured_json",
+                    "structured_content", "structuredContent", "payload", "content"):
+            found = _find_code(value.get(key), depth=depth + 1)
+            if found:
+                return found
+        return None
+    for key in ("code", "error_code", "kind", "structured", "structured_json",
+                "structured_content", "structuredContent", "details", "error", "payload"):
+        try:
+            candidate = getattr(value, key, None)
+        except Exception:
+            candidate = None
+        found = _find_code(candidate, depth=depth + 1)
+        if found:
+            return found
+    return None
+
+
+def _find_foreground_recommendation(value: Any, *, depth: int = 0) -> bool:
+    if depth > 5 or value is None:
+        return False
+    if isinstance(value, dict):
+        escalation = value.get("escalation")
+        if isinstance(escalation, dict):
+            recommended = escalation.get("recommended") or escalation.get("target")
+            if isinstance(recommended, str) and recommended.casefold() == "foreground":
+                return True
+        return any(
+            _find_foreground_recommendation(value.get(key), depth=depth + 1)
+            for key in ("error", "details", "structured", "structured_json",
+                        "structured_content", "structuredContent", "payload", "content")
+        )
+    for key in ("structured", "structured_json", "structured_content",
+                "structuredContent", "details", "error", "payload"):
+        try:
+            candidate = getattr(value, key, None)
+        except Exception:
+            candidate = None
+        if _find_foreground_recommendation(candidate, depth=depth + 1):
+            return True
+    return False
+
+
 def _finite_number(value: Any) -> bool:
     try:
         import math
@@ -516,15 +571,25 @@ class CuaDriverBackend:
     @staticmethod
     def _exception_result(exc: Exception) -> dict:
         message = f"{type(exc).__name__}: {exc}"
-        lowered = message.casefold()
-        if "background_unavailable" in lowered:
-            return {
+        code = _find_code(exc)
+        if code == "background_unavailable":
+            recommended = _find_foreground_recommendation(exc)
+            result = {
                 "status": "background_unavailable",
+                "verified": False,
+                "driver_error_code": code,
                 "reason": message[:1200],
-                "foreground_retry": "computer.cua_click_foreground",
-                "note": "No foreground retry was attempted. Take a fresh snapshot and obtain a separate operator approval before any foreground retry.",
+                "foreground_retry_available": recommended,
+                "note": (
+                    "Take a fresh snapshot and request a separate operator approval for foreground delivery."
+                    if recommended else
+                    "The driver refused background delivery but did not recommend foreground escalation. Stop and inspect the blocker."
+                ),
             }
-        return {"status": "failed", "reason": message[:1200]}
+            if recommended:
+                result["foreground_retry"] = "computer.cua_click_foreground"
+            return result
+        return {"status": "failed", "verified": False, "reason": message[:1200]}
 
     def click(self, owner_session_id: str, pid: int, window_id: int, snapshot_ref: str,
               *, element_token: str | None = None, x: float | None = None,
@@ -607,7 +672,11 @@ class CuaDriverBackend:
             with self._lock:
                 self._snapshots.pop(snapshot_ref, None)
             error_result = self._exception_result(exc)
-            if not foreground and error_result.get("status") == "background_unavailable":
+            if (
+                not foreground
+                and error_result.get("status") == "background_unavailable"
+                and error_result.get("foreground_retry_available") is True
+            ):
                 with self._lock:
                     self._foreground_escalations.add(escalation_key)
             return error_result
