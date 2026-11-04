@@ -433,22 +433,9 @@ class ScopedWindowsInputBackend:
                     native.send_mouse_wheel(scroll_steps if scroll_direction == "down" else -scroll_steps)
                     events += 1
                 elif action == "type_text":
-                    # The element has already been focused through UIA. Do not
-                    # click its centre: custom edit controls may use that point
-                    # for a destructive action. Type only into the focused element.
-                    guard()
-                elif action == "press_key":
-                    for vk in chord:
-                        guard()
-                        native.send_virtual_key(vk, True)
-                        events += 1
-                    for vk in reversed(chord):
-                        guard()
-                        native.send_virtual_key(vk, False)
-                        events += 1
-                elif action == "type_text":
-                    # Emit UTF-16 code units one packet at a time. Check the
-                    # exact foreground HWND/PID before both key-down and key-up.
+                    # The target has already been focused through UIA. Emit
+                    # UTF-16 code units one packet at a time, checking exact
+                    # foreground HWND/PID before every key-down and key-up.
                     units = []
                     for character in text:
                         code = ord(character)
@@ -463,6 +450,15 @@ class ScopedWindowsInputBackend:
                         events += 1
                         guard()
                         native.send_unicode_unit(unit, False)
+                        events += 1
+                elif action == "press_key":
+                    for vk in chord:
+                        guard()
+                        native.send_virtual_key(vk, True)
+                        events += 1
+                    for vk in reversed(chord):
+                        guard()
+                        native.send_virtual_key(vk, False)
                         events += 1
             except Exception as exc:
                 try:
