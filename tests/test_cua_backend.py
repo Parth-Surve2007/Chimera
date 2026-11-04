@@ -87,7 +87,7 @@ def _png_bytes(draw_count: int | bool = 0) -> bytes:
     if int(draw_count) >= 1:
         painter.line((18, 18, 42, 42), fill="black", width=4)
     if int(draw_count) >= 2:
-        painter.line((42, 42, 82, 82), fill="black", width=4)
+        painter.line((42, 42, 74, 74), fill="black", width=4)
     stream = io.BytesIO()
     image.save(stream, format="PNG")
     return stream.getvalue()
@@ -508,10 +508,10 @@ def test_cua_retry_after_completed_segment_contains_only_unfinished_strokes():
         assert retry["verified"] is True
         assert retry["semantic_verified"] is False
         assert driver.drag_inputs[-1]["delivery_mode"] is DeliveryMode.FOREGROUND
-        assert driver.drag_inputs[-1]["from_x"] == 32
-        assert driver.drag_inputs[-1]["from_y"] == 32
-        assert driver.drag_inputs[-1]["to_x"] == 64
-        assert driver.drag_inputs[-1]["to_y"] == 64
+        assert driver.drag_inputs[-1]["from_x"] == 42
+        assert driver.drag_inputs[-1]["from_y"] == 42
+        assert driver.drag_inputs[-1]["to_x"] == 74
+        assert driver.drag_inputs[-1]["to_y"] == 74
         assert len(driver.drag_inputs) == 3
     finally:
         backend.close()
