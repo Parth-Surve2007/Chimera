@@ -812,11 +812,17 @@ class LocalModelProvider:
                 "If the latest tool result failed, explain that specific failure or choose a different supported tool; "
                 "never repeat the exact same failed tool and arguments."
             )
+            retry_system_content, _, _ = retry_prompt.partition("\nCONVERSATION:\n")
+            retry_chat_messages = [
+                {"role": "system", "content": retry_system_content},
+                *chat_messages[1:],
+            ]
             parsed, retry_metrics = self.structured_with_metrics(
                 retry_prompt,
                 json_schema=decision_schema,
                 cancel_event=cancel_event,
                 on_delta=None,
+                chat_messages=retry_chat_messages,
             )
             metrics["decision_recovery_attempted"] = True
             metrics["decision_recovery_reason"] = recovery_reason
