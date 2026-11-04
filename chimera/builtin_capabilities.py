@@ -12,7 +12,7 @@ BUILTIN_CAPABILITIES = (
         "capability_id": "workspace.files",
         "name": "Local file operations",
         "domain": "files",
-        "description": "Bounded file listing, metadata inspection, name/content search, text reading, and approval-gated text-file creation on the configured local drive.",
+        "description": "Bounded file listing, metadata inspection, name/content search, text reading, and approval-gated text, DOCX, and verified PDF creation on the configured local drive.",
         "actions": (
             "workspace.list_files",
             "workspace.inspect_file",
@@ -20,6 +20,8 @@ BUILTIN_CAPABILITIES = (
             "workspace.search_text",
             "workspace.read_text",
             "workspace.create_file",
+            "workspace.create_document",
+            "workspace.create_pdf",
         ),
         "companion": None,
     },
