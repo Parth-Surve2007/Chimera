@@ -415,6 +415,7 @@ class AgentRuntime:
             "create_file": {"path": str, "content": str},
             "create_document": {"path": str, "title": str, "content": str},
             "computer.list_applications": {},
+            "computer.list_installed_applications": {},
             "computer.list_windows": {},
             "computer.inspect_controls": {"session_id": str, "hwnd": int},
             "computer.inspect_elements": {"session_id": str},
@@ -442,7 +443,7 @@ class AgentRuntime:
         # no-argument snapshot; ignore those extras so the model can filter the
         # returned applications in its reasoning. All targeted desktop actions
         # continue to reject unknown arguments.
-        if operation in {"computer.list_applications", "computer.list_windows"}:
+        if operation in {"computer.list_applications", "computer.list_installed_applications", "computer.list_windows"}:
             return
         if set(arguments) - set(expected):
             raise ValueError(f"unsupported arguments for {operation}")
@@ -795,6 +796,91 @@ class AgentRuntime:
 
             self._validate_arguments(operation, decision["arguments"])
             invocation = decision.get("invocation_id") or uuid.uuid4().hex
+
+            # A small model can loop on the same failing tool call. Detect an
+            # exact repeat within this user turn, feed back the original error,
+            # and let it recover once. A third identical attempt terminates
+            # truthfully. A later user turn starts with a clean retry budget.
+            if not is_agent_tool:
+                history = list(self.store.messages(session_id))
+                latest_user_index = max(
+                    (index for index, item in enumerate(history) if item.role == "user"),
+                    default=-1,
+                )
+                repeated_failures = []
+                for item in history[latest_user_index + 1:]:
+                    if item.role != "tool":
+                        continue
+                    try:
+                        previous = json.loads(item.content)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if (
+                        isinstance(previous, dict)
+                        and previous.get("tool") == tool_id
+                        and previous.get("arguments") == decision["arguments"]
+                        and str(previous.get("status") or "").casefold()
+                        in {"failed", "blocked", "workspace_required", "uncertain"}
+                    ):
+                        repeated_failures.append(previous)
+                if repeated_failures:
+                    original = repeated_failures[-1]
+                    original_result = original.get("result")
+                    original_reason = original.get("error")
+                    if not original_reason and isinstance(original_result, dict):
+                        original_reason = original_result.get("reason") or original_result.get("error")
+                    original_reason = " ".join(str(original_reason or "the runtime did not confirm success").split())[:320]
+                    blocked_reason = (
+                        f"Identical retry not executed: {tool_id} with the same arguments already failed "
+                        f"earlier in this turn. Original error: {original_reason}. Choose a different "
+                        "registered capability if one is available, or explain the blocker."
+                    )
+                    retry_payload = {
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "arguments": decision["arguments"],
+                        "result": {"status": "blocked", "reason": blocked_reason},
+                        "status": "blocked",
+                        "error": blocked_reason,
+                    }
+                    self.store.add_message(
+                        session_id, "tool",
+                        json.dumps(retry_payload, separators=(",", ":")),
+                    )
+                    self._record(session_id, "tool.repeat.blocked", {
+                        "turn_id": turn_id,
+                        "invocation_id": invocation,
+                        "tool": tool_id,
+                        "arguments": decision["arguments"],
+                        "original_error": original_reason,
+                        "repeat_count": len(repeated_failures) + 1,
+                    })
+                    max_tools -= 1
+                    if len(repeated_failures) >= 2:
+                        assistant = self.store.add_message(
+                            session_id,
+                            "assistant",
+                            f"I couldn't complete the requested task. {blocked_reason}",
+                        )
+                        with sqlite3.connect(self.store.db_path) as db:
+                            db.execute(
+                                "UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?",
+                                (_now(), session_id),
+                            )
+                        self._record(session_id, "turn.failed", {
+                            "turn_id": turn_id,
+                            "reason": "repeated identical failed tool invocation",
+                            "tool": tool_id,
+                            "original_error": original_reason,
+                        })
+                        return {
+                            "status": "failed",
+                            "message": assistant,
+                            "error": blocked_reason,
+                            "tool": tool_id,
+                        }
+                    continue
+
             self._record(session_id, "tool.call.requested", {"turn_id": turn_id, "invocation_id": invocation, "tool": tool_id, "arguments": decision["arguments"]})
             if tool_id.startswith("workspace."):
                 current = self.store.session(session_id)
@@ -915,6 +1001,9 @@ class AgentRuntime:
 
                 if operation == "computer.list_applications":
                     result_data = computer.list_applications()
+                    result_status, result_error = "completed", None
+                elif operation == "computer.list_installed_applications":
+                    result_data = computer.list_installed_applications()
                     result_status, result_error = "completed", None
                 elif operation == "computer.list_windows":
                     result_data = [
