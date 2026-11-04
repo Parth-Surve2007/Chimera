@@ -194,7 +194,7 @@ class WorkspaceTools:
                 target = self._path(relative)
                 if target.suffix.casefold() not in CREATE_FILE_SUFFIXES:
                     raise ValueError(
-                        "new files must use a supported text/source extension "
+                        "new files must use a supported text/source extensions "
                         f"({', '.join(sorted(CREATE_FILE_SUFFIXES))})"
                     )
                 if target.exists():
