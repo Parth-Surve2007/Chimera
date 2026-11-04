@@ -2067,11 +2067,20 @@ class AgentRuntime:
                             authorized_windows=result_data.get("windows"),
                             expected_application_name=result_data.get("display_name"),
                         )
+                        initial_observation = self._authorized_observation_summary(
+                            identity.session_id,
+                        )
                         result_data = {
                             **result_data,
                             "computer_session_id": identity.session_id,
                             "control_authorized": True,
                             "authorization_scope": "this conversation and exact process identity",
+                            "initial_observation": initial_observation,
+                            "next_step": (
+                                "The application is open and authorized. Continue the requested task "
+                                "using this computer_session_id and the fresh initial_observation. "
+                                "Do not launch the same application again."
+                            ),
                         }
                     except Exception as exc:
                         result_data = {
