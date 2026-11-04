@@ -1198,7 +1198,7 @@ class AgentRuntime:
                         and previous.get("tool") == tool_id
                         and previous.get("arguments") == decision["arguments"]
                         and str(previous.get("status") or "").casefold()
-                        in {"failed", "blocked", "workspace_required", "uncertain", "background_unavailable"}
+                        in {"failed", "blocked", "workspace_required", "uncertain", "background_unavailable", "partial"}
                     ):
                         repeated_failures.append(previous)
                 if repeated_failures:
