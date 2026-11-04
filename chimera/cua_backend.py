@@ -61,7 +61,7 @@ def _tool_result_text(value: Any) -> str:
             pieces.append(text_value)
         elif isinstance(item, str) and item:
             pieces.append(item)
-    return "\\n".join(pieces)
+    return "\n".join(pieces)
 
 
 def _tool_result_structured(value: Any) -> dict:
