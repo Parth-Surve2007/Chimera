@@ -531,6 +531,20 @@ class CuaDriverBackend:
                     "provider": "cua_driver", "pid": pid, "window_id": window_id,
                     "reason": f"{type(exc).__name__}: {exc}"}
 
+    def snapshot_image(
+        self, owner_session_id: str, pid: int, window_id: int, snapshot_ref: str,
+    ):
+        """Return pixels only for the exact fresh snapshot that was screenshot-approved."""
+        snap, blocked = self._snapshot_for_action(
+            owner_session_id, pid, window_id, snapshot_ref,
+        )
+        if blocked:
+            return None, blocked.get("reason")
+        image = self._decode_image(snap)
+        if image is None:
+            return None, "the exact CUA snapshot does not contain a usable screenshot"
+        return image, None
+
     def can_foreground_retry(self, owner_session_id: str, pid: int) -> bool:
         """True only after an explicit CUA refusal recommended foreground for this PID."""
         with self._lock:
