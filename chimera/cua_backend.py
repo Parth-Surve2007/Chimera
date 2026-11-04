@@ -599,6 +599,8 @@ class CuaDriverBackend:
             result = {
                 "status": "background_unavailable",
                 "verified": False,
+                "foreground_escalation_used": False,
+                "snapshot_invalidated": True,
                 "driver_error_code": code,
                 "reason": message[:1200],
                 "foreground_retry_available": recommended,
