@@ -425,6 +425,10 @@ class LocalModelProvider:
                     content = content[:700]
             elif role == "user":
                 content = content[:1500]
+            elif role == "system":
+                # Keep the ephemeral operator-goal context intact enough to
+                # preserve its success criteria; do not clip it like telemetry.
+                content = content[:1800]
             else:
                 content = content[:650]
             return f"{role.upper()}: {content}"
