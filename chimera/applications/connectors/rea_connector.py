@@ -99,7 +99,7 @@ class ReaConnector(BaseApplicationConnector):
             known_limitations=[
                 "Static analysis only; no code execution performed.",
                 "Large files (>150MB) may be rejected or partially analyzed.",
-                "Ghidra backend requires native installation and JDK 17+.",
+                "Current Ghidra 12.2 releases require native installation and a 64-bit JDK 25+.",
                 "Dynamic analysis capabilities are not yet implemented.",
             ],
             preconditions=["Artifact file must exist and be readable"],
