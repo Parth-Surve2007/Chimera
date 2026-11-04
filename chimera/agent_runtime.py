@@ -1085,6 +1085,7 @@ class AgentRuntime:
             executable_text = str(result.data.get("executable") or pending["arguments"].get("executable") or "Application")
             executable_name = executable_text.replace("\\", "/").rsplit("/", 1)[-1]
             application = Path(executable_name).stem.replace("_", " ").strip() or "Application"
+            application = application[:1].upper() + application[1:]
             windows = result.data.get("windows") or []
             window_titles = [
                 str(item.get("title") or "").strip()
