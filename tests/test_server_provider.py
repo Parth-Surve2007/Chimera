@@ -261,13 +261,15 @@ def test_chat_completion_parses_split_streamed_content_and_reasoning(monkeypatch
 
     def fake_urlopen(_request, timeout):
         assert timeout == manager.timeout
+        events = [
+            {"choices": [{"delta": {"reasoning_content": "inspect "}}]},
+            {"choices": [{"delta": {"content": '{"type":'}}]},
+            {"choices": [{"delta": {"content": '"message"}'}}]},
+        ]
         return FakeResponse([
-            b'data: {"choices":[{"delta":{"reasoning_content":"inspect "}}]}\n',
-            b'data: {"choices":[{"delta":{"content":"{\"type\":"}}]}\n',
-            b'data: {"choices":[{"delta":{"content":"\"message\"}"}}]}\n',
-            b"data: [DONE]\n",
-        ])
-
+            ("data: " + json.dumps(event) + "\\n").encode()
+            for event in events
+        ] + [b"data: [DONE]\\n"])
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     output, metrics = manager.complete(
         "",
