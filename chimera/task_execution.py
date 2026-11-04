@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-TASK_STATES={"draft","ready","running","waiting_approval","blocked","failed","completed","cancelled"}
+TASK_STATES={"draft","ready","running","waiting_approval","blocked","paused","failed","completed","cancelled"}
 STEP_STATES={"pending","running","waiting_approval","blocked","failed","completed","cancelled"}
 TODO_STATES={"pending","in_progress","completed","blocked","cancelled"}
 MAX_TODOS=16
@@ -39,6 +39,77 @@ class TaskStore:
     def latest_for_session(self, session_id):
         with sqlite3.connect(self.db_path) as db: row=db.execute("SELECT task_id FROM agent_tasks WHERE session_id=? ORDER BY created_at DESC LIMIT 1",(session_id,)).fetchone()
         return self.get(row[0]) if row else None
+
+    def active_for_session(self, session_id):
+        """Return the newest unresolved task; terminal tasks are never resumed."""
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT task_id FROM agent_tasks WHERE session_id=? "
+                "AND status IN ('draft','ready','running','waiting_approval','blocked') "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return self.get(row[0]) if row else None
+
+    def paused_for_session(self, session_id):
+        """Return the most recently paused task for an explicit resume request."""
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT task_id FROM agent_tasks WHERE session_id=? AND status='paused' "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return self.get(row[0]) if row else None
+
+    def resume(self, task_id):
+        """Return a non-terminal task to running without changing its identity."""
+        task = self.get(task_id)
+        if task is None:
+            raise KeyError("task not found")
+        if task.status in {"completed", "failed", "cancelled"}:
+            raise ValueError("terminal tasks cannot be resumed")
+        self.transition(task_id, "running")
+
+    def context(self, task_id):
+        """Build a bounded, deterministic snapshot for model context rehydration."""
+        task = self.get(task_id)
+        if task is None:
+            return None
+        return {
+            "task_id": task.task_id,
+            "objective": task.objective,
+            "mode": task.mode,
+            "status": task.status,
+            "todos": self.todos(task_id),
+            "steps": self.steps(task_id)[-12:],
+        }
+
+    def completion_blockers(self, task_id):
+        """Return persisted work items that still prevent truthful completion."""
+        blockers = []
+        for item in self.todos(task_id):
+            if item["status"] not in {"completed", "cancelled"}:
+                blockers.append({"kind": "todo", "id": item["todo_id"], "status": item["status"], "description": item["content"]})
+        for item in self.steps(task_id):
+            if item["status"] not in {"completed", "cancelled"}:
+                blockers.append({"kind": "step", "id": item["step_id"], "status": item["status"], "description": item["description"], "tool": item["tool"]})
+        return blockers
+
+    def can_complete(self, task_id):
+        """A task can complete only after its recorded checklist and steps settle."""
+        return not self.completion_blockers(task_id)
+
+    def reconcile_completion(self, task_id, requested_status):
+        """Prevent turn-idle from completing while durable work remains unresolved."""
+        if requested_status == "completed":
+            blockers = self.completion_blockers(task_id)
+            if blockers:
+                statuses = {item["status"] for item in blockers}
+                status = "blocked" if "blocked" in statuses else "failed" if "failed" in statuses else "ready"
+                self.transition(task_id, status)
+                return status
+        self.transition(task_id, requested_status)
+        return requested_status
     def transition(self, task_id, status):
         if status not in TASK_STATES: raise ValueError("invalid task state")
         task=self.get(task_id)
@@ -133,7 +204,7 @@ class TaskStore:
             if db.execute("SELECT 1 FROM agent_task_processed_events WHERE runtime_event_id=?", (runtime_event_id,)).fetchone(): return
             self._event(db, task_id, event_type, payload); db.execute("INSERT INTO agent_task_processed_events VALUES(?,?)", (runtime_event_id, task_id))
             invocation = payload.get("invocation_id")
-            if str(payload.get("tool") or "").startswith("agent.todo_"):
+            if str(payload.get("tool") or "").startswith(("agent.todo_", "agent.skill_")):
                 return
             if event_type == "tool.call.requested":
                 position = db.execute("SELECT COALESCE(MAX(position),0)+1 FROM agent_task_steps WHERE task_id=?", (task_id,)).fetchone()[0]

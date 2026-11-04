@@ -43,3 +43,47 @@ def test_task_todos_reject_duplicates_multiple_active_and_oversized_lists(tmp_pa
         ])
     with pytest.raises(ValueError, match="at most"):
         store.write_todos(task, [{"content": f"Task {i}"} for i in range(17)])
+
+
+def test_active_task_is_reused_and_terminal_tasks_are_not_resumed(tmp_path):
+    store = TaskStore(tmp_path / "tasks.db")
+    task_id = store.create("session-1", "Create and verify a report", mode="build")
+    assert store.active_for_session("session-1").task_id == task_id
+    store.transition(task_id, "running")
+    store.transition(task_id, "ready")
+    assert store.active_for_session("session-1").task_id == task_id
+    store.transition(task_id, "completed")
+    assert store.active_for_session("session-1") is None
+    with pytest.raises(ValueError, match="terminal tasks"):
+        store.resume(task_id)
+
+
+def test_completion_is_blocked_by_unfinished_todos_and_steps(tmp_path):
+    store = TaskStore(tmp_path / "tasks.db")
+    task_id = store.create("session-1", "Open Notepad and export a PDF", mode="build")
+    store.transition(task_id, "running")
+    store.write_todos(task_id, [
+        {"content": "Read the source document", "status": "completed"},
+        {"content": "Create and verify the PDF", "status": "pending"},
+    ])
+    step_id = store.add_step(task_id, "Read source document", tool="computer.read_text")
+    store.step_transition(step_id, "completed", result={"text": "source text"})
+    assert store.reconcile_completion(task_id, "completed") == "ready"
+    assert store.get(task_id).status == "ready"
+
+    store.write_todos(task_id, [
+        {"content": "Read the source document", "status": "completed"},
+        {"content": "Create and verify the PDF", "status": "completed"},
+    ])
+    assert store.reconcile_completion(task_id, "completed") == "completed"
+    assert store.can_complete(task_id)
+
+
+def test_blocked_step_prevents_false_task_completion(tmp_path):
+    store = TaskStore(tmp_path / "tasks.db")
+    task_id = store.create("session-1", "Operate an application", mode="build")
+    store.transition(task_id, "running")
+    step_id = store.add_step(task_id, "Invoke unsupported control", tool="computer.invoke_element")
+    store.step_transition(step_id, "blocked", error="control is not exposed")
+    assert store.reconcile_completion(task_id, "completed") == "blocked"
+    assert store.get(task_id).status == "blocked"

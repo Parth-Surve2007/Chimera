@@ -96,7 +96,7 @@ def test_plan_mode_blocks_write_at_runtime_boundary(tmp_path):
     assert not (tmp_path / ".chimera-agent-artifacts" / sid / "blocked.md").exists()
     assert any(e.event_type == "tool.failed" and e.payload["status"] == "blocked" for e in store.events(sid))
     task = runtime.task_store.latest_for_session(sid)
-    assert task.mode == "plan" and task.status == "completed"
+    assert task.mode == "plan" and task.status == "blocked"
     assert runtime.task_store.steps(task.task_id)[0]["status"] == "blocked"
 
 def test_approval_continuation_updates_persisted_task(tmp_path):
@@ -458,3 +458,211 @@ def test_identical_failed_tool_call_is_not_executed_twice_in_one_turn(tmp_path, 
     ]
     assert len(repeated_results) == 2
     assert "Identical retry not executed" in repeated_results[1]["error"]
+
+
+
+def test_runtime_continues_same_task_after_short_confirmation_and_restart(tmp_path):
+    class TodoProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self, complete=False):
+            self.calls = 0
+            self.complete = complete
+            self.seen_messages = []
+
+        def decide(self, messages, catalog, session=None):
+            self.seen_messages = messages
+            self.calls += 1
+            if self.calls == 1:
+                status = "completed" if self.complete else "in_progress"
+                return {
+                    "type": "tool_call",
+                    "tool": "agent.todo_write",
+                    "arguments": {"todos": [
+                        {"content": "Read the Notepad document", "status": status},
+                        {"content": "Create and verify the PDF", "status": "completed" if self.complete else "pending"},
+                    ]},
+                }
+            return {"type": "message", "content": "The task state has been saved."}
+
+    db_path = tmp_path / "chimera.db"
+    store = AgentSessionStore(db_path)
+    first_provider = TodoProvider()
+    first_runtime = AgentRuntime(store, first_provider)
+    session_id = first_runtime.create_session(tmp_path, mode="build")
+    assert first_runtime.send(session_id, "Open Notepad and export its text to PDF.")["status"] == "completed"
+    original_task = first_runtime.task_store.active_for_session(session_id)
+    assert original_task is not None
+    assert original_task.status == "ready"
+
+    # Reconstruct the runtime to simulate a desktop-app process restart.
+    second_provider = TodoProvider(complete=True)
+    second_runtime = AgentRuntime(AgentSessionStore(db_path), second_provider)
+    result = second_runtime.send(session_id, "yes, continue")
+    assert result["status"] == "completed"
+    resumed_task = second_runtime.task_store.latest_for_session(session_id)
+    assert resumed_task.task_id == original_task.task_id
+    assert resumed_task.status == "completed"
+    context_messages = [m.content for m in second_provider.seen_messages if m.role == "system"]
+    assert any("Active durable task state" in content for content in context_messages)
+    assert any(original_task.task_id in content for content in context_messages)
+    assert any(event.event_type == "task.resumed" for event in second_runtime.store.events(session_id))
+
+
+def test_explicit_new_task_pauses_unfinished_task_and_can_resume_it(tmp_path):
+    class PendingTodoProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self, decisions):
+            self.decisions = iter(decisions)
+
+        def decide(self, messages, catalog, session=None):
+            return next(self.decisions)
+
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    first = PendingTodoProvider([
+        {"type": "tool_call", "tool": "agent.todo_write", "arguments": {"todos": [
+            {"content": "Finish the existing research", "status": "pending"},
+        ]}},
+        {"type": "message", "content": "The research task is saved."},
+    ])
+    runtime = AgentRuntime(store, first)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    assert runtime.send(session_id, "Research this topic")["status"] == "completed"
+    original = runtime.task_store.active_for_session(session_id)
+    assert original is not None
+
+    second = PendingTodoProvider([
+        {"type": "message", "content": "Calculator inspection is complete."},
+    ])
+    runtime.provider = second
+    assert runtime.send(session_id, "New task: open Calculator and inspect it")["status"] == "completed"
+    new_task = runtime.task_store.latest_for_session(session_id)
+    assert new_task.task_id != original.task_id
+    assert runtime.task_store.get(original.task_id).status == "paused"
+    assert runtime.task_store.active_for_session(session_id) is None
+
+    third = PendingTodoProvider([
+        {"type": "message", "content": "I have resumed the previous research task."},
+    ])
+    runtime.provider = third
+    assert runtime.send(session_id, "Resume previous task and continue")["status"] == "completed"
+    assert runtime.task_store.active_for_session(session_id).task_id == original.task_id
+    assert runtime.task_store.get(original.task_id).status == "ready"
+
+
+
+def test_malformed_tool_result_envelope_gets_one_safe_format_repair(tmp_path):
+    class RepairProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self):
+            self.calls = 0
+            self.repair_prompt = ""
+
+        def decide(self, messages, catalog, session=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "tool": "workspace.create_file",
+                    "arguments": {"path": "claimed.txt", "content": "not executed"},
+                    "status": "completed",
+                    "result": {"path": "claimed.txt"},
+                    "error": None,
+                    "invocation_id": "fabricated-result",
+                }
+            self.repair_prompt = messages[-1].content
+            return {"type": "message", "content": "I can continue with a valid action decision."}
+
+    provider = RepairProvider()
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    result = runtime.send(session_id, "Create a file only after approval.")
+
+    assert result["status"] == "completed"
+    assert provider.calls == 2
+    assert "FORMAT REPAIR REQUIRED" in provider.repair_prompt
+    assert "no action was executed" in provider.repair_prompt
+    assert not (tmp_path / "claimed.txt").exists()
+    assert not store.pending_tool(session_id)
+
+
+
+def test_approved_skills_are_discovered_and_loaded_on_demand(tmp_path):
+    from chimera.learning import ProposedSkill
+
+    class SkillProvider:
+        config = SimpleNamespace(model_path="local.gguf")
+
+        def __init__(self, skill_id):
+            self.skill_id = skill_id
+            self.calls = 0
+            self.catalogs = []
+
+        def decide(self, messages, catalog, session=None):
+            self.catalogs.append(catalog)
+            self.calls += 1
+            if self.calls == 1:
+                return {"type": "tool_call", "tool": "agent.skill_list", "arguments": {}}
+            if self.calls == 2:
+                return {
+                    "type": "tool_call",
+                    "tool": "agent.skill_read",
+                    "arguments": {"skill_id": self.skill_id},
+                }
+            return {"type": "message", "content": "I loaded the approved procedure and will verify each step."}
+
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    provider = SkillProvider("skill_verified_notepad_export")
+    runtime = AgentRuntime(store, provider)
+    approved = ProposedSkill(
+        skill_id=provider.skill_id,
+        name="Verified Notepad export",
+        description="Read a Notepad document and create a verified PDF.",
+        version="1.0.0",
+        source_session_id="prior-session",
+        required_permissions=["computer.observe", "workspace.write"],
+        parameters_schema={"desktop_relative_path": "string"},
+        reusable_steps=[
+            {
+                "action": "workspace.create_document",
+                "sanitized_arguments": {"path": "Desktop/Report.pdf", "content": "<source_text>"},
+            }
+        ],
+        expected_outputs=["valid PDF", "extracted text matches source"],
+        status="proposed",
+    )
+    proposed = ProposedSkill(
+        skill_id="skill_unapproved",
+        name="Unapproved procedure",
+        description="Must not enter the agent context.",
+        version="1.0.0",
+        source_session_id="prior-session",
+        required_permissions=[],
+        parameters_schema={},
+        reusable_steps=[],
+        expected_outputs=[],
+        status="proposed",
+    )
+    runtime.skill_store.save(approved)
+    runtime.skill_store.save(proposed)
+    assert runtime.skill_store.approve(approved.skill_id)
+
+    session_id = runtime.create_session(tmp_path, mode="build")
+    result = runtime.send(session_id, "Create a PDF from the current Notepad document.")
+    assert result["status"] == "completed"
+
+    first_tool_ids = {item["id"] for item in provider.catalogs[0]["tools"]}
+    assert {"agent.skill_list", "agent.skill_read"} <= first_tool_ids
+    tool_results = [
+        json.loads(item.content)["result"]
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    listing = next(item for item in tool_results if "skills" in item)
+    assert [item["skill_id"] for item in listing["skills"]] == [approved.skill_id]
+    loaded = next(item for item in tool_results if "reusable_steps" in item)
+    assert loaded["reusable_steps"][0]["action"] == "workspace.create_document"
+    assert "Do not" in loaded["notice"] or "Never" in loaded["notice"]
+    assert "Unapproved procedure" not in json.dumps(provider.catalogs[0])
