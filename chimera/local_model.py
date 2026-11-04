@@ -435,6 +435,9 @@ class LocalModelProvider:
                     payload = None
                 if isinstance(payload, dict) and payload.get("tool") == "computer.list_applications":
                     result = payload.get("result") or []
+                    # Runtime computer tool messages wrap results in {"items": ...}.
+                    if isinstance(result, dict):
+                        result = result.get("items", [])
                     apps = result if isinstance(result, list) else []
                     lines = []
                     for app in apps[:10]:
@@ -495,9 +498,10 @@ class LocalModelProvider:
             "workspace.list_files": 2,
             "workspace.search_files": 3,
             "workspace.read_text": 4,
-            "workspace.create_file": 5,
-            "workspace.inspect_file": 6,
-            "workspace.search_text": 7,
+            "workspace.create_document": 5,
+            "workspace.create_file": 6,
+            "workspace.inspect_file": 7,
+            "workspace.search_text": 8,
         }
         available_tools = [
             (index, item)
@@ -550,9 +554,13 @@ class LocalModelProvider:
                 "The active local filesystem scope is SESSION.workspace_root; on Windows Chimera defaults to the whole system drive. "
                 "Without an active workspace scope, do not call workspace tools; use WORKSPACE_SCOPE.root as the current file boundary. "
                 "Use only workspace-relative paths. Use WORKSPACE_SCOPE.known_folders.desktop for Desktop requests when present; "
-                "never invent Linux paths on Windows or pass an absolute host path to workspace.create_file. "
-                "For new files, use workspace.create_file, choose a supported text/source extension, and wait for exact Build Mode approval. "
-                "Do not overwrite existing files. Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
+                "never invent Linux paths on Windows or pass an absolute host path to a workspace file tool. "
+                "Choose the file tool from the requested format: use workspace.create_document for a real Microsoft Word .docx file, "
+                "with path, title, and content; use workspace.create_file for a plain .txt or source/text file. "
+                "Never silently downgrade a requested .docx to .txt or describe a text file as a Word document. "
+                "For a requested .docx, the path must end in .docx. Wait for exact Build Mode write approval. "
+                "Do not overwrite existing files. After approval, report success only when the tool result is completed and the file hash/size verification passes. "
+                "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "For explicit app-opening requests, inspect computer.list_applications when useful and call computer.launch "
                 "with a known app name such as Word or Excel, or an exact executable path. Launch requires approval. After launch, request exact "
                 "app authorization in Applications before interacting with its controls. Never claim an app is open until "
