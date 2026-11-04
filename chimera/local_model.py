@@ -765,6 +765,11 @@ class LocalModelProvider:
             if workspace_available else
             "No workspace tools are available in this turn: do not call workspace operations or invent host filesystem paths. "
         )
+        multi_window_guidance = (
+            "If an authorized application has multiple top-level windows, call computer.inspect_window first and select the exact visible hwnd by title/purpose. "
+            "Pass that hwnd to computer.inspect_elements; use depth 4-6 only when the needed controls are deeper, and keep the element limit bounded. "
+            if "computer.inspect_window" in tool_ids and "computer.inspect_elements" in tool_ids else ""
+        )
         app_control_guidance = (
             "Use fresh UIA references from inspect_elements; only invoke actions listed for the observed control. "
             "State changes require exact approval. Re-observe and verify the intended state after every mutation; Invoke acceptance is not completion. "
@@ -816,7 +821,7 @@ class LocalModelProvider:
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
                 "Never guess an application ID. After an approved computer.launch, continue only when its result has control_authorized=true and computer_session_id; inspect that session. Otherwise stop and report the authorization blocker. Never bypass Applications authorization. "
-                + app_control_guidance + visual_guidance + visual_inspection_guidance +
+                + multi_window_guidance + app_control_guidance + visual_guidance + visual_inspection_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
