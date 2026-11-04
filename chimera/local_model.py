@@ -806,8 +806,7 @@ class LocalModelProvider:
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
                 "Never guess an application ID. After an approved computer.launch, continue only when its result has control_authorized=true and computer_session_id; inspect that session. Otherwise stop and report the authorization blocker. Never bypass Applications authorization. "
-                + app_control_guidance +
-                + visual_guidance +
+                + app_control_guidance + visual_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
