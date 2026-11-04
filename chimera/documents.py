@@ -12,8 +12,6 @@ REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 CT = "http://schemas.openxmlformats.org/package/2006/content-types"
 CP = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 DC = "http://purl.org/dc/elements/1.1/"
-DCTERMS = "http://purl.org/dc/terms/"
-XSI = "http://www.w3.org/2001/XMLSchema-instance"
 APP = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 
 ET.register_namespace("w", W)
@@ -160,15 +158,10 @@ def create_docx(path: Path, *, title: str, content: str) -> None:
 <Relationships xmlns="{REL}">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>""",
-        "docProps/core.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="{CP}" xmlns:dc="{DC}" xmlns:dcterms="{DCTERMS}" xmlns:xsi="{XSI}">
-  <dc:title>{ET.escape(_clean_text(title)) if hasattr(ET, "escape") else _clean_text(title)}</dc:title>
-  <dc:creator>Chimera</dc:creator>
-</cp:coreProperties>""",
         "docProps/app.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="{APP}"><Application>Chimera</Application></Properties>""",
     }
-    # The core-properties strings are parsed and re-serialized to ensure XML escaping.
+    # Build core properties through ElementTree so titles are safely XML-escaped.
     core_root = ET.Element(_tag(CP, "coreProperties"))
     creator_title = ET.SubElement(core_root, _tag(DC, "title"))
     creator_title.text = _clean_text(title)
