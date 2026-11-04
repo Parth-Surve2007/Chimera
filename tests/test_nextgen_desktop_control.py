@@ -79,6 +79,20 @@ def test_agent_runtime_validates_bounded_multi_stroke_canvas_actions():
     with pytest.raises(ValueError, match="duration_ms must be an integer"):
         AgentRuntime._validate_arguments("computer.visual_action", non_integer_duration)
 
+    mismatched_text = {
+        "session_id": "paint-session", "reference_id": "fresh-canvas-reference",
+        "action": "click", "points": [[0.5, 0.5]], "text": "unexpected",
+    }
+    with pytest.raises(ValueError, match="text is only valid"):
+        AgentRuntime._validate_arguments("computer.visual_action", mismatched_text)
+
+    mismatched_scroll = {
+        "session_id": "paint-session", "reference_id": "fresh-canvas-reference",
+        "action": "stroke", "points": [[0.1, 0.1], [0.9, 0.9]], "direction": "down",
+    }
+    with pytest.raises(ValueError, match="direction and steps"):
+        AgentRuntime._validate_arguments("computer.visual_action", mismatched_scroll)
+
 
 def test_local_model_prompt_explains_safe_launch_continuation_and_canvas_strokes():
     provider = LocalModelProvider(LocalModelConfig(None, None, context=8192, max_tokens=256))
