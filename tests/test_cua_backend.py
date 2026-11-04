@@ -484,8 +484,11 @@ def test_cua_mutations_remain_build_mode_only_and_registered_as_approved_actions
     )
 
 
-def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path):
+def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path, monkeypatch):
     from types import SimpleNamespace
+    import chimera.agent_runtime as agent_runtime_module
+    import chimera.applications.registry as application_registry_module
+    import chimera.applications.dispatch as application_dispatch_module
     from chimera.agent_runtime import AgentRuntime, AgentSessionStore
 
     class FakeComputer:
@@ -513,12 +516,26 @@ def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path
         def cua_foreground_retry_available(self, _app_session_id, _owner_session_id):
             return self.foreground_ready
 
+    fake_computer = FakeComputer()
+    # This is a pure catalog-policy test. Do not initialize COM/UIA or scan
+    # installed application connectors on the hosted Windows test runner.
+    monkeypatch.setattr(
+        agent_runtime_module, "ComputerSessionManager",
+        lambda: fake_computer,
+    )
+    empty_registry = SimpleNamespace(discover_all=lambda: None)
+    monkeypatch.setattr(
+        application_registry_module, "get_application_registry",
+        lambda: empty_registry,
+    )
+    monkeypatch.setattr(
+        application_dispatch_module, "application_tool_catalog",
+        lambda _registry: [],
+    )
     runtime = AgentRuntime(
         AgentSessionStore(tmp_path / "agent.sqlite"),
         provider=object(),
     )
-    fake_computer = FakeComputer()
-    runtime.computer = fake_computer
     session = {"session_id": "conversation-a", "workspace": None, "mode": "build"}
 
     before = runtime._protocol_catalog(session)
