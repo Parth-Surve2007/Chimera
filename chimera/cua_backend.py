@@ -39,6 +39,7 @@ class _Snapshot:
     screenshot_width: int
     screenshot_height: int
     screenshot_frame_valid: bool
+    window_bounds: dict[str, float] | None
 
 
 def _get(value: Any, name: str, default=None):
@@ -294,6 +295,67 @@ class CuaDriverBackend:
         return {key: float(value) for key, value in values.items()}
 
     @staticmethod
+    def _window_bounds(state: Any) -> dict[str, float] | None:
+        bounds = _get(state, "window_bounds")
+        if bounds is None:
+            return None
+        values = {
+            "x": _get(bounds, "x"),
+            "y": _get(bounds, "y"),
+            "width": _get(bounds, "width"),
+            "height": _get(bounds, "height"),
+        }
+        if not all(_finite_number(value) for value in values.values()):
+            return None
+        if values["width"] <= 0 or values["height"] <= 0:
+            return None
+        return {key: float(value) for key, value in values.items()}
+
+    @classmethod
+    def _window_local_frame(
+        cls, state: Any, screen_frame: dict, reference_snapshot: _Snapshot,
+    ) -> dict[str, float]:
+        """Convert screen-absolute UIA frame pixels into this window's screenshot space.
+
+        Cua Driver element frames are screen-absolute, while drag/click pixel
+        coordinates are window-local screenshot pixels. The screenshot can be
+        downscaled, so scale must be derived from the exact captured window
+        bounds and screenshot dimensions, never guessed.
+        """
+        original_bounds = reference_snapshot.window_bounds
+        current_bounds = cls._window_bounds(state)
+        if original_bounds is None or current_bounds is None:
+            raise ValueError("window geometry is unavailable; cannot convert UIA frame to screenshot pixels")
+        if (
+            abs(current_bounds["width"] - original_bounds["width"]) > 2.0
+            or abs(current_bounds["height"] - original_bounds["height"]) > 2.0
+        ):
+            raise ValueError("window size changed since the reference screenshot; take a new snapshot")
+        if (
+            reference_snapshot.screenshot_width <= 0
+            or reference_snapshot.screenshot_height <= 0
+        ):
+            raise ValueError("reference snapshot has no valid screenshot dimensions")
+        scale_x = reference_snapshot.screenshot_width / original_bounds["width"]
+        scale_y = reference_snapshot.screenshot_height / original_bounds["height"]
+        local = {
+            "x": (screen_frame["x"] - current_bounds["x"]) * scale_x,
+            "y": (screen_frame["y"] - current_bounds["y"]) * scale_y,
+            "w": screen_frame["w"] * scale_x,
+            "h": screen_frame["h"] * scale_y,
+        }
+        if not all(_finite_number(value) for value in local.values()):
+            raise ValueError("converted canvas frame is not finite")
+        if (
+            local["x"] < 0 or local["y"] < 0
+            or local["x"] + local["w"] > reference_snapshot.screenshot_width + 1
+            or local["y"] + local["h"] > reference_snapshot.screenshot_height + 1
+            or local["w"] < 8 or local["h"] < 8
+        ):
+            raise ValueError("canvas frame falls outside the exact window screenshot")
+        return local
+
+    @staticmethod
     def _image_bytes(state: Any) -> tuple[bytes | None, str | None]:
         images = _get(state, "images", []) or []
         if not images:
@@ -386,6 +448,7 @@ class CuaDriverBackend:
                 int(_get(state, "screenshot_width") or 0),
                 int(_get(state, "screenshot_height") or 0),
                 bool(_get(state, "screenshot_frame_valid", False)),
+                self._window_bounds(state),
             )
             # A new snapshot invalidates every earlier token for this exact window.
             with self._lock:
@@ -644,7 +707,8 @@ class CuaDriverBackend:
         if before_image is None or not original.screenshot_frame_valid:
             return {"status": "blocked", "reason": "drawing requires a valid before screenshot from the exact window snapshot"}
         try:
-            before_crop = self._crop_frame(before_image, frame)
+            local_canvas_frame = self._window_local_frame(original.state, frame, original)
+            before_crop = self._crop_frame(before_image, local_canvas_frame)
         except ValueError as exc:
             return {"status": "blocked", "reason": str(exc)}
         current_state = original.state
@@ -665,10 +729,22 @@ class CuaDriverBackend:
                             "segment_results": segment_results[-12:],
                         }
                     live_frame = self._frame_data(element)
-                    x1 = live_frame["x"] + path[point_index][0] * live_frame["w"]
-                    y1 = live_frame["y"] + path[point_index][1] * live_frame["h"]
-                    x2 = live_frame["x"] + path[point_index + 1][0] * live_frame["w"]
-                    y2 = live_frame["y"] + path[point_index + 1][1] * live_frame["h"]
+                    try:
+                        local_live_frame = self._window_local_frame(
+                            current_state, live_frame, original,
+                        )
+                    except ValueError as exc:
+                        return {
+                            "status": "partial" if segment_results else "blocked",
+                            "verified": False,
+                            "segments_sent": len(segment_results),
+                            "reason": str(exc),
+                            "segment_results": segment_results[-12:],
+                        }
+                    x1 = local_live_frame["x"] + path[point_index][0] * local_live_frame["w"]
+                    y1 = local_live_frame["y"] + path[point_index][0] * 0 + path[point_index][1] * local_live_frame["h"]
+                    x2 = local_live_frame["x"] + path[point_index + 1][0] * local_live_frame["w"]
+                    y2 = local_live_frame["y"] + path[point_index + 1][1] * local_live_frame["h"]
                     if not (
                         0 <= x1 < original.screenshot_width and 0 <= x2 < original.screenshot_width
                         and 0 <= y1 < original.screenshot_height and 0 <= y2 < original.screenshot_height
@@ -753,6 +829,7 @@ class CuaDriverBackend:
                         int(_get(state, "screenshot_width") or 0),
                         int(_get(state, "screenshot_height") or 0),
                         bool(_get(state, "screenshot_frame_valid", False)),
+                        self._window_bounds(state),
                     )
                     with self._lock:
                         self._snapshots.pop(current_ref, None)
@@ -762,7 +839,7 @@ class CuaDriverBackend:
                     if last_segment and image_bytes is not None and snap.screenshot_frame_valid:
                         after_image = self._decode_image(snap)
                         try:
-                            after_crop = self._crop_frame(after_image, frame)
+                            after_crop = self._crop_frame(after_image, local_canvas_frame)
                             changed_fraction = self._changed_fraction(before_crop, after_crop)
                         except (TypeError, ValueError):
                             changed_fraction = None
