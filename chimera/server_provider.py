@@ -226,9 +226,36 @@ class LlamaServerManager:
                 if (
                     not isinstance(item, dict)
                     or item.get("role") not in {"system", "user", "assistant"}
-                    or not isinstance(item.get("content"), str)
                 ):
-                    raise ValueError("chat messages must contain supported roles and string content")
+                    raise ValueError("chat messages must contain supported roles")
+                content = item.get("content")
+                if isinstance(content, str):
+                    if len(content) > 100_000:
+                        raise ValueError("chat message text exceeds the 100000-character limit")
+                    continue
+                if not isinstance(content, list) or not 1 <= len(content) <= 4:
+                    raise ValueError("multimodal content must be a list of 1 to 4 bounded text/image blocks")
+                for block in content:
+                    if not isinstance(block, dict):
+                        raise ValueError("multimodal content blocks must be objects")
+                    block_type = block.get("type")
+                    if block_type == "text":
+                        text_value = block.get("text")
+                        if not isinstance(text_value, str) or len(text_value) > 8000:
+                            raise ValueError("multimodal text blocks must contain at most 8000 characters")
+                    elif block_type == "image_url":
+                        image_url = block.get("image_url")
+                        url = image_url.get("url") if isinstance(image_url, dict) else None
+                        if (
+                            not isinstance(url, str)
+                            or not url.startswith(("data:image/jpeg;base64,", "data:image/png;base64,"))
+                            or len(url) > 12 * 1024 * 1024
+                        ):
+                            raise ValueError(
+                                "images must be bounded inline JPEG/PNG data URLs; remote image URLs are disabled"
+                            )
+                    else:
+                        raise ValueError("unsupported multimodal block type")
             if grammar is not None:
                 raise ValueError("chat-template requests currently support JSON Schema, not GBNF grammar")
         with self.request_lock:
