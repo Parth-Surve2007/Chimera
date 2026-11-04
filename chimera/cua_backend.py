@@ -1073,7 +1073,7 @@ class CuaDriverBackend:
                         segment_changed_fraction is None
                         or segment_changed_fraction <= 0.00001
                     )
-                    if driver_effect != "confirmed" and no_pixel_change:
+                    if no_pixel_change:
                         if (
                             not foreground and recommends_foreground
                             and pending_retry_strokes
@@ -1106,7 +1106,7 @@ class CuaDriverBackend:
                             "snapshot_ref_after": current_ref,
                             "verification_snapshot": last_snapshot,
                             "segments_sent": prior_segments,
-                            "reason": "the drag returned without a confirmed effect and the fresh canvas screenshot showed no pixel change; remaining drawing was stopped",
+                            "reason": "the fresh canvas screenshot did not confirm that this drag changed the canvas; remaining drawing was stopped",
                             "segment_results": segment_results[-12:],
                         }
                     if after_crop is not None:
