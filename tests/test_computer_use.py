@@ -854,3 +854,108 @@ def test_window_close_returns_manual_handoff_when_app_keeps_window_open(tmp_path
     assert result["manual_handoff_required"] is True
     assert "unsaved-work" in result["reason"]
     assert len(messages) == 1
+
+
+
+def test_packaged_start_menu_app_is_preferred_to_execution_alias(tmp_path, monkeypatch):
+    computer = WindowsComputerUse(tmp_path)
+    packaged = {
+        "kind": "appsfolder",
+        "application": "appsfolder:Microsoft.WindowsNotepad_8wekyb3d8bbwe!App",
+        "aumid": "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App",
+        "display_name": "Notepad",
+        "expected_process_names": ["notepad.exe"],
+    }
+    executable = tmp_path / "notepad.exe"
+    executable.write_bytes(b"MZ")
+    resolved_executables = []
+
+    monkeypatch.setattr(
+        computer,
+        "_resolve_start_menu_target",
+        lambda name: packaged if name == "Notepad" else None,
+    )
+    monkeypatch.setattr(
+        computer,
+        "_resolve_executable",
+        lambda name: resolved_executables.append(name) or executable,
+    )
+
+    target = computer._resolve_launch_target("Notepad")
+
+    assert target == packaged
+    assert resolved_executables == []
+
+
+def test_explicit_executable_path_is_not_reinterpreted_as_start_menu_app(tmp_path, monkeypatch):
+    computer = WindowsComputerUse(tmp_path)
+    executable = tmp_path / "notepad.exe"
+    executable.write_bytes(b"MZ")
+    calls = []
+
+    monkeypatch.setattr(
+        computer,
+        "_resolve_start_menu_target",
+        lambda _name: calls.append("start-menu"),
+    )
+    monkeypatch.setattr(computer, "_resolve_executable", lambda _name: executable)
+
+    target = computer._resolve_launch_target(str(executable))
+
+    assert target["kind"] == "executable"
+    assert target["path"] == executable.resolve()
+    assert calls == []
+
+
+def test_packaged_notepad_launch_tracks_real_windowsapps_process(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import subprocess
+    from pathlib import Path
+    from chimera import computer_use
+    from chimera.computer_use import WindowObservation
+
+    computer = WindowsComputerUse(tmp_path)
+    aumid = "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+    packaged = {
+        "kind": "appsfolder",
+        "application": "appsfolder:" + aumid,
+        "aumid": aumid,
+        "display_name": "Notepad",
+        "expected_process_names": ["notepad.exe"],
+    }
+    explorer_calls = []
+    monkeypatch.setattr(
+        computer, "_resolve_start_menu_target",
+        lambda name: packaged if name == "Notepad" else None,
+    )
+    monkeypatch.setattr(
+        computer, "_resolve_executable",
+        lambda _name: pytest.fail("packaged Notepad must use its exact Start-menu identity"),
+    )
+    monkeypatch.setattr(Path, "is_file", lambda self: self.name.casefold() == "explorer.exe")
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda args, shell=False: (explorer_calls.append(args) or SimpleNamespace(pid=111)),
+    )
+    monkeypatch.setattr(computer, "_windows", lambda: [
+        WindowObservation(77, 222, "Untitled - Notepad", "Notepad", True),
+    ])
+    packaged_image = r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad\Notepad.exe"
+    monkeypatch.setattr(
+        computer, "process_path",
+        lambda pid: packaged_image if pid == 222 else None,
+    )
+
+    result = computer.launch("Notepad", approved=True)
+
+    assert result["status"] == "completed"
+    assert result["pid"] == 222
+    assert result["spawned_pid"] == 111
+    assert result["executable"] is None
+    assert result["launch_kind"] == "appsfolder"
+    assert result["verification"] == "visible_window_process_match"
+    assert result["windows"][0]["hwnd"] == 77
+    assert explorer_calls == [[
+        r"C:\Windows\explorer.exe",
+        "shell:AppsFolder\\" + aumid,
+    ]]
