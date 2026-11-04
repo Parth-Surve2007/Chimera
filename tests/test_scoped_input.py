@@ -61,6 +61,12 @@ class FakeNative:
 
     def send_virtual_key(self, key, down):
         self.events.append(("key", key, down))
+        if self.flip_foreground_after_moves == "key" and down:
+            self.foreground = 9999
+            self.foreground_window = 100
+
+    def send_virtual_key(self, key, down):
+        self.events.append(("key", key, down))
 
     def capture(self, _rect):
         return FakeImage(bytes([len(self.events) % 251]) * 128)
@@ -242,5 +248,33 @@ def test_text_entry_aborts_between_unicode_packets_after_foreground_changes():
     assert result["status"] == "blocked"
     assert "foreground window changed" in result["reason"]
     key_packets = [event for event in native.events if event[0] == "unicode-unit"]
-    assert len(key_packets) == 1
+    assert len(key_packets) == 2
     assert key_packets[0][2] is True
+    assert key_packets[1] == ("unicode-unit", key_packets[0][1], False)
+
+
+
+@pytest.mark.parametrize("chord", ["ALT+TAB", "ALT+F4", "CTRL+ESC", "CTRL+ALT+DELETE", "WIN+R"])
+def test_system_switching_and_window_close_key_chords_are_rejected(chord):
+    from chimera.scoped_input import ScopedWindowsInputBackend
+
+    with pytest.raises(ValueError):
+        ScopedWindowsInputBackend._key_chord(chord)
+
+
+def test_key_chord_foreground_loss_releases_held_modifiers():
+    native = FakeNative()
+    native.flip_foreground_after_moves = "key"
+    backend = ScopedWindowsInputBackend(native=native)
+
+    result = backend.execute(
+        hwnd=99, expected_pid=4321, element_pid=4321, rectangle=RECT,
+        action="press_key", key="CTRL+S", approved=True,
+    )
+
+    assert result["status"] == "blocked"
+    assert "foreground window changed" in result["reason"]
+    assert native.events[-1] == ("key", 0x11, False)
+    assert [event for event in native.events if event[0] == "key"] == [
+        ("key", 0x11, True), ("key", 0x11, False),
+    ]
