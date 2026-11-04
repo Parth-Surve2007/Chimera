@@ -124,3 +124,31 @@ def test_packaged_app_alias_rejects_unrelated_window_title(tmp_path, monkeypatch
             authorized_windows=[{"hwnd": 77, "pid": 4321, "title": "Untitled - Notepad"}],
             expected_application_name="Paint",
         )
+
+
+def test_interaction_strategy_routes_semantic_and_visual_actions_by_evidence(tmp_path):
+    manager = ComputerSessionManager(tmp_path)
+    manager.uia = SimpleNamespace()
+    manager.visual_input = SimpleNamespace(native=object())
+
+    semantic = manager.choose_interaction(
+        "read_text",
+        "native_windows",
+        evidence={"fresh_window": True, "geometry": True, "semantic_control": True},
+    )
+    visual = manager.choose_interaction(
+        "visual_action",
+        "native_windows",
+        evidence={"fresh_window": True, "geometry": True},
+    )
+
+    assert semantic.selected == "uia"
+    assert visual.selected == "grounded_input"
+
+    manager.uia = None
+    unavailable = manager.choose_interaction(
+        "visual_action",
+        "native_windows",
+        evidence={"fresh_window": True, "geometry": True},
+    )
+    assert unavailable.selected is None
