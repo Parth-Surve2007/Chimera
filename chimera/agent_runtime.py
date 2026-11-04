@@ -537,6 +537,9 @@ class AgentRuntime:
                 raise ValueError("type_text requires 1 to 4000 characters")
             if action == "press_key" and not isinstance(arguments.get("key"), str):
                 raise ValueError("press_key requires a key name or chord")
+            if action == "press_key":
+                from .scoped_input import ScopedWindowsInputBackend
+                ScopedWindowsInputBackend._key_chord(arguments["key"])
             if action == "scroll":
                 if arguments.get("direction", "down") not in {"up", "down"}:
                     raise ValueError("scroll direction must be up or down")
