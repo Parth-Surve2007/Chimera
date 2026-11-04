@@ -1624,6 +1624,7 @@ class AgentRuntime:
                     and result_data.get("verification") in {
                         "visible_window_executable_match",
                         "visible_window_process_match",
+                        "visible_window_title_match",
                     }
                 ):
                     try:
@@ -1632,6 +1633,7 @@ class AgentRuntime:
                             result_data.get("executable"),
                             owner_session_id=session_id,
                             authorized_windows=result_data.get("windows"),
+                            expected_application_name=result_data.get("display_name"),
                         )
                         result_data = {
                             **result_data,
