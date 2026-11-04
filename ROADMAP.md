@@ -68,7 +68,7 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 - Local-model status distinguishes configured assets from a verified inference path
 - A local-only self-test exercises the active conversation model's structured AgentRuntime decision protocol; hosted profiles are rejected by this check
 - Linux and Windows CI matrix for the automated test suite
-- Desktop control remains deliberately bounded to operator-authorized processes and supported UI Automation patterns; unsupported interactions require manual operator input
+- Desktop control uses exact process authorization and supported UI Automation patterns; a scoped foreground-only input broker handles bounded pointer/keyboard actions for observed UIA targets, with explicit approval and post-action evidence.
 
 ### Phase 5.3.3 — Oxide Agent Workbench & Persistent Local Runtime
 - Three-panel continuous chat workspace inspired by coding-agent workbenches: thread/tool rail, conversation composer, and live session-intelligence rail
@@ -167,7 +167,7 @@ These constraints are non-negotiable at every phase:
 
 1. **No silent cloud fallback.** Model selection is always explicit and operator-controlled.
 2. **No capability escalation without approval.** Every write, render, or execute action requires either pre-authorization or real-time operator approval.
-3. **No global input injection.** No pyautogui, SendInput, clipboard injection, or global keyboard/mouse hooks.
+3. **No unscoped input injection.** No PyAutoGUI, clipboard injection, background-window input, or global hooks. Windows SendInput is permitted only inside the approved scoped broker: fresh UIA target, exact HWND/process identity, target bounds contained in the authorized window, exact foreground ownership before every event, bounded event sequences, and post-action evidence.
 4. **No automatic commits or pushes.** All VCS operations require explicit operator confirmation.
 5. **No model downloads without consent.** The operator must explicitly authorize any model acquisition.
 6. **Audit trail always on.** Every tool invocation, approval decision, and provider call is logged with provenance.
