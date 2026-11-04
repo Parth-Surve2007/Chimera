@@ -479,16 +479,16 @@ def test_local_agent_fails_closed_after_repeated_invalid_tool_choice(tmp_path):
         )
 
 
-def test_new_local_model_defaults_enable_more_reasoning_budget_and_adaptive_gpu(tmp_path, monkeypatch):
+def test_new_local_model_defaults_use_memory_conscious_budget_and_adaptive_gpu(tmp_path, monkeypatch):
     model = tmp_path / "model.gguf"
     model.write_bytes(b"fixture")
     monkeypatch.setenv("CHIMERA_DATA_DIR", str(tmp_path / "config"))
 
     config = config_from_env({"CHIMERA_MODEL_PATH": str(model)})
 
-    assert config.context == 8192
-    assert config.max_tokens == 768
-    assert config.threads == 8
+    assert config.context == 4096
+    assert config.max_tokens == 384
+    assert config.threads == 4
     assert config.gpu_layers == "auto"
 
 
