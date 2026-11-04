@@ -103,8 +103,9 @@ class FakeToolRefusal(Exception):
 
 
 class FakeDriver:
-    def __init__(self, *, refuse_background=False):
+    def __init__(self, *, refuse_background=False, refuse_background_draw=False):
         self.refuse_background = refuse_background
+        self.refuse_background_draw = refuse_background_draw
         self.click_inputs = []
         self.drag_inputs = []
         self.shutdown_called = False
@@ -203,8 +204,20 @@ class FakeDriver:
 
     async def drag(self, request):
         self.drag_inputs.append(request.values)
+        if (
+            request.values["delivery_mode"] is DeliveryMode.BACKGROUND
+            and self.refuse_background_draw
+        ):
+            raise FakeToolRefusal()
         self.after_draw = True
-        return SimpleNamespace(is_error=False, text="Background drag was delivered.")
+        return SimpleNamespace(
+            effect=Effect.CONFIRMED,
+            route=Route.ACCESSIBILITY,
+            summary="The exact canvas drag was delivered.",
+            error=None,
+            hint=None,
+            escalation=None,
+        )
 
     async def shutdown(self):
         self.shutdown_called = True
@@ -343,8 +356,109 @@ def test_cua_draw_path_reobserves_each_segment_and_reports_pixel_evidence_not_se
         assert driver.drag_inputs[0]["from_y"] == 18
         assert driver.drag_inputs[0]["to_x"] == 82
         assert driver.drag_inputs[0]["to_y"] == 82
+        assert driver.drag_inputs[0]["delivery_mode"] is DeliveryMode.BACKGROUND
     finally:
         backend.close()
+
+
+
+
+
+def test_cua_canvas_background_refusal_enables_only_exact_approved_foreground_retry():
+    driver = FakeDriver(refuse_background_draw=True)
+    backend = _backend(driver)
+    strokes = [[[0.1, 0.1], [0.9, 0.9]]]
+    try:
+        initial = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        initial_token = initial["elements"][0]["element_token"]
+        refusal = backend.draw_path(
+            "conversation-a", 4321, 77, initial["snapshot_ref"],
+            initial_token, strokes,
+        )
+        assert refusal["status"] == "background_unavailable"
+        assert refusal["foreground_retry_available"] is True
+        assert refusal["foreground_retry"] == "computer.cua_draw_path_foreground"
+        assert refusal["snapshot_invalidated"] is True
+        assert backend.can_foreground_draw_retry("conversation-a", 4321) is True
+        assert driver.drag_inputs[0]["delivery_mode"] is DeliveryMode.BACKGROUND
+
+        fresh = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        fresh_token = fresh["elements"][0]["element_token"]
+
+        # The explicit retry cannot alter the original approved stroke plan.
+        altered = backend.draw_path(
+            "conversation-a", 4321, 77, fresh["snapshot_ref"],
+            fresh_token, [[[0.1, 0.1], [0.8, 0.8]]], foreground=True,
+        )
+        assert altered["status"] == "blocked"
+        assert len(driver.drag_inputs) == 1
+
+        # The same plan may be retried once, but only with a fresh token/snapshot.
+        accepted = backend.draw_path(
+            "conversation-a", 4321, 77, fresh["snapshot_ref"],
+            fresh_token, strokes, foreground=True,
+        )
+        assert accepted["status"] == "completed"
+        assert accepted["verified"] is True
+        assert accepted["semantic_verified"] is False
+        assert accepted["foreground_delivery_used"] is True
+        assert driver.drag_inputs[-1]["delivery_mode"] is DeliveryMode.FOREGROUND
+        assert backend.can_foreground_draw_retry("conversation-a", 4321) is False
+
+        fresh_again = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        second_retry = backend.draw_path(
+            "conversation-a", 4321, 77, fresh_again["snapshot_ref"],
+            fresh_again["elements"][0]["element_token"], strokes, foreground=True,
+        )
+        assert second_retry["status"] == "blocked"
+        assert len(driver.drag_inputs) == 2
+    finally:
+        backend.close()
+
+
+def test_cua_foreground_drawing_is_blocked_without_exact_background_refusal():
+    driver = FakeDriver()
+    backend = _backend(driver)
+    try:
+        state = backend.inspect_window(
+            "conversation-a", 4321, 77, include_screenshot=True,
+        )
+        blocked = backend.draw_path(
+            "conversation-a", 4321, 77, state["snapshot_ref"],
+            state["elements"][0]["element_token"],
+            [[[0.1, 0.1], [0.9, 0.9]]], foreground=True,
+        )
+        assert blocked["status"] == "blocked"
+        assert driver.drag_inputs == []
+    finally:
+        backend.close()
+
+
+def test_agent_runtime_validates_foreground_drawing_as_the_same_bounded_canvas_contract():
+    from chimera.agent_runtime import AgentRuntime
+    valid = {
+        "session_id": "authorized-session",
+        "window_id": 77,
+        "snapshot_ref": "fresh-snapshot",
+        "canvas_element_token": "fresh-canvas-token",
+        "strokes": [[[0.1, 0.1], [0.9, 0.9]]],
+        "duration_ms": 240,
+        "steps": 12,
+    }
+    assert AgentRuntime._validate_arguments(
+        "computer.cua_draw_path_foreground", valid,
+    ) is None
+    invalid = {**valid, "strokes": [[[0.1, 0.1], [1.0, 0.9]]]}
+    with pytest.raises(ValueError, match="normalized"):
+        AgentRuntime._validate_arguments(
+            "computer.cua_draw_path_foreground", invalid,
+        )
 
 
 def test_cua_draw_path_rejects_out_of_bounds_and_oversized_strokes():
@@ -506,6 +620,7 @@ def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path
                 )
             }
             self.foreground_ready = False
+            self.foreground_draw_ready = False
 
         def _identity_is_current(self, _identity):
             return True
@@ -515,6 +630,9 @@ def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path
 
         def cua_foreground_retry_available(self, _app_session_id, _owner_session_id):
             return self.foreground_ready
+
+        def cua_foreground_draw_retry_available(self, _app_session_id, _owner_session_id):
+            return self.foreground_draw_ready
 
     fake_computer = FakeComputer()
     # This is a pure catalog-policy test. Do not initialize COM/UIA or scan
@@ -541,12 +659,16 @@ def test_agent_catalog_hides_foreground_cua_tool_until_matching_refusal(tmp_path
     before = runtime._protocol_catalog(session)
     before_ids = {item["id"] for item in before["tools"]}
     assert "computer.cua_click" in before_ids
+    assert "computer.cua_draw_path" in before_ids
     assert "computer.cua_click_foreground" not in before_ids
+    assert "computer.cua_draw_path_foreground" not in before_ids
 
     fake_computer.foreground_ready = True
+    fake_computer.foreground_draw_ready = True
     after = runtime._protocol_catalog(session)
     after_ids = {item["id"] for item in after["tools"]}
     assert "computer.cua_click_foreground" in after_ids
+    assert "computer.cua_draw_path_foreground" in after_ids
 
 
 def test_manager_restricts_cua_windows_to_launch_approved_hwnd_set():
