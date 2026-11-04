@@ -531,6 +531,14 @@ class CuaDriverBackend:
                     "provider": "cua_driver", "pid": pid, "window_id": window_id,
                     "reason": f"{type(exc).__name__}: {exc}"}
 
+    def can_foreground_retry(self, owner_session_id: str, pid: int) -> bool:
+        """True only after an explicit CUA refusal recommended foreground for this PID."""
+        with self._lock:
+            return any(
+                owner == owner_session_id and process_id == pid
+                for owner, process_id, _window_id in self._foreground_escalations
+            )
+
     def _snapshot_for_action(self, owner_session_id: str, pid: int, window_id: int,
                              snapshot_ref: str) -> tuple[_Snapshot | None, dict | None]:
         with self._lock:
