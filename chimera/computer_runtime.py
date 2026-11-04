@@ -690,6 +690,18 @@ class ComputerSessionManager:
                         "reason": "UI Automation target rectangle is not fully contained by the authorized HWND",
                         "backend": "scoped_win32_input",
                     }
+                strategy = self.choose_interaction(
+                    "visual_action",
+                    "native_windows",
+                    evidence={"fresh_window": True, "geometry": True},
+                )
+                if strategy.selected != "grounded_input":
+                    return {
+                        "status": "blocked", "verified": False,
+                        "backend": "strategy",
+                        "reason": strategy.reason,
+                        "selected_backend": strategy.selected,
+                    }
                 action = (options or {}).get("action")
                 if action == "type_text":
                     control_type = str(target.get("control_type") or "").casefold()
@@ -723,7 +735,7 @@ class ComputerSessionManager:
                             "reason": focus_result.get("reason") or "UI Automation could not focus the observed target",
                             "backend": "uia",
                         }
-                return self.visual_input.execute(
+                input_result = self.visual_input.execute(
                     hwnd=reference.hwnd,
                     expected_pid=identity.pid,
                     element_pid=target["process_id"],
@@ -739,8 +751,21 @@ class ComputerSessionManager:
                     scroll_steps=(options or {}).get("steps", 3),
                     approved=True,
                 )
+                return {**input_result, "strategy": strategy.selected}
             except Exception as exc:
                 return {"status": "failed", "verified": False, "backend": "scoped_win32_input", "reason": str(exc)}
+        strategy = self.choose_interaction(
+            operation,
+            "native_windows",
+            evidence={"fresh_window": True, "geometry": True, "semantic_control": True},
+        )
+        if strategy.selected != "uia":
+            return {
+                "status": "blocked", "verified": False,
+                "backend": "strategy",
+                "reason": strategy.reason,
+                "selected_backend": strategy.selected,
+            }
         try:
             result = self.uia.action(
                 reference.hwnd, reference.runtime_id, operation, value,
@@ -753,6 +778,7 @@ class ComputerSessionManager:
             "session_id": reference.session_id,
             "reference_id": reference.reference_id,
             "hwnd": reference.hwnd,
+            "strategy": strategy.selected,
         }
 
     def validate_reference(self, reference: ElementReference) -> None:
