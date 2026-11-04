@@ -87,3 +87,38 @@ def test_blocked_step_prevents_false_task_completion(tmp_path):
     store.step_transition(step_id, "blocked", error="control is not exposed")
     assert store.reconcile_completion(task_id, "completed") == "blocked"
     assert store.get(task_id).status == "blocked"
+
+
+
+def test_resume_blocks_in_flight_side_effect_instead_of_replaying_it(tmp_path):
+    database = tmp_path / "tasks.db"
+    store = TaskStore(database)
+    task_id = store.create("session-1", "Create a verified file", mode="build")
+    store.transition(task_id, "running")
+    step_id = store.add_step(
+        task_id,
+        "Create the requested PDF",
+        tool="workspace.create_pdf",
+        arguments={"path": "Desktop/Report.pdf"},
+    )
+    store.step_transition(
+        step_id,
+        "running",
+        invocation_id="pdf-side-effect-started",
+    )
+
+    # A new TaskStore simulates a fresh desktop-app process after a crash.
+    restarted = TaskStore(database)
+    restarted.resume(task_id)
+    task = restarted.get(task_id)
+    step = restarted.steps(task_id)[0]
+
+    assert task.status == "running"
+    assert step["status"] == "blocked"
+    assert step["invocation_id"] == "pdf-side-effect-started"
+    assert "outcome is unknown" in step["error"]
+    assert "do not replay blindly" in step["error"]
+    assert any(
+        item["kind"] == "step" and item["id"] == step_id
+        for item in restarted.completion_blockers(task_id)
+    )
