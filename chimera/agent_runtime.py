@@ -1585,6 +1585,12 @@ class AgentRuntime:
             operation = pending["tool"]
             args = pending["arguments"]
             self._validate_arguments(operation, args)
+            computer_spec = tool_catalog()["operations"].get(operation)
+            if computer_spec is None:
+                raise ValueError(f"unregistered computer action: {operation}")
+            TaskPolicy.validate(
+                session.get("mode", "plan"), operation, computer_spec["permission"]
+            )
             self._record(session_id, "tool.permission.granted", {
                 "invocation_id": pending["invocation_id"], "tool": operation, "source": "operator",
             })
@@ -1595,7 +1601,10 @@ class AgentRuntime:
             with sqlite3.connect(self.store.db_path) as db:
                 db.execute("UPDATE agent_sessions SET state='reasoning',updated_at=? WHERE session_id=?", (_now(), session_id))
             if operation == "computer.launch":
-                result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
+                try:
+                    result_data = WindowsComputerUse(workspace).launch(args["executable"], approved=True)
+                except Exception as exc:
+                    result_data = {"status": "failed", "reason": f"application launch failed: {exc}"}
                 if (
                     result_data.get("status") == "completed"
                     and type(result_data.get("pid")) is int
