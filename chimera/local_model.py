@@ -571,7 +571,10 @@ class LocalModelProvider:
                 "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
                 "For explicit app-opening requests, inspect computer.list_applications when useful and call computer.launch "
                 "with a known app name such as Word or Excel, or an exact executable path. Launch requires approval. After launch, request exact "
-                "app authorization in Applications before interacting with its controls. Never claim an app is open until "
+                "app authorization in Applications before interacting with its controls. Use the fresh UI Automation element references and the actions reported for each element. " 
+                "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
+                "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. " 
+                "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
                 "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
