@@ -911,6 +911,7 @@ def test_packaged_notepad_launch_tracks_real_windowsapps_process(tmp_path, monke
     from types import SimpleNamespace
     import subprocess
     from pathlib import Path
+    import pytest
     from chimera import computer_use
     from chimera.computer_use import WindowObservation
 
