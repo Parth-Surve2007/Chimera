@@ -984,8 +984,7 @@ class LocalModelProvider:
                 "Mark an item completed only when actual tool evidence supports the outcome; mark it blocked when a real prerequisite is missing. "
                 "A checklist is progress metadata, never permission to execute an action or proof that work succeeded. "
                 "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
-                + workspace_guidance +
-                + (
+                + workspace_guidance + (
                     "COMPUTER LAUNCH CONTRACT: computer.launch accepts exactly one argument: "
                     '{"executable":"<installed app name or exact executable path>"}. '
                     "For Notepad use {\"executable\":\"Notepad\"}. Never add browser_name, app_name, application, or any other key. "
