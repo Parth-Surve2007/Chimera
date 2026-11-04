@@ -908,10 +908,17 @@ class LocalModelProvider:
             if (
                 isinstance(parsed, dict)
                 and parsed.get("type") == "message"
-                and (
-                    _is_stale_user_request_echo(parsed.get("content", ""), recent)
-                    or _is_repeated_assistant_response(parsed.get("content", ""), recent)
-                )
+                and _is_stale_user_request_echo(parsed.get("content", ""), recent)
+            ):
+                metrics["stale_user_request_echo_blocked"] = True
+                parsed = {
+                    "type": "message",
+                    "content": _repetition_recovery_message(recent),
+                }
+            elif (
+                isinstance(parsed, dict)
+                and parsed.get("type") == "message"
+                and _is_repeated_assistant_response(parsed.get("content", ""), recent)
             ):
                 metrics["repeated_assistant_response_blocked"] = True
                 parsed = {
