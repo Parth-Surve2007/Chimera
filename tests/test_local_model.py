@@ -385,7 +385,7 @@ def test_local_agent_retries_an_unregistered_tool_id_as_a_chat_answer(tmp_path):
         json.dumps({"type": "tool_call", "tool": "python", "arguments": {"code": "print('x')"}}),
         json.dumps({
             "type": "message",
-            "content": "def is_palindrome(value):\\n    cleaned = ''.join(ch.casefold() for ch in value if ch.isalnum())\\n    return cleaned == cleaned[::-1]",
+            "content": "def is_palindrome(value):\n    cleaned = ''.join(ch.casefold() for ch in value if ch.isalnum())\n    return cleaned == cleaned[::-1]",
         }),
     ])
     provider = LocalModelProvider(
@@ -417,7 +417,7 @@ def test_local_agent_retries_an_unregistered_tool_id_as_a_chat_answer(tmp_path):
     assert "is_palindrome" in decision["content"]
     assert len(prompts) == 2
     assert "unregistered tool ID: 'python'" in prompts[1]
-    assert "answer the code directly" in prompts[1]
+    assert "return the code directly" in prompts[1]
     assert schemas[0]["oneOf"][1]["properties"]["tool"]["enum"] == [
         "computer.launch", "workspace.create_file"
     ]
