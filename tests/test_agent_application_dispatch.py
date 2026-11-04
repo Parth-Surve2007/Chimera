@@ -376,7 +376,7 @@ def test_approved_computer_launch_authorizes_exact_process_for_same_conversation
 
     def authorize(pid, image=None, owner_session_id=None):
         identity = SimpleNamespace(
-            pid=pid, executable=str(executable),
+            pid=pid, executable=str(executable), process_create_time=123.0,
             session_id="authorized-notepad-session",
             owner_session_id=owner_session_id,
         )
