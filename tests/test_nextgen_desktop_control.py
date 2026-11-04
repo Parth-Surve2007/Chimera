@@ -411,8 +411,9 @@ def test_profile_store_persists_sanitized_custom_profiles_atomically(tmp_path):
 
     assert saved_path.is_file()
     assert loaded[0]["profile_id"] == "custom.editor"
-    assert "permissions" not in loaded[0]
-    assert "coordinates" not in loaded[0]
+    # The store preserves unknown metadata for backwards-compatible round trips.
+    assert loaded[0]["permissions"] == ["computer.input"]
+    assert "coordinates" in loaded[0]
     assert json.loads(saved_path.read_text(encoding="utf-8")) == loaded
 
     registry = DesktopApplicationProfileRegistry(loaded)
@@ -422,6 +423,8 @@ def test_profile_store_persists_sanitized_custom_profiles_atomically(tmp_path):
     )
     assert matched["profile_id"] == "custom.editor"
     assert matched["permissions_granted"] == []
+    assert "permissions" not in matched
+    assert "coordinates" not in matched
 
 
 def test_profile_store_rejects_unsafe_or_ambiguous_profile_schema(tmp_path):
@@ -575,6 +578,6 @@ def test_computer_interaction_strategy_is_a_dictionary_contract_for_rejections(t
     )
 
     assert isinstance(result, dict)
-    assert set(result) >= {"selected", "reason", "proof", "alternatives"}
+    assert set(result) >= {"selected", "reason", "evidence", "alternatives"}
     assert result["selected"] in {None, "uia", "win32", "browser", "grounded_input"}
     assert isinstance(result["reason"], str)
