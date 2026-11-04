@@ -127,7 +127,7 @@ class MainWindow:
         self.context_field = ft.TextField(label="CONTEXT", color=TEXT, border_color=BORDER, value=str(initial_config.context), width=120)
         self.max_tokens_field = ft.TextField(label="MAX TOKENS", color=TEXT, border_color=BORDER, value=str(initial_config.max_tokens), width=120)
         self.threads_field = ft.TextField(label="CPU THREADS", color=TEXT, border_color=BORDER, value=str(initial_config.threads), width=120)
-        self.gpu_layers_field = ft.TextField(label="GPU LAYERS", color=TEXT, border_color=BORDER, value=str(initial_config.gpu_layers), width=120)
+        self.gpu_layers_field = ft.TextField(label="GPU LAYERS (AUTO OR NUMBER)", color=TEXT, border_color=BORDER, value=str(initial_config.gpu_layers), width=160)
         page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.theme = ft.Theme(color_scheme_seed=THEME_SEED, font_family="Segoe UI"); page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
@@ -694,11 +694,11 @@ class MainWindow:
         tuning = ft.Container(
             ft.Column([
                 ft.Text("Inference budget", color=FOCUS, size=12, weight=ft.FontWeight.BOLD),
-                ft.Text("A 4K context is a good starting point for recent conversation evidence and the registered tool catalogue.", color=SECONDARY, size=10),
+                ft.Text("Higher inference budget for multi-step local work. GPU auto lets llama.cpp fit layers to the VRAM actually available on this machine.", color=SECONDARY, size=10),
                 ft.Row([self.context_field, self.max_tokens_field, self.threads_field, self.gpu_layers_field], wrap=True, spacing=10),
                 ft.Row([
-                    ft.TextButton("APPLY 4K STARTER PRESET", on_click=self._apply_balanced_preset, style=ft.ButtonStyle(color=ACCENT)),
-                    ft.Text("4096 context · 512 output · 6 CPU threads · 20 GPU layers", color=MUTED, size=10),
+                    ft.TextButton("APPLY HIGH-COMPUTE PRESET", on_click=self._apply_high_compute_preset, style=ft.ButtonStyle(color=ACCENT)),
+                    ft.Text("8192 context · 768 output · 8 CPU threads · GPU auto", color=MUTED, size=10),
                 ], wrap=True),
             ], spacing=10),
             bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=12, padding=ft.Padding.all(16),
@@ -760,12 +760,12 @@ class MainWindow:
         if e.files: self.runtime_path_field.value = e.files[0].path; self.page.update()
     def _server_picked(self, e):
         if e.files: self.server_path_field.value = e.files[0].path; self.page.update()
-    def _apply_balanced_preset(self, e=None):
-        self.context_field.value = "4096"
-        self.max_tokens_field.value = "512"
-        self.threads_field.value = "6"
-        self.gpu_layers_field.value = "20"
-        self._toast("Balanced 3B preset staged. Save it after checking the selected model and GPU headroom.")
+    def _apply_high_compute_preset(self, e=None):
+        self.context_field.value = "8192"
+        self.max_tokens_field.value = "768"
+        self.threads_field.value = "8"
+        self.gpu_layers_field.value = "auto"
+        self._toast("High-compute preset staged. Save to restart llama.cpp with adaptive GPU offload.")
         self.page.update()
     async def _warm_local_model(self):
         config = self.local_provider.config
@@ -794,11 +794,12 @@ class MainWindow:
             context = int(self.context_field.value)
             max_tokens = int(self.max_tokens_field.value)
             threads = int(self.threads_field.value)
-            gpu_layers = int(self.gpu_layers_field.value)
+            raw_gpu_layers = str(self.gpu_layers_field.value or "").strip().casefold()
+            gpu_layers = "auto" if raw_gpu_layers == "auto" else int(raw_gpu_layers)
         except (TypeError, ValueError):
-            return self._toast("Context, token, thread and GPU-layer settings must be integers.")
-        if context < 512 or max_tokens < 1 or threads < 1 or gpu_layers < 0:
-            return self._toast("Use context ≥ 512, tokens/threads ≥ 1, and GPU layers ≥ 0.")
+            return self._toast("Context, tokens and threads must be integers; GPU layers must be 'auto' or a non-negative integer.")
+        if context < 512 or max_tokens < 1 or threads < 1 or (isinstance(gpu_layers, int) and gpu_layers < 0):
+            return self._toast("Use context ≥ 512, tokens/threads ≥ 1, and GPU layers as 'auto' or ≥ 0.")
         if model and model.suffix.lower() != ".gguf": return self._toast("Model must be an existing .gguf file.")
         if model and not model.is_file(): return self._toast("Selected model file does not exist.")
         if cli and not Path(cli).is_file(): return self._toast("Selected llama-cli executable does not exist.")
