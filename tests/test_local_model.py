@@ -1087,3 +1087,168 @@ def test_computer_launch_arguments_are_constrained_to_executable(tmp_path):
         if "computer.list_applications" in variant.get("properties", {}).get("tool", {}).get("enum", [])
     )
     assert "computer.launch" not in generic_variant["properties"]["tool"]["enum"]
+
+
+
+def test_local_agent_prompt_guides_text_entry_through_authorized_uia_editor(tmp_path):
+    captured = {}
+    provider = LocalModelProvider(
+        LocalModelConfig(None, None, context=4096, max_tokens=384)
+    )
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {
+            "type": "message",
+            "content": "I will use the already-authorized editor.",
+        }, {"context": 4096}
+
+    provider.structured_with_metrics = fake_structured
+    provider.decide(
+        [SimpleNamespace(
+            role="user",
+            content="Open Notepad, type Hello World, and verify it.",
+        )],
+        {
+            "version": 1,
+            "tools": [
+                {
+                    "id": "computer.launch",
+                    "description": "Launch Notepad.",
+                    "arguments": {"executable": "string"},
+                    "permission": "computer.launch",
+                },
+                {
+                    "id": "computer.inspect_elements",
+                    "description": "Fresh UIA observation.",
+                    "arguments": {"session_id": "string", "hwnd": "integer", "depth": "integer", "limit": "integer"},
+                    "permission": "computer.observe",
+                },
+                {
+                    "id": "computer.set_value",
+                    "description": "Set an observed ValuePattern text control.",
+                    "arguments": {"session_id": "string", "reference_id": "string", "value": "string"},
+                    "permission": "computer.input",
+                },
+                {
+                    "id": "computer.visual_action",
+                    "description": "Use action type_text on one observed editor control.",
+                    "arguments": {"session_id": "string", "reference_id": "string", "action": "string", "text": "string"},
+                    "permission": "computer.input",
+                },
+                {
+                    "id": "computer.read_text",
+                    "description": "Read text from an observed element.",
+                    "arguments": {"session_id": "string", "reference_id": "string"},
+                    "permission": "computer.observe",
+                },
+            ],
+            "authorized_applications": [{
+                "session_id": "notepad-session",
+                "pid": 4242,
+                "executable": "Notepad.exe",
+            }],
+        },
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    prompt = captured["prompt"]
+    assert "do NOT launch it a second time" in prompt
+    assert "reuse its computer_session_id" in prompt
+    assert "action='type_text'" in prompt
+    assert "exact text on that observed editable reference" in prompt
+    assert "computer.read_text" in prompt
+
+
+
+def test_local_agent_preserves_editor_reference_from_compacted_launch_result(tmp_path):
+    captured = {}
+    provider = LocalModelProvider(
+        LocalModelConfig(None, None, context=4096, max_tokens=384)
+    )
+
+    def fake_structured(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {
+            "type": "message",
+            "content": "I have the authorized Notepad editor reference.",
+        }, {"context": 4096}
+
+    provider.structured_with_metrics = fake_structured
+    launch_result = {
+        "invocation_id": "launch-notepad",
+        "tool": "computer.launch",
+        "arguments": {"executable": "Notepad"},
+        "status": "completed",
+        "result": {
+            "status": "completed",
+            "control_authorized": True,
+            "already_authorized": False,
+            "computer_session_id": "notepad-session-42",
+            "pid": 4242,
+            "initial_observation": {
+                "status": "completed",
+                "backend": "uia",
+                "session_id": "notepad-session-42",
+                "element_count": 1,
+                "windows": [{
+                    "hwnd": 77,
+                    "pid": 4242,
+                    "title": "Untitled - Notepad",
+                }],
+                "elements": [{
+                    "reference_id": "fresh-notepad-editor-reference",
+                    "session_id": "notepad-session-42",
+                    "name": "Text Editor",
+                    "control_type": "Document",
+                    "enabled": True,
+                    "offscreen": False,
+                    "patterns": ["Text"],
+                    "available_actions": ["read_text", "visual_action"],
+                    "rectangle": {"left": 10, "top": 20, "right": 800, "bottom": 600},
+                }],
+            },
+        },
+    }
+    provider.decide(
+        [
+            SimpleNamespace(
+                role="user",
+                content="Open Notepad and type Hello World.",
+            ),
+            SimpleNamespace(
+                role="tool",
+                content=json.dumps(launch_result),
+            ),
+        ],
+        {
+            "version": 1,
+            "tools": [
+                {
+                    "id": "computer.launch",
+                    "description": "Launch an installed application.",
+                    "arguments": {"executable": "string"},
+                    "permission": "computer.launch",
+                },
+                {
+                    "id": "computer.visual_action",
+                    "description": "Scoped text entry on an observed UIA editor.",
+                    "arguments": {"session_id": "string", "reference_id": "string", "action": "string", "text": "string"},
+                    "permission": "computer.input",
+                },
+            ],
+            "authorized_applications": [{
+                "session_id": "notepad-session-42",
+                "pid": 4242,
+                "executable": "Notepad.exe",
+            }],
+        },
+        session={"mode": "build", "workspace": str(tmp_path)},
+    )
+
+    prompt = captured["prompt"]
+    assert "Fresh editor/control references" in prompt
+    assert "fresh-notepad-editor-reference" in prompt
+    assert "notepad-session-42" in prompt
+    assert "Text Editor" in prompt
+    assert "do NOT launch it a second time" in prompt

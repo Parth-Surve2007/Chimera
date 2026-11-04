@@ -627,6 +627,94 @@ class LocalModelProvider:
                     content = heading + ":\n" + (
                         "\n".join(lines) if lines else "No matching applications found."
                     )
+                elif isinstance(payload, dict) and payload.get("tool") == "computer.launch":
+                    result = payload.get("result") or {}
+                    if isinstance(result, dict):
+                        observation = result.get("initial_observation")
+                        if isinstance(observation, dict):
+                            windows = observation.get("windows") or []
+                            elements = observation.get("elements") or []
+                            window_lines = [
+                                f"- hwnd={item.get('hwnd')} | title={' '.join(str(item.get('title') or '').split())[:90]}"
+                                for item in windows[:4] if isinstance(item, dict)
+                            ]
+                            def launch_element_rank(element):
+                                control = str(element.get("control_type") or "").casefold()
+                                patterns = {
+                                    str(value).casefold()
+                                    for value in (element.get("patterns") or [])
+                                }
+                                enabled = bool(element.get("enabled", False))
+                                visible = not bool(element.get("offscreen", False))
+                                editable = (
+                                    control in {"edit", "document", "combobox"}
+                                    or bool({"value", "text"} & patterns)
+                                )
+                                return (int(enabled and visible), int(editable))
+                            ranked_elements = sorted(
+                                (item for item in elements if isinstance(item, dict)),
+                                key=launch_element_rank,
+                                reverse=True,
+                            )
+                            element_lines = []
+                            for element in ranked_elements[:12]:
+                                rectangle = element.get("rectangle") or {}
+                                bounds = ",".join(
+                                    str(rectangle.get(key, "?"))
+                                    for key in ("left", "top", "right", "bottom")
+                                )
+                                patterns = ",".join(
+                                    str(value)[:24]
+                                    for value in (element.get("patterns") or [])[:6]
+                                ) or "-"
+                                actions = ",".join(
+                                    str(value)[:24]
+                                    for value in (element.get("available_actions") or [])[:6]
+                                ) or "-"
+                                element_lines.append(
+                                    f"- ref={str(element.get('reference_id') or '')[:48]} "
+                                    f"| {str(element.get('control_type') or '?')[:24]} "
+                                    f"| {' '.join(str(element.get('name') or '').split())[:72] or '(unnamed)'} "
+                                    f"| enabled={bool(element.get('enabled', False))} "
+                                    f"| offscreen={bool(element.get('offscreen', False))} "
+                                    f"| rect={bounds} | patterns={patterns} | actions={actions}"
+                                )
+                            content = (
+                                "Application launch result"
+                                f" | status={payload.get('status', '?')}"
+                                f" | control_authorized={bool(result.get('control_authorized'))}"
+                                f" | already_authorized={bool(result.get('already_authorized'))}"
+                                f" | session_id={result.get('computer_session_id') or result.get('session_id') or observation.get('session_id')}"
+                                f" | pid={result.get('pid', '?')}"
+                                f" | observation={observation.get('status', '?')}"
+                                f" | backend={observation.get('backend', '?')}"
+                                f" | elements={observation.get('element_count', len(elements))}\n"
+                                + (
+                                    "Visible authorized windows:\n" + "\n".join(window_lines) + "\n"
+                                    if window_lines else ""
+                                )
+                                + (
+                                    "Fresh editor/control references (use these exact IDs):\n"
+                                    + "\n".join(element_lines)
+                                    if element_lines else
+                                    "No UIA element references were returned; inspect the authorized session again."
+                                )
+                                + "\nDo not relaunch this already-authorized application. Use the session_id and a fresh observed editor reference for the next requested action."
+                            )
+                        else:
+                            content = (
+                                "Application launch result: "
+                                + json.dumps({
+                                    key: result.get(key) for key in (
+                                        "status", "display_name", "pid", "control_authorized",
+                                        "computer_session_id", "already_authorized",
+                                        "next_step", "authorization_error",
+                                        "initial_observation",
+                                    ) if key in result
+                                }, ensure_ascii=False, separators=(",", ":"))[:2600]
+                            )
+                    else:
+                        content = "Application launch returned no structured result."
                 elif isinstance(payload, dict) and payload.get("tool") == "computer.inspect_elements":
                     result = payload.get("result") or {}
                     data = result.get("items", result) if isinstance(result, dict) else {}
@@ -906,6 +994,23 @@ class LocalModelProvider:
             "State changes require exact approval. Re-observe and verify the intended state after every mutation; Invoke acceptance is not completion. "
             if app_control_available else ""
         )
+        text_entry_guidance = (
+            "For a request to type text into an application, do NOT stop after opening it and do NOT launch it a second time. "
+            "After computer.launch returns control_authorized=true, reuse its computer_session_id and inspect the included initial_observation.elements first. "
+            "If the tool result says already_authorized=true, reuse that same session; never call computer.launch again for that app. "
+            "Find the exact visible, enabled editor control (Edit, Document, or ComboBox) and use only its fresh reference_id. "
+            "If available_actions includes set_value, use computer.set_value with the exact requested text. Otherwise, when computer.visual_action is available, "
+            "use computer.visual_action with action='type_text' and the exact text on that observed editable reference. "
+            "Both are state-changing actions and require their own operator approval; never bypass the approval. "
+            "After the approved text-entry result, take a fresh computer.inspect_elements observation and verify the expected text with computer.read_text. "
+            "If no editable UIA control or scoped type_text path is available, report the precise blocker instead of claiming the text was entered. "
+            if "computer.visual_action" in tool_ids or "computer.set_value" in tool_ids else
+            (
+                "For a text-entry request, reuse an already authorized app and inspect its controls. "
+                "No approved text-entry capability is available in this turn; do not claim typing succeeded. "
+                if app_control_available else ""
+            )
+        )
         visual_guidance = (
             "For a drawing request, inspect the authorized app's exact window and select the real canvas-like child, never the whole window. "
             "Create one pen-up path per disconnected shape/component; never join separate shapes with a stray connecting line. "
@@ -992,12 +1097,14 @@ class LocalModelProvider:
                     if "computer.launch" in tool_ids else ""
                 ) +
                 "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
+                "If an application matching the request is already in AUTHORIZED_APPLICATIONS, use that exact session_id and do not launch it again. "
+                "An already-authorized launch result with already_authorized=true is a handoff to the existing app, not a request to relaunch. "
                 "For explicit app-opening requests, inspect computer.list_applications for already-open apps. "
                 "Use computer.list_installed_applications to discover installed Start-menu apps, including packaged apps, "
                 "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
                 "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
                 "Never guess an application ID. After an approved computer.launch, continue only when its result has control_authorized=true and computer_session_id; inspect that session. Otherwise stop and report the authorization blocker. Never bypass Applications authorization. "
-                + multi_window_guidance + app_control_guidance + visual_guidance + canvas_save_guidance + visual_inspection_guidance + cua_guidance +
+                + multi_window_guidance + app_control_guidance + text_entry_guidance + visual_guidance + canvas_save_guidance + visual_inspection_guidance + cua_guidance +
                 "Never claim an app is open until "
                 "the launch tool confirms it. "
                 "After a tool result, use actual evidence.\n"
