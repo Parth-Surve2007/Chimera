@@ -115,7 +115,7 @@ class LlamaServerManager:
         model: Path | None,
         context=4096,
         threads=4,
-        gpu_layers=0,
+        gpu_layers="auto",
         timeout=60,
         port=None,
         idle_timeout=0,
@@ -209,43 +209,77 @@ class LlamaServerManager:
         json_schema: dict | None = None,
         cancel_event=None,
         on_delta=None,
+        messages: list[dict] | None = None,
     ):
-        """Send one request to the selected local /completion endpoint.
+        """Generate through the selected local server.
 
-        Exactly one structured-output contract may be supplied. JSON Schema is
-        preferred for the agent protocol; grammar remains for legacy callers.
+        Agent decisions and ordinary conversation may supply role-separated
+        messages so llama.cpp applies the GGUF's native chat template. Legacy
+        callers can continue using the raw completion endpoint.
         """
         if grammar is not None and json_schema is not None:
             raise ValueError("provide either grammar or json_schema, not both")
+        if messages is not None:
+            if not isinstance(messages, list) or not messages:
+                raise ValueError("chat messages must be a non-empty list")
+            for item in messages:
+                if (
+                    not isinstance(item, dict)
+                    or item.get("role") not in {"system", "user", "assistant"}
+                    or not isinstance(item.get("content"), str)
+                ):
+                    raise ValueError("chat messages must contain supported roles and string content")
+            if grammar is not None:
+                raise ValueError("chat-template requests currently support JSON Schema, not GBNF grammar")
         with self.request_lock:
             self.start()
             self.state = "busy"
             self.last_activity = time.monotonic()
-            payload = {
-                "prompt": prompt,
-                "n_predict": int(max_tokens),
-                "stream": True,
-                "temperature": 0.2,
-            }
-            structured_mode = "none"
-            if json_schema is not None:
-                payload["json_schema"] = json_schema
-                structured_mode = "json_schema"
-            elif grammar:
-                payload["grammar"] = grammar
-                structured_mode = "grammar"
+            if messages is not None:
+                endpoint = self.url + "/v1/chat/completions"
+                payload = {
+                    "model": Path(self.model).stem if self.model else "chimera-local",
+                    "messages": messages,
+                    "max_tokens": int(max_tokens),
+                    "stream": True,
+                    "temperature": 0.2,
+                }
+                if json_schema is not None:
+                    payload["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "chimera_agent_decision",
+                            "strict": True,
+                            "schema": json_schema,
+                        },
+                    }
+                structured_mode = "json_schema" if json_schema is not None else "none"
+            else:
+                endpoint = self.url + "/completion"
+                payload = {
+                    "prompt": prompt,
+                    "n_predict": int(max_tokens),
+                    "stream": True,
+                    "temperature": 0.2,
+                }
+                if json_schema is not None:
+                    payload["json_schema"] = json_schema
+                elif grammar:
+                    payload["grammar"] = grammar
+                structured_mode = "json_schema" if json_schema is not None else "grammar" if grammar else "none"
 
-            endpoint = self.url + "/completion"
             request_config = {
                 "endpoint": endpoint,
-                "n_predict": int(max_tokens),
+                "max_tokens": int(max_tokens),
                 "stream": True,
                 "temperature": 0.2,
                 "structured_output": structured_mode,
+                "chat_template": messages is not None,
                 "prompt_chars": len(prompt),
+                "message_count": len(messages) if messages is not None else 0,
                 "context": int(self.context),
                 "threads": int(self.threads),
-                "gpu_layers": int(self.gpu_layers),
+                "gpu_layers": str(self.gpu_layers),
                 "schema_bytes": (
                     len(json.dumps(json_schema, separators=(",", ":")).encode("utf-8"))
                     if json_schema is not None else 0
@@ -259,6 +293,7 @@ class LlamaServerManager:
                 method="POST",
             )
             pieces = []
+            reasoning_pieces = []
             started = time.perf_counter()
             self.last_request_diagnostic = None
             try:
@@ -279,15 +314,36 @@ class LlamaServerManager:
                             continue
                         if not isinstance(item, dict):
                             continue
-                        text = item.get("content") or item.get("token") or item.get("response") or ""
+                        text = ""
+                        if messages is not None:
+                            choices = item.get("choices") or []
+                            if choices and isinstance(choices[0], dict):
+                                choice = choices[0]
+                                delta = choice.get("delta") or {}
+                                if not isinstance(delta, dict):
+                                    delta = {}
+                                text = delta.get("content") or ""
+                                reasoning = delta.get("reasoning_content") or ""
+                                if reasoning:
+                                    reasoning_pieces.append(str(reasoning))
+                                if not text:
+                                    message = choice.get("message") or {}
+                                    if isinstance(message, dict):
+                                        text = message.get("content") or ""
+                        else:
+                            text = item.get("content") or item.get("token") or item.get("response") or ""
                         if text:
+                            text = str(text)
                             pieces.append(text)
                             if on_delta:
                                 on_delta(text)
                 self.state = "ready"
                 self.last_activity = time.monotonic()
                 self.last_error = None
-                return "".join(pieces), {
+                output = "".join(pieces)
+                if not output.strip():
+                    raise ServerUnavailable("llama-server completed the request without returning message content")
+                return output, {
                     "duration_ms": int((time.perf_counter() - started) * 1000),
                     "server_url": self.url,
                     "server_pid": self.process.pid if self.process else None,
@@ -295,6 +351,8 @@ class LlamaServerManager:
                     "model": str(self.model),
                     "grammar": bool(grammar),
                     "json_schema": bool(json_schema),
+                    "chat_template": messages is not None,
+                    "reasoning_tokens_estimate": len("".join(reasoning_pieces).split()),
                 }
             except urllib.error.HTTPError as exc:
                 try:
