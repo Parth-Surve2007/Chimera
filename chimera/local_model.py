@@ -708,6 +708,15 @@ class LocalModelProvider:
                         for hint in profile.get("target_hints", [])[:6]:
                             if isinstance(hint, str):
                                 profile_lines.append(f"  Profile hint: {hint[:300]}")
+                        preferred = profile.get("preferred_operations", [])
+                        if isinstance(preferred, list) and preferred:
+                            profile_lines.append(
+                                "  Preferred semantic operations (advisory): "
+                                + ", ".join(str(value)[:60] for value in preferred[:8])
+                            )
+                        for limitation in profile.get("limitations", [])[:3]:
+                            if isinstance(limitation, str):
+                                profile_lines.append(f"  Profile limitation: {limitation[:220]}")
                     content = (
                         "Fresh UI Automation observation"
                         f" | hwnd={((data.get('windows') or [{}])[0].get('hwnd') if isinstance(data.get('windows'), list) and data.get('windows') else '?')}"
