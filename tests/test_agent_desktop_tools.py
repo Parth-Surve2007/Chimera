@@ -246,3 +246,63 @@ def test_builtin_capability_catalog_is_present_and_workspace_actions_resolve():
     assert "3d.blender" in builtin_capability_ids()
     assert "reverse_engineering.rea" in builtin_capability_ids()
     assert validate_builtin_catalog()
+
+
+
+def test_agent_application_inventory_ignores_irrelevant_model_arguments(tmp_path, monkeypatch):
+    import json
+
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.decisions = iter([
+                {
+                    "type": "tool_call",
+                    "tool": "computer.list_applications",
+                    "arguments": {"application_name": "Word", "filter": "Word"},
+                    "invocation_id": "inventory-with-extra-args",
+                },
+                {"type": "message", "content": "Microsoft Word is visible."},
+            ])
+
+        def decide(self, messages, catalog, session=None):
+            return next(self.decisions)
+
+    expected_inventory = [{
+        "name": "Microsoft Word",
+        "pid": 1234,
+        "executable": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+        "windows": [{"hwnd": 77, "pid": 1234, "title": "Document1 - Word"}],
+    }]
+    monkeypatch.setattr(WindowsComputerUse, "list_applications", lambda self: expected_inventory)
+
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "chimera.db"),
+        DecidingProvider(),
+    )
+    session_id = runtime.create_session(tmp_path, mode="plan")
+    result = runtime.send(session_id, "Find the visible Word window.")
+
+    assert result["status"] == "completed"
+    assert "Microsoft Word" in result["message"].content
+    tool_messages = [
+        message for message in runtime.store.messages(session_id)
+        if message.role == "tool"
+    ]
+    assert tool_messages
+    payload = json.loads(tool_messages[0].content)
+    assert payload["status"] == "completed"
+    assert payload["result"] == {"items": expected_inventory}
+
+
+def test_application_inventory_remains_tolerant_only_for_no_argument_reads():
+    import pytest
+
+    AgentRuntime._validate_arguments("computer.list_applications", {"filter": "Word"})
+    AgentRuntime._validate_arguments("computer.list_windows", {"application": "Word"})
+    with pytest.raises(ValueError, match="unsupported arguments"):
+        AgentRuntime._validate_arguments(
+            "computer.inspect_controls",
+            {"session_id": "session", "hwnd": 1, "extra": "not allowed"},
+        )

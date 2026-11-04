@@ -5,10 +5,10 @@ from chimera.local_model import LocalModelConfig
 from chimera.ui import ACCENT, BG, FOCUS, MainWindow
 
 
-def test_black_navy_palette_uses_neutral_focus_and_blue_accent():
+def test_black_graphite_palette_uses_neutral_focus_and_accent():
     assert BG == "#000000"
-    assert FOCUS == "#C6D1E2"
-    assert ACCENT == "#6F9FFF"
+    assert FOCUS == "#E0E0E0"
+    assert ACCENT == "#C5C5C5"
     assert "E5B35A" not in (BG + FOCUS + ACCENT).upper()
     assert "F17857" not in (BG + FOCUS + ACCENT).upper()
 

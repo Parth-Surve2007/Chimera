@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 import pytest
-def test_flet_ui_uses_black_navy_tokens_and_persistent_service():
+def test_flet_ui_uses_black_graphite_tokens_and_persistent_service():
     from chimera import ui
-    assert ui.BG == "#000000" and ui.SURFACE == "#090C12" and ui.ACCENT == "#6F9FFF" and ui.FOCUS == "#C6D1E2"
+    assert ui.BG == "#000000" and ui.SURFACE == "#0A0A0A" and ui.ACCENT == "#C5C5C5" and ui.FOCUS == "#E0E0E0"
     assert "warm-gold" not in (Path(__file__).parents[1] / "chimera" / "ui.py").read_text(encoding="utf-8").lower()
 
 def test_workspace_path_validation_accepts_real_directory_and_rejects_invalid(tmp_path):

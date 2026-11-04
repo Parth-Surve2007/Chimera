@@ -1,4 +1,4 @@
-"""Black-and-midnight Flet command console for Chimera."""
+"""Monochrome black-and-graphite Flet command console for Chimera."""
 import sys, asyncio, json, os
 from pathlib import Path
 from .review import ReviewService
@@ -17,20 +17,21 @@ from .builtin_capabilities import BUILTIN_CAPABILITIES
 try: import flet as ft
 except ImportError: ft = None
 
-# Mostly-black surfaces, cool graphite borders, and a restrained midnight-blue
-# accent. The gradient is atmospheric and intentionally low contrast.
-BG, SURFACE, ELEVATED, BORDER = "#000000", "#090C12", "#111722", "#252D3B"
-TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F2F5FA", "#B9C2D1", "#818C9E", "#505B6C", "#C6D1E2"
-ACCENT = "#6F9FFF"
-PANEL_NAVY = "#0A1120"
-STATE_COLORS = {"pass": "#93B4F2", "fail": "#D96B78", "unknown": "#8D9BB0", "blocked": "#637087"}
+# Strict monochrome palette: black surfaces, graphite borders, and neutral-grey
+# accents. The background gradient uses only near-black values.
+BG, SURFACE, ELEVATED, BORDER = "#000000", "#0A0A0A", "#151515", "#303030"
+TEXT, SECONDARY, MUTED, DISABLED, FOCUS = "#F2F2F2", "#B8B8B8", "#858585", "#555555", "#E0E0E0"
+ACCENT = "#C5C5C5"
+THEME_SEED = "#BDBDBD"
+PANEL_SURFACE = "#101010"
+STATE_COLORS = {"pass": "#D0D0D0", "fail": "#A6A6A6", "unknown": "#888888", "blocked": "#666666"}
 
 
 def _background_gradient():
     return ft.LinearGradient(
         begin=ft.Alignment(-1, -1),
         end=ft.Alignment(1, 1),
-        colors=[BG, "#07101D", "#03060B"],
+        colors=[BG, "#050505", "#020202"],
         stops=[0.0, 0.55, 1.0],
     )
 
@@ -127,13 +128,13 @@ class MainWindow:
         self.max_tokens_field = ft.TextField(label="MAX TOKENS", color=TEXT, border_color=BORDER, value=str(initial_config.max_tokens), width=120)
         self.threads_field = ft.TextField(label="CPU THREADS", color=TEXT, border_color=BORDER, value=str(initial_config.threads), width=120)
         self.gpu_layers_field = ft.TextField(label="GPU LAYERS", color=TEXT, border_color=BORDER, value=str(initial_config.gpu_layers), width=120)
-        page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.theme = ft.Theme(font_family="Segoe UI"); page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
+        page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.theme = ft.Theme(color_scheme_seed=THEME_SEED, font_family="Segoe UI"); page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
         self.logo_font_family = "ChimeraDots" if font.exists() else "Segoe UI"
         self.task_busy = False; self.model_verifying = False; self.local_verification = None; self.model_boot_status = "checking"; self.last_turn_notice = None; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""
         self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=8, expand=True)
-        self.task_field = ft.TextField(multiline=True, min_lines=3, max_lines=8, hint_text="Give Chimera the outcome. Keep talking as it works...", hint_style=ft.TextStyle(color=MUTED), bgcolor="#090C12", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=11, expand=True, text_size=14)
+        self.task_field = ft.TextField(multiline=True, min_lines=3, max_lines=8, hint_text="Give Chimera the outcome. Keep talking as it works...", hint_style=ft.TextStyle(color=MUTED), bgcolor="#0A0A0A", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=11, expand=True, text_size=14)
         self.agent_store = AgentSessionStore(registry.data_dir / "chimera.db")
         self.goal_store = GoalStore(registry.data_dir / "chimera.db")
         self.profile_store = ModelProfileStore(registry.data_dir / "model_profiles.json")
@@ -174,7 +175,7 @@ class MainWindow:
 
     def _topbar(self):
         local_state = self._runtime_state().replace("RUNTIME: ", "")
-        state_color = FOCUS if local_state in {"READY", "CONFIGURED"} else "#8796AD"
+        state_color = FOCUS if local_state in {"READY", "CONFIGURED"} else "#909090"
         logo = ft.Container(
             ft.Row([
                 ft.Text("◈", color=ACCENT, size=20),
@@ -432,7 +433,7 @@ class MainWindow:
                     ft.Row([
                         ft.Text(profile.display_name or profile.model_id, color=TEXT, size=15, weight=ft.FontWeight.BOLD, expand=True),
                         ft.Container(ft.Text("HOSTED API" if profile.hosted else "LOCAL MODEL", color=FOCUS, size=9, weight=ft.FontWeight.BOLD),
-                            bgcolor="#0D1627", border=ft.Border.all(1, "#31466D"), border_radius=20,
+                            bgcolor="#151515", border=ft.Border.all(1, "#3A3A3A"), border_radius=20,
                             padding=ft.Padding.symmetric(horizontal=10, vertical=6)),
                     ]),
                     ft.Text(f"Provider: {profile.provider_id}  ·  Format: {getattr(profile, 'dialect', None) or 'automatic'}", color=SECONDARY, size=11),
@@ -600,7 +601,7 @@ class MainWindow:
             action = (
                 ft.Container(
                     ft.Text("Authorized for this conversation", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
-                    bgcolor="#0D1627", border=ft.Border.all(1, "#31466D"), border_radius=20,
+                    bgcolor="#151515", border=ft.Border.all(1, "#3A3A3A"), border_radius=20,
                     padding=ft.Padding.symmetric(horizontal=10, vertical=7),
                 )
                 if authorized else self._button(
@@ -716,7 +717,7 @@ class MainWindow:
                 ft.Text("For a compact 3B local agent, Q4_K_M is the balanced starting point: good quality per GB, with room for context and KV cache. Q5_K_M can improve fidelity but needs more memory. Quantization is baked into the GGUF; Chimera does not rewrite or fetch model files.", color=SECONDARY, size=10),
                 ft.Text("The preset is a tuning starting point, not a promise of fit. Lower GPU layers first if VRAM is tight; reduce context next if memory pressure persists.", color=MUTED, size=9),
             ], spacing=7),
-            bgcolor=PANEL_NAVY, border=ft.Border.all(1, "#1D293B"), border_radius=12, padding=ft.Padding.all(15),
+            bgcolor=PANEL_SURFACE, border=ft.Border.all(1, "#2A2A2A"), border_radius=12, padding=ft.Padding.all(15),
         )
         self._set([
             self._page_heading("Model settings", "Configure your GGUF file, persistent llama-server, and local inference budget.", eyebrow="CHIMERA  /  MODEL BAY"),
@@ -1006,9 +1007,9 @@ class MainWindow:
 
     def _goal_card(self, goal):
         state_color = {
-            "active": "#C6D1E2",
-            "paused": "#8796AD",
-            "completed": "#C6D1E2",
+            "active": "#E0E0E0",
+            "paused": "#909090",
+            "completed": "#E0E0E0",
             "archived": MUTED,
         }.get(goal.status, SECONDARY)
         detail = goal.description or "No additional context recorded."
@@ -1293,7 +1294,7 @@ class MainWindow:
                         ft.Text(label, color=TEXT if is_current else SECONDARY, size=10, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                     ], spacing=8),
                     bgcolor=ELEVATED if is_current else None,
-                    border=ft.Border.all(1, "#2A3B55") if is_current else None,
+                    border=ft.Border.all(1, "#353535") if is_current else None,
                     border_radius=7,
                     padding=ft.Padding.symmetric(horizontal=9, vertical=9),
                     on_click=lambda e, session_id=sid: self._resume_agent_session(session_id),
@@ -1303,7 +1304,7 @@ class MainWindow:
             ft.Column([
                 ft.Container(
                     ft.Row([
-                        ft.Container(ft.Text("✳", color=FOCUS, size=19, weight=ft.FontWeight.BOLD), bgcolor="#101A2B", border_radius=8, padding=ft.Padding.all(8)),
+                        ft.Container(ft.Text("✳", color=FOCUS, size=19, weight=ft.FontWeight.BOLD), bgcolor="#171717", border_radius=8, padding=ft.Padding.all(8)),
                         ft.Column([
                             ft.Text("CHIMERA", color=TEXT, size=18, weight=ft.FontWeight.BOLD, font_family=getattr(self, "logo_font_family", "Segoe UI")),
                             ft.Text("LOCAL WORKBENCH", color=MUTED, size=8),
@@ -1329,7 +1330,7 @@ class MainWindow:
                 ft.Column(recent or [ft.Text("No threads yet. Start with one clear outcome.", color=MUTED, size=9)], spacing=3, scroll=ft.ScrollMode.AUTO, expand=True),
 
             ], spacing=9, expand=True),
-            width=238, bgcolor="#040609", padding=ft.Padding.all(14),
+            width=238, bgcolor="#050505", padding=ft.Padding.all(14),
             border=ft.Border.only(right=ft.BorderSide(1, BORDER)),
         )
 
@@ -1344,7 +1345,7 @@ class MainWindow:
                     ]),
                     ft.Text(content, color=TEXT, size=13),
                 ], spacing=8),
-                bgcolor="#090D14", border=ft.Border.all(1, "#2A3B55"),
+                bgcolor="#0C0C0C", border=ft.Border.all(1, "#353535"),
                 border_radius=ft.BorderRadius.only(top_left=14, top_right=14, bottom_left=14, bottom_right=3),
                 padding=ft.Padding.all(16), width=690,
             )
@@ -1353,7 +1354,7 @@ class MainWindow:
         bubble = ft.Container(
             ft.Column([
                 ft.Row([
-                    ft.Container(ft.Text("✳", color=FOCUS, size=13), bgcolor="#101A2B", border_radius=6, padding=ft.Padding.all(5)),
+                    ft.Container(ft.Text("✳", color=FOCUS, size=13), bgcolor="#171717", border_radius=6, padding=ft.Padding.all(5)),
                     ft.Text("CHIMERA", color=TEXT, size=9, weight=ft.FontWeight.BOLD),
                     ft.Text("LOCAL REASONER", color=MUTED, size=8),
                     ft.Container(expand=True),
@@ -1386,7 +1387,7 @@ class MainWindow:
                 detail = json.dumps(result, ensure_ascii=False, indent=2, default=str)[:900] if result is not None else (payload.get("error") or "")
         except Exception:
             tool, status, detail = "Tool event", "RECORDED", content[:1000]
-        color = "#C6D1E2" if status == "COMPLETED" else "#8796AD" if status in {"AWAITING_APPROVAL", "RECORDED"} else "#6F9FFF"
+        color = "#E0E0E0" if status == "COMPLETED" else "#909090" if status in {"AWAITING_APPROVAL", "RECORDED"} else "#C5C5C5"
         return ft.Container(
             ft.Column([
                 ft.Row([
@@ -1397,7 +1398,7 @@ class MainWindow:
                 ]),
                 ft.Text(detail or "No additional output.", color=MUTED, size=10),
             ], spacing=7),
-            bgcolor="#040609", border=ft.Border.all(1, BORDER),
+            bgcolor="#050505", border=ft.Border.all(1, BORDER),
             border_radius=8, padding=ft.Padding.all(12), width=700,
         )
 
@@ -1466,8 +1467,8 @@ class MainWindow:
         if self.last_turn_notice:
             content.append(
                 ft.Container(
-                    ft.Text(self.last_turn_notice, color="#D96B78", size=11),
-                    bgcolor="#170B11", border=ft.Border.all(1, "#512B3B"),
+                    ft.Text(self.last_turn_notice, color="#A6A6A6", size=11),
+                    bgcolor="#101010", border=ft.Border.all(1, "#404040"),
                     border_radius=8, padding=ft.Padding.all(12), width=700,
                 )
             )
@@ -1486,7 +1487,7 @@ class MainWindow:
                             ft.TextButton("Reject", on_click=self._approve_agent_tool_no, style=ft.ButtonStyle(color=SECONDARY)),
                         ], spacing=10),
                     ], spacing=9),
-                    bgcolor="#080D15", border=ft.Border.all(1, ACCENT),
+                    bgcolor="#0B0B0B", border=ft.Border.all(1, ACCENT),
                     border_radius=10, padding=ft.Padding.all(15), width=720,
                 )
             )
@@ -1558,7 +1559,7 @@ class MainWindow:
             self.task_field = ft.TextField(
                 multiline=True, min_lines=3, max_lines=8,
                 hint_text="Describe the outcome. Chimera will work through it with you...",
-                hint_style=ft.TextStyle(color=MUTED), bgcolor="#090C12", color=TEXT,
+                hint_style=ft.TextStyle(color=MUTED), bgcolor="#0A0A0A", color=TEXT,
                 border_color=BORDER, focused_border_color=FOCUS, border_radius=11,
                 expand=True, text_size=14,
             )
@@ -1566,8 +1567,8 @@ class MainWindow:
 
         mode_badge = ft.Container(
             ft.Text(f"{session_mode.upper()} MODE", color=FOCUS if session_mode == "build" else SECONDARY, size=8, weight=ft.FontWeight.BOLD),
-            bgcolor="#0D1627" if session_mode == "build" else ELEVATED,
-            border=ft.Border.all(1, "#31466D" if session_mode == "build" else BORDER),
+            bgcolor="#151515" if session_mode == "build" else ELEVATED,
+            border=ft.Border.all(1, "#3A3A3A" if session_mode == "build" else BORDER),
             border_radius=20, padding=ft.Padding.symmetric(horizontal=11, vertical=7),
         )
         header = ft.Container(
@@ -1631,7 +1632,7 @@ class MainWindow:
                     self.stop_button,
                 ], spacing=6, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ], spacing=10),
-            bgcolor="#080B11", border=ft.Border.all(1, "#243248"), border_radius=13,
+            bgcolor="#090909", border=ft.Border.all(1, "#303030"), border_radius=13,
             padding=ft.Padding.all(14), margin=ft.Margin.symmetric(horizontal=22, vertical=13),
         )
 

@@ -400,6 +400,13 @@ class AgentRuntime:
         }
         expected = contracts.get(operation)
         if expected is None: raise ValueError(f"unregistered tool: workspace.{operation}")
+        # Local models sometimes attach a search/filter parameter to the
+        # read-only desktop inventory request. Inventory is intentionally a
+        # no-argument snapshot; ignore those extras so the model can filter the
+        # returned applications in its reasoning. All targeted desktop actions
+        # continue to reject unknown arguments.
+        if operation in {"computer.list_applications", "computer.list_windows"}:
+            return
         if set(arguments) - set(expected): raise ValueError(f"unsupported arguments for {operation}")
         for name, kind in expected.items():
             if name in arguments and (type(arguments[name]) is not kind): raise ValueError(f"argument {name} must be {kind.__name__}")
