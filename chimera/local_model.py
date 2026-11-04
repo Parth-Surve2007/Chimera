@@ -547,25 +547,37 @@ class LocalModelProvider:
                     payload = json.loads(content)
                 except (TypeError, json.JSONDecodeError):
                     payload = None
-                if isinstance(payload, dict) and payload.get("tool") == "computer.list_applications":
+                if isinstance(payload, dict) and payload.get("tool") in {
+                    "computer.list_applications", "computer.list_installed_applications",
+                }:
                     result = payload.get("result") or []
                     # Runtime computer tool messages wrap results in {"items": ...}.
                     if isinstance(result, dict):
                         result = result.get("items", [])
                     apps = result if isinstance(result, list) else []
                     lines = []
-                    for app in apps[:10]:
+                    for app in apps[:18]:
                         if not isinstance(app, dict):
                             continue
-                        name = Path(str(app.get("executable") or "Application")).name
-                        titles = [
-                            str(window.get("title") or "").strip()
-                            for window in app.get("windows", [])[:2]
-                            if isinstance(window, dict)
-                        ]
-                        lines.append(f"- {name}: {', '.join(value for value in titles if value) or 'visible window'}")
-                    content = "Desktop inventory summary:\n" + (
-                        "\n".join(lines) if lines else "No user-facing applications found."
+                        if payload.get("tool") == "computer.list_installed_applications":
+                            name = str(app.get("name") or "Application")
+                            app_id = str(app.get("app_id") or "")
+                            lines.append(f"- {name} (Start-menu ID: {app_id})")
+                        else:
+                            name = Path(str(app.get("executable") or "Application")).name
+                            titles = [
+                                str(window.get("title") or "").strip()
+                                for window in app.get("windows", [])[:2]
+                                if isinstance(window, dict)
+                            ]
+                            lines.append(f"- {name}: {', '.join(value for value in titles if value) or 'visible window'}")
+                    heading = (
+                        "Installed Start-menu application inventory"
+                        if payload.get("tool") == "computer.list_installed_applications"
+                        else "Visible desktop application inventory"
+                    )
+                    content = heading + ":\n" + (
+                        "\n".join(lines) if lines else "No matching applications found."
                     )
                 else:
                     content = content[:700]
@@ -610,7 +622,8 @@ class LocalModelProvider:
             "agent.todo_write": 0,
             "agent.todo_read": 1,
             "computer.list_applications": 2,
-            "computer.launch": 3,
+            "computer.list_installed_applications": 3,
+            "computer.launch": 4,
             "computer.inspect_window": 4,
             "computer.inspect_elements": 5,
             "computer.read_text": 6,
@@ -703,9 +716,11 @@ class LocalModelProvider:
                 "For a requested .docx, the path must end in .docx. Wait for exact Build Mode write approval. "
                 "Do not overwrite existing files. After approval, report success only when the tool result is completed and the file hash/size verification passes. "
                 "Use desktop inspection/actions only for an application already listed in AUTHORIZED_APPLICATIONS. "
-                "For explicit app-opening requests, inspect computer.list_applications when useful and call computer.launch "
-                "with a Start-menu app name such as Paint, Notepad, Word or Excel, or an exact executable path. "
-                "Packaged Windows apps may be resolved by their registered Start-menu application ID. Launch requires approval. After launch, request exact "
+                "For explicit app-opening requests, inspect computer.list_applications for already-open apps. "
+                "Use computer.list_installed_applications to discover installed Start-menu apps, including packaged apps, "
+                "when an executable path is not available or launch resolution fails. Launch with the exact returned display name; "
+                "when needed, computer.launch also accepts appsfolder:<exact Start-menu application ID> from that inventory. "
+                "Never guess an application ID. Launch requires approval. After launch, request exact "
                 "app authorization in Applications before interacting with its controls. Use the fresh UI Automation element references and the actions reported for each element. " 
                 "Prefer read_text, get_range_value, read_grid and inspect_pattern_support for observation; use set_value, set_range_value, invoke_element, toggle_element, select_element, expand_element, collapse_element, scroll_element and scroll_into_view only on currently observed elements. " 
                 "State-changing UI Automation operations require exact operator approval. After an action, inspect a fresh observation and verify the intended application state; InvokePattern acceptance alone is not proof that the task is complete. " 
