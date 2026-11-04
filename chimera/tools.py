@@ -4,6 +4,13 @@ from pathlib import Path
 import fnmatch, hashlib, json, ntpath, os
 
 MAX_FILE = 2_000_000
+CREATE_FILE_SUFFIXES = {
+    ".txt", ".md", ".json", ".csv", ".py", ".pyw", ".js", ".jsx", ".mjs",
+    ".ts", ".tsx", ".html", ".htm", ".css", ".scss", ".sql", ".xml",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".log", ".bat", ".cmd",
+    ".ps1", ".sh", ".c", ".h", ".cpp", ".hpp", ".java", ".kt", ".rs",
+    ".go", ".r", ".ipynb", ".svg",
+}
 MAX_RESULTS = 200
 MAX_SCAN_FILES = 2000
 MAX_SCAN_DIRS = 5000
@@ -185,8 +192,11 @@ class WorkspaceTools:
                 if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_FILE:
                     raise ValueError("file content exceeds the 2 MB limit")
                 target = self._path(relative)
-                if target.suffix.casefold() not in {".txt", ".md", ".json", ".csv"}:
-                    raise ValueError("new files must use .txt, .md, .json, or .csv extensions")
+                if target.suffix.casefold() not in CREATE_FILE_SUFFIXES:
+                    raise ValueError(
+                        "new files must use a supported text/source extension "
+                        f"({', '.join(sorted(CREATE_FILE_SUFFIXES))})"
+                    )
                 if target.exists():
                     raise ValueError("file already exists; refusing to overwrite")
                 if not approved:
