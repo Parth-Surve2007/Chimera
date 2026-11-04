@@ -157,7 +157,7 @@ class MainWindow:
         logo = ft.Container(
             ft.Row([
                 ft.Text("◈", color=ACCENT, size=20),
-                ft.Text("CHIMERA", color=TEXT, size=18, weight=ft.FontWeight.BOLD, font_family=self.logo_font_family),
+                ft.Text("CHIMERA", color=TEXT, size=18, weight=ft.FontWeight.BOLD, font_family=getattr(self, "logo_font_family", "Segoe UI")),
                 ft.Text("LOCAL AGENT WORKSPACE", color=MUTED, size=9),
             ], spacing=10),
             tooltip="Return to the Chimera chat",
@@ -1224,7 +1224,7 @@ class MainWindow:
                     ft.Row([
                         ft.Container(ft.Text("✳", color=FOCUS, size=19, weight=ft.FontWeight.BOLD), bgcolor="#18130E", border_radius=8, padding=ft.Padding.all(8)),
                         ft.Column([
-                            ft.Text("CHIMERA", color=TEXT, size=18, weight=ft.FontWeight.BOLD, font_family=self.logo_font_family),
+                            ft.Text("CHIMERA", color=TEXT, size=18, weight=ft.FontWeight.BOLD, font_family=getattr(self, "logo_font_family", "Segoe UI")),
                             ft.Text("LOCAL WORKBENCH", color=MUTED, size=8),
                         ], spacing=2),
                     ], spacing=10),
