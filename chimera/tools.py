@@ -1,11 +1,12 @@
 """Trusted, bounded workspace operations; no shell or generated-code execution."""
 from dataclasses import dataclass, asdict
 from pathlib import Path
-import hashlib, json, ntpath, os
+import fnmatch, hashlib, json, ntpath, os
 
 MAX_FILE = 2_000_000
 MAX_RESULTS = 200
 MAX_SCAN_FILES = 2000
+MAX_SCAN_DIRS = 5000
 MAX_SCAN_BYTES = 50_000_000
 
 @dataclass(frozen=True)
@@ -53,21 +54,70 @@ class WorkspaceTools:
         base = root or self.workspace; target = (base / value).resolve()
         if target != base and base not in target.parents: raise ValueError("path escapes the selected workspace")
         return target
+
+    def _iter_files(self, root: Path, recursive=True, max_files=MAX_SCAN_FILES):
+        """Walk a workspace without following links or failing on protected folders."""
+        pending = [Path(root)]
+        visited_dirs = 0
+        yielded = 0
+        while pending and visited_dirs < MAX_SCAN_DIRS and yielded < max_files:
+            current = pending.pop()
+            visited_dirs += 1
+            try:
+                with os.scandir(current) as iterator:
+                    entries = sorted(iterator, key=lambda item: item.name.casefold())
+            except OSError:
+                continue
+            child_dirs = []
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if recursive and visited_dirs + len(pending) + len(child_dirs) < MAX_SCAN_DIRS:
+                            child_dirs.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        yield Path(entry.path)
+                        yielded += 1
+                        if yielded >= max_files:
+                            return
+                except OSError:
+                    continue
+            pending.extend(reversed(child_dirs))
+
     def run(self, operation_id: str, arguments: dict, approved=False) -> OperationResult:
         if operation_id not in OPERATIONS: return OperationResult(operation_id, "failed", {}, "unknown operation")
         if not isinstance(arguments, dict): return OperationResult(operation_id, "failed", {}, "arguments must be an object")
         try:
             if operation_id == "list_files":
-                root = self._path(arguments.get("relative", ".")); items = sorted(root.rglob("*") if arguments.get("recursive", True) else root.glob("*"))
-                return OperationResult(operation_id, "completed", {"files": [str(p.relative_to(self.workspace)) for p in items if p.is_file() and not p.is_symlink()][:MAX_RESULTS]})
+                root = self._path(arguments.get("relative", "."))
+                if not root.is_dir():
+                    raise ValueError("the requested listing path is not a directory")
+                items = sorted(
+                    self._iter_files(root, recursive=arguments.get("recursive", True), max_files=MAX_RESULTS)
+                )
+                return OperationResult(operation_id, "completed", {
+                    "files": [p.relative_to(self.workspace).as_posix() for p in items],
+                    "truncated": len(items) >= MAX_RESULTS,
+                })
             if operation_id == "inspect_file":
                 path = self._path(arguments.get("path")); stat = path.stat()
                 if stat.st_size > MAX_FILE: raise ValueError("file exceeds the inspect limit")
                 return OperationResult(operation_id, "completed", {"path": str(path.relative_to(self.workspace)), "bytes": stat.st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "is_text_candidate": path.suffix.casefold() in {".py", ".js", ".ts", ".json", ".md", ".txt", ".toml", ".yaml", ".yml"}})
             if operation_id == "search_files":
-                pattern = arguments.get("pattern");
-                if not isinstance(pattern, str): raise ValueError("pattern must be a string")
-                return OperationResult(operation_id, "completed", {"files": [str(p.relative_to(self.workspace)) for p in self.workspace.rglob(pattern) if p.is_file() and not p.is_symlink()][:MAX_RESULTS]})
+                pattern = arguments.get("pattern")
+                if not isinstance(pattern, str) or not pattern.strip() or len(pattern) > 240:
+                    raise ValueError("pattern must be a non-empty filename pattern of at most 240 characters")
+                matches = []
+                for candidate in self._iter_files(self.workspace, recursive=True, max_files=MAX_SCAN_FILES):
+                    if fnmatch.fnmatch(candidate.name.casefold(), pattern.casefold()):
+                        matches.append(candidate.relative_to(self.workspace).as_posix())
+                        if len(matches) >= MAX_RESULTS:
+                            break
+                return OperationResult(operation_id, "completed", {
+                    "files": matches,
+                    "truncated": len(matches) >= MAX_RESULTS,
+                })
             if operation_id == "read_text":
                 path = self._path(arguments.get("path")); data = path.read_bytes()
                 if len(data) > MAX_FILE: raise ValueError("file exceeds the read limit")
@@ -80,10 +130,12 @@ class WorkspaceTools:
                 scanned_files = 0
                 scanned_bytes = 0
                 text_suffixes = {".py", ".js", ".ts", ".json", ".md", ".txt", ".toml", ".yaml", ".yml"}
-                for candidate in self.workspace.rglob("*"):
+                for candidate in self._iter_files(
+                    self.workspace, recursive=True, max_files=MAX_SCAN_FILES
+                ):
                     if len(hits) >= MAX_RESULTS or scanned_files >= MAX_SCAN_FILES or scanned_bytes >= MAX_SCAN_BYTES:
                         break
-                    if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.casefold() not in text_suffixes:
+                    if candidate.suffix.casefold() not in text_suffixes:
                         continue
                     try:
                         path = self._path(str(candidate.relative_to(self.workspace)))
