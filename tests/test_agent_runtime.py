@@ -666,3 +666,104 @@ def test_approved_skills_are_discovered_and_loaded_on_demand(tmp_path):
     assert loaded["reusable_steps"][0]["action"] == "workspace.create_document"
     assert "Do not" in loaded["notice"] or "Never" in loaded["notice"]
     assert "Unapproved procedure" not in json.dumps(provider.catalogs[0])
+
+
+
+def test_paint_draw_request_is_not_treated_as_a_terminal_launch(tmp_path):
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "chimera.db"),
+        DecidingProvider([{"type": "message", "content": "unused"}]),
+    )
+    assert runtime._is_terminal_launch_request("open Paint")
+    assert runtime._is_terminal_launch_request("Please launch Notepad.")
+    assert not runtime._is_terminal_launch_request("open ms paint and draw a house")
+    assert not runtime._is_terminal_launch_request("open Paint, then sketch a tree")
+
+
+
+def test_agent_runtime_requires_pdf_approval_then_verifies_the_real_file(tmp_path):
+    from pypdf import PdfReader
+
+    source = "Actual source text from the approved task.\nSecond line with café and €."
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "workspace.create_pdf",
+            "arguments": {
+                "path": "Notepad-Export.pdf",
+                "title": "Notepad Export",
+                "content": source,
+            },
+            "invocation_id": "pdf-export-1",
+        },
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+
+    pending = runtime.send(session_id, "Create a PDF from the Notepad text.")
+    assert pending["status"] == "awaiting_approval"
+    target = tmp_path / "Notepad-Export.pdf"
+    assert not target.exists()
+
+    completed = runtime.approve_pending(session_id, True)
+    assert completed["status"] == "completed"
+    assert completed["verification"]["path"] == "Notepad-Export.pdf"
+    assert completed["verification"]["bytes"] == target.stat().st_size
+    assert completed["verification"]["sha256"]
+    reader = PdfReader(str(target), strict=True)
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+    normalize = lambda value: " ".join(value.replace("\\u00a0", " ").split())
+    assert normalize("Notepad Export\n" + source) == normalize(extracted)
+
+    tool_result = next(
+        json.loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool" and '"workspace.create_pdf"' in item.content
+    )
+    assert tool_result["status"] == "completed"
+    assert tool_result["result"]["independent_verification"] is True
+    assert tool_result["result"]["text_verified"] is True
+    task = runtime.task_store.latest_for_session(session_id)
+    assert task.status == "completed"
+    assert runtime.task_store.steps(task.task_id)[0]["status"] == "completed"
+
+
+
+def test_stale_approval_cannot_replay_an_invocation_already_started(tmp_path):
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "workspace.create_file",
+            "arguments": {"path": "once.txt", "content": "must not be duplicated"},
+            "invocation_id": "once-only-invocation",
+        },
+    ])
+    database = tmp_path / "chimera.db"
+    store = AgentSessionStore(database)
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    pending = runtime.send(session_id, "Create once.txt")
+    assert pending["status"] == "awaiting_approval"
+    assert store.pending_tool(session_id)["invocation_id"] == "once-only-invocation"
+
+    # Simulate a process crash after the durable tool.started event but before
+    # the old version removed its pending-approval row.
+    task = runtime.task_store.active_for_session(session_id)
+    step = next(
+        item for item in runtime.task_store.steps(task.task_id)
+        if item["invocation_id"] == "once-only-invocation"
+    )
+    runtime.task_store.step_transition(
+        step["step_id"], "running", invocation_id="once-only-invocation"
+    )
+
+    restarted = AgentRuntime(AgentSessionStore(database), provider)
+    result = restarted.approve_pending(session_id, True)
+    assert result["status"] == "blocked"
+    assert "will not be replayed" in result["error"]
+    assert restarted.store.pending_tool(session_id) is None
+    assert not (tmp_path / "once.txt").exists()
+    resumed_task = restarted.task_store.latest_for_session(session_id)
+    assert resumed_task.status == "blocked"
+    assert restarted.task_store.steps(resumed_task.task_id)[0]["status"] == "blocked"

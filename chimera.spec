@@ -19,6 +19,8 @@ if not client_archive.is_file():
     raise SystemExit(f"Flet desktop client archive is missing: {client_archive}")
 
 flet_datas, flet_binaries, flet_hiddenimports = collect_all("flet_desktop")
+reportlab_datas, reportlab_binaries, reportlab_hiddenimports = collect_all("reportlab")
+pypdf_datas, pypdf_binaries, pypdf_hiddenimports = collect_all("pypdf")
 
 # Flet resolves icon names lazily from package JSON at runtime. These are not
 # included by collect_all("flet_desktop"), so mirror Flet's own PyInstaller
@@ -39,6 +41,8 @@ datas = [
 ]
 datas.extend(flet_datas)
 datas.extend(flet_icon_datas)
+datas.extend(reportlab_datas)
+datas.extend(pypdf_datas)
 
 hiddenimports = [
     "flet",
@@ -93,11 +97,13 @@ hiddenimports = [
     "chimera.learning",
 ]
 hiddenimports.extend(flet_hiddenimports)
+hiddenimports.extend(reportlab_hiddenimports)
+hiddenimports.extend(pypdf_hiddenimports)
 
 a = Analysis(
     ["launcher.py"],
     pathex=[],
-    binaries=flet_binaries,
+    binaries=flet_binaries + reportlab_binaries + pypdf_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

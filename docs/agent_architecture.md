@@ -81,6 +81,15 @@ Windows UI Automation varies by application. Win32, WPF and WinForms often expos
 
 Packaged Windows apps are not always represented by a discoverable executable path. The Windows app inventory reads Start-menu entries and their registered Application User Model IDs (AUMIDs); launch uses the validated `shell:AppsFolder\\<AUMID>` activation route after the normal application-launch approval. This improves discovery for apps such as Paint, Photos and Calculator, but it does not provide semantic control of every custom-rendered canvas or prove that every Start-menu item is automatable.
 
+## Verified document output
+
+- `workspace.create_pdf` creates a genuine PDF with an embedded ReportLab font where available and refuses overwrites.
+- PDF creation requires Build Mode and the exact pending approval.
+- The document writer reopens the artifact with pypdf, checks the PDF signature, page count, and normalized extracted-text equality.
+- AgentRuntime independently reopens the approved output and verifies its bytes, SHA-256, page count, and extracted text before treating the tool result as completed.
+- When the system drive is the workspace, `Desktop/...` resolves through the user's configured Windows Desktop known folder (including redirected Desktop locations); all resolved paths remain inside the workspace root.
+- This is a file-format creation capability. It does not claim that the source Notepad application was read; the Notepad-to-PDF benchmark still requires a live, authorized UIA read of the actual editor content before PDF creation.
+
 ## Permanent safety invariants
 
 - AgentRuntime is the only execution authority.
