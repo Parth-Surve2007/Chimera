@@ -100,6 +100,7 @@ class CuaDriverBackend:
         self._closed = False
         self._lock = threading.RLock()
         self._snapshots: dict[str, _Snapshot] = {}
+        self._foreground_escalations: set[tuple[str, int, int]] = set()
         self.version = getattr(api, "__version__", "unknown") if api else "unknown"
 
     @classmethod
@@ -458,7 +459,7 @@ class CuaDriverBackend:
                 "status": "background_unavailable",
                 "reason": message[:1200],
                 "foreground_retry": "computer.cua_click_foreground",
-                "note": "No foreground retry was attempted. A fresh operator approval is required for escalation.",
+                "note": "No foreground retry was attempted. Take a fresh snapshot and obtain a separate operator approval before any foreground retry.",
             }
         return {"status": "failed", "reason": message[:1200]}
 
@@ -471,6 +472,16 @@ class CuaDriverBackend:
             return blocked
         if button not in {"left", "right", "middle"} or type(count) is not int or not 1 <= count <= 2:
             return {"status": "blocked", "reason": "button must be left/right/middle and count must be 1 or 2"}
+        escalation_key = (owner_session_id, pid, window_id)
+        if foreground:
+            with self._lock:
+                if escalation_key not in self._foreground_escalations:
+                    return {
+                        "status": "blocked",
+                        "verified": False,
+                        "reason": "foreground delivery is available only after an explicit background_unavailable refusal for this exact authorized window",
+                    }
+                self._foreground_escalations.discard(escalation_key)
         if element_token:
             if element_token not in snap.elements:
                 return {"status": "blocked", "reason": "element_token is not present in this exact snapshot"}
@@ -507,6 +518,20 @@ class CuaDriverBackend:
             # mandatory before another token can be used.
             with self._lock:
                 self._snapshots.pop(snapshot_ref, None)
+            if summary["driver_effect"] == "refused" and not foreground:
+                escalation = summary.get("escalation") or {}
+                if escalation.get("target") == "foreground":
+                    with self._lock:
+                        self._foreground_escalations.add(escalation_key)
+                    return {
+                        "status": "background_unavailable",
+                        "verified": False,
+                        "foreground_escalation_used": False,
+                        "snapshot_invalidated": True,
+                        **summary,
+                        "foreground_retry": "computer.cua_click_foreground",
+                        "next_step": "Take a fresh snapshot. Ask for a separate approval for the exact foreground retry; do not retry automatically.",
+                    }
             return {
                 "status": "action_returned",
                 "verified": False,
@@ -518,7 +543,11 @@ class CuaDriverBackend:
         except Exception as exc:
             with self._lock:
                 self._snapshots.pop(snapshot_ref, None)
-            return self._exception_result(exc)
+            error_result = self._exception_result(exc)
+            if not foreground and error_result.get("status") == "background_unavailable":
+                with self._lock:
+                    self._foreground_escalations.add(escalation_key)
+            return error_result
 
     @staticmethod
     def _decode_image(snapshot: _Snapshot):
@@ -787,5 +816,6 @@ class CuaDriverBackend:
             thread.join(timeout=5)
         with self._lock:
             self._snapshots.clear()
+            self._foreground_escalations.clear()
         self._driver = None
         self._loop = None
