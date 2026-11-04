@@ -98,3 +98,29 @@ def test_local_model_prompt_explains_safe_launch_continuation_and_canvas_strokes
     assert "action=multi_stroke" in prompt
     assert "256 points total" in prompt
     assert "verified=true" in prompt
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path alias behavior is platform-specific")
+def test_packaged_app_alias_rejects_unrelated_window_title(tmp_path, monkeypatch):
+    actual = r"C:\Program Files\WindowsApps\Microsoft.Paint_1.0.0.0_x64__8wekyb3d8bbwe\ApplicationFrameHost.exe"
+    alias = r"C:\Users\Tester\AppData\Local\Microsoft\WindowsApps\mspaint.exe"
+
+    class FakeProcess:
+        def create_time(self):
+            return 1234.5
+
+        def exe(self):
+            return actual
+
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=lambda _pid: FakeProcess()))
+    manager = ComputerSessionManager(tmp_path)
+    manager.backend.window_process_id = lambda hwnd: 4321 if hwnd == 77 else None
+
+    with pytest.raises(RuntimeError, match="executable changed"):
+        manager.create(
+            4321,
+            alias,
+            owner_session_id="conversation-1",
+            authorized_windows=[{"hwnd": 77, "pid": 4321, "title": "Untitled - Notepad"}],
+            expected_application_name="Paint",
+        )
