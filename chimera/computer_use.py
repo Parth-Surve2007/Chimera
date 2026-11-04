@@ -206,16 +206,46 @@ class WindowsComputerUse:
             }
         process = subprocess.Popen([str(path)], shell=False)
         self._processes[process.pid] = process
+        expected_path = os.path.normcase(os.path.normpath(str(path))).casefold()
+        expected_name = path.name.casefold()
+        # Modern Windows apps (notably packaged Notepad) can hand a launch
+        # request to an already-running process. The PID returned by Popen may
+        # exit immediately while the visible window belongs to that process.
+        known_app_images = {
+            "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe",
+            "notepad.exe", "notepad++.exe", "calc.exe", "mspaint.exe",
+            "blender.exe", "chrome.exe", "msedge.exe", "firefox.exe", "code.exe",
+        }
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            windows = [item for item in self._windows() if item.pid == process.pid]
-            if windows:
-                return {"status": "completed", "pid": process.pid, "executable": str(path), "windows": [asdict(item) for item in windows]}
+            matched = []
+            for item in self._windows():
+                observed_path = self.process_path(item.pid)
+                if not observed_path:
+                    continue
+                normalized = os.path.normcase(os.path.normpath(str(observed_path))).casefold()
+                image_name = str(observed_path).replace("\\\\", "/").rsplit("/", 1)[-1].casefold()
+                if normalized == expected_path or (
+                    expected_name in known_app_images and image_name == expected_name
+                ):
+                    matched.append(item)
+            if matched:
+                return {
+                    "status": "completed",
+                    "pid": matched[0].pid,
+                    "spawned_pid": process.pid,
+                    "executable": str(path),
+                    "windows": [asdict(item) for item in matched[:5]],
+                    "verification": "visible_window_executable_match",
+                }
             time.sleep(.05)
         return {
             "status": "failed",
             "pid": process.pid,
-            "reason": "application window did not appear within timeout",
+            "reason": (
+                "application process was started, but no visible window with a "
+                "matching executable identity appeared within 5 seconds"
+            ),
             "executable": str(path),
         }
 
