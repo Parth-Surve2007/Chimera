@@ -453,6 +453,7 @@ class LocalModelProvider:
 
         session_state = {
             "mode": (session or {}).get("mode", "plan"),
+            "workspace_attached": bool(workspace_root),
             "workspace_root": str(workspace_root) if workspace_root else None,
             "known_folders": known_folders,
         }
