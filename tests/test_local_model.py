@@ -492,9 +492,7 @@ def test_new_local_model_defaults_use_memory_conscious_budget_and_adaptive_gpu(t
     assert config.gpu_layers == "auto"
 
 
-def test_legacy_default_model_config_migrates_to_adaptive_gpu_and_higher_budget(tmp_path, monkeypatch):
-    from chimera.local_model import config_data_dir
-
+def test_legacy_model_config_migrates_gpu_mode_without_increasing_memory_budget(tmp_path, monkeypatch):
     model = tmp_path / "model.gguf"
     model.write_bytes(b"fixture")
     data_dir = tmp_path / "config"
@@ -512,9 +510,9 @@ def test_legacy_default_model_config_migrates_to_adaptive_gpu_and_higher_budget(
 
     config = config_from_env({"CHIMERA_MODEL_PATH": str(model)})
 
-    assert config.context == 8192
-    assert config.max_tokens == 768
-    assert config.threads == 8
+    assert config.context == 4096
+    assert config.max_tokens == 256
+    assert config.threads == 4
     assert config.gpu_layers == "auto"
 
 
