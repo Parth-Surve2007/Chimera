@@ -711,7 +711,7 @@ class LocalModelProvider:
                     data = result.get("items", result) if isinstance(result, dict) else {}
                     windows = data.get("windows", []) if isinstance(data, dict) else []
                     lines = []
-                    for window in windows[:12] if isinstance(windows, list) else []:
+                    for window in (windows[:12] if isinstance(windows, list) else []):
                         if isinstance(window, dict):
                             lines.append(
                                 f"- hwnd={window.get('hwnd')} | title={' '.join(str(window.get('title') or '').split())[:100]} "
