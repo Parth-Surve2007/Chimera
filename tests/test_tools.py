@@ -46,3 +46,67 @@ def test_search_text_never_follows_external_symlinks(tmp_path):
     )
     assert result.status == "completed"
     assert result.data["matches"] == []
+
+
+
+def test_create_document_writes_a_valid_word_docx_only_after_approval(tmp_path):
+    import hashlib
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    workspace = tmp_path / "drive"
+    workspace.mkdir()
+    target = workspace / "Users" / "Parth" / "Desktop" / "Cake-Recipe.docx"
+    tools = WorkspaceTools(workspace, workspace / "out")
+    arguments = {
+        "path": "Users/Parth/Desktop/Cake-Recipe.docx",
+        "title": "Chocolate Cake Recipe",
+        "content": "# Ingredients\n- Flour\n- Cocoa\n\n## Method\nMix and bake.",
+    }
+
+    pending = tools.run("create_document", arguments, approved=False)
+    assert pending.status == "awaiting_approval"
+    assert not target.exists()
+
+    created = tools.run("create_document", arguments, approved=True)
+    assert created.status == "completed"
+    assert created.data["path"] == "Users/Parth/Desktop/Cake-Recipe.docx"
+    assert created.data["format"] == "docx"
+    assert created.data["bytes"] == target.stat().st_size
+    assert created.data["sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+
+    with zipfile.ZipFile(target) as archive:
+        assert archive.testzip() is None
+        assert {
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "word/document.xml",
+            "word/styles.xml",
+        }.issubset(set(archive.namelist()))
+        document = ET.fromstring(archive.read("word/document.xml"))
+    text = " ".join(
+        node.text or "" for node in document.iter()
+        if node.tag.endswith("}t")
+    )
+    assert "Chocolate Cake Recipe" in text
+    assert "Ingredients" in text and "Flour" in text and "Mix and bake." in text
+
+    duplicate = tools.run("create_document", arguments, approved=True)
+    assert duplicate.status == "failed"
+    assert "refusing to overwrite" in duplicate.error
+
+
+def test_create_document_rejects_non_docx_and_workspace_escape(tmp_path):
+    tools = WorkspaceTools(tmp_path, tmp_path / "out")
+    bad_extension = tools.run(
+        "create_document",
+        {"path": "recipe.txt", "title": "Recipe", "content": "Cake"},
+        approved=True,
+    )
+    escaped = tools.run(
+        "create_document",
+        {"path": "../recipe.docx", "title": "Recipe", "content": "Cake"},
+        approved=True,
+    )
+    assert bad_extension.status == "failed" and ".docx" in bad_extension.error
+    assert escaped.status == "failed" and "escapes" in escaped.error
