@@ -122,7 +122,7 @@ def test_local_agent_prompt_compacts_history_and_omits_backend_inventory():
     assert len(captured["prompt"]) <= prompt_budget
     assert "interaction_inventory" not in captured["prompt"]
     assert "unused inventory payload" not in captured["prompt"]
-    assert "Desktop inventory summary" in captured["prompt"]
+    assert "Visible desktop application inventory" in captured["prompt"]
     assert "- notepad.exe: Untitled" in captured["prompt"]
     assert "No user-facing applications found" not in captured["prompt"]
 
