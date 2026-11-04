@@ -1,7 +1,7 @@
 # Chimera Roadmap
 
-> **Last updated:** 2026-11-03
-> **Current version:** Phase 5.3 — Cross-Capability Agentic Workflows
+> **Last updated:** 2026-11-04
+> **Current version:** Phase 5.3.4 — Scoped Windows App Control & Canvas Interaction
 
 Chimera is an open, local-first AI agent platform. This roadmap describes its engineering direction and capability maturity across eight strategic pillars.
 
@@ -87,6 +87,19 @@ Chimera is an open, local-first AI agent platform. This roadmap describes its en
 - Require Build Mode and exact operator approval before writing either artifact
 - Verify both output files after Blender exits; automated connector tests mock the Blender process
 - Scope limitation: primitive scene assembly only; general modelling, advanced materials, animation and unrestricted GUI control remain future work
+
+### Phase 5.3.4 — Scoped Windows App Control & Canvas Interaction
+
+- [x] Add foreground-scoped pointer and keyboard input grounded in fresh UI Automation element rectangles, exact HWND/PID identity, operator approval and per-packet foreground checks.
+- [x] Add multi-stroke drawing: up to 16 separate pen-up paths and 256 normalized points in one approved action.
+- [x] Capture before/after pixel evidence and abort safely on foreground or process identity changes.
+- [x] Bind an approved application launch to the exact visible HWNDs observed by the launcher; restrict later observations and actions to those HWNDs.
+- [x] Continue the local agent loop after approval when a launch is successfully authorized; expose canvas interaction early in the compact-model tool catalogue.
+- [ ] Run live Windows acceptance for Paint: identify its real canvas element, draw disconnected shapes, save a PNG, reopen it and verify its dimensions/content.
+- [ ] Add local vision-capable observation for semantic screenshot understanding; pixel-diff alone is not semantic correctness.
+- [ ] Expand app-specific adapters for Office, editors, file managers, graphics tools, CAD/EDA and media tools.
+
+**Acceptance boundary:** Automated tests validate the scoped input and authorization contracts. They do not prove that every installed Windows application or Paint workflow succeeds on a user's desktop. Application/version/action support must be certified with live acceptance evidence.
 
 ## Near-Term (Phase 5.4)
 
@@ -194,7 +207,7 @@ These constraints are non-negotiable at every phase:
 | Cross-capability sequential workflows | ✅ | ✅ | ✅ | 🟡 |
 | Parallel task execution | 🔴 | 🔴 | 🟡 | 🔴 |
 | Git connector | 🔴 | 🔴 | 🟡 | 🔴 |
-| Browser connector | 🔴 | 🔴 | 🟡 | 🔴 |
+| Browser connector | ✅ | ✅ | ✅ | 🟡 (requires local browser/runtime) |
 | Skill library versioning and approved replay | 🔴 | 🔴 | 🟡 | 🔴 |
 
 **Key:** ✅ Done · 🟡 Partial/Foundation · 🔴 Not started
