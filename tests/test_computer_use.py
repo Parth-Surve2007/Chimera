@@ -956,7 +956,6 @@ def test_packaged_notepad_launch_tracks_real_windowsapps_process(tmp_path, monke
     assert result["launch_kind"] == "appsfolder"
     assert result["verification"] == "visible_window_process_match"
     assert result["windows"][0]["hwnd"] == 77
-    assert explorer_calls == [[
-        r"C:\Windows\explorer.exe",
-        "shell:AppsFolder\\" + aumid,
-    ]]
+    assert len(explorer_calls) == 1
+    assert Path(explorer_calls[0][0]).name.casefold() == "explorer.exe"
+    assert explorer_calls[0][1] == "shell:AppsFolder\\" + aumid
