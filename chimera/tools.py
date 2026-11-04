@@ -78,8 +78,16 @@ class WorkspaceTools:
             child_dirs = []
             for entry in entries:
                 try:
-                    if entry.is_symlink() or getattr(os.path, "isjunction", lambda _path: False)(entry.path):
+                    if entry.is_symlink():
                         continue
+                    if os.name == "nt":
+                        entry_attributes = getattr(
+                            entry.stat(follow_symlinks=False), "st_file_attributes", 0
+                        )
+                        # Windows junctions and mount-point reparse targets can
+                        # loop back into the drive. Never recurse through them.
+                        if entry_attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+                            continue
                     if entry.is_dir(follow_symlinks=False):
                         if recursive and visited_dirs + len(pending) + len(child_dirs) < MAX_SCAN_DIRS:
                             child_dirs.append(Path(entry.path))
