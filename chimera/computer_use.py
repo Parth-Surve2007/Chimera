@@ -137,9 +137,13 @@ class WindowsComputerUse:
             "vscode": "code.exe",
         }
         key = raw.casefold()
-        executable_names = [aliases.get(key, raw)]
-        if not executable_names[0].casefold().endswith(".exe"):
-            executable_names.append(executable_names[0] + ".exe")
+        alias_key = key.removesuffix(".exe")
+        # Bare executable names are deliberately restricted to known desktop
+        # applications. Arbitrary executables remain launchable only via an
+        # exact path supplied by the operator and then approved.
+        if alias_key not in aliases:
+            return None
+        executable_names = [aliases[alias_key]]
 
         for executable_name in dict.fromkeys(executable_names):
             found = shutil.which(executable_name)
