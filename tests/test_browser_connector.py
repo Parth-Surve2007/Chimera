@@ -311,3 +311,38 @@ def test_browser_context_is_scoped_per_conversation(tmp_path):
         assert connector._session() == ("session-1", tmp_path.resolve())
     with pytest.raises(PermissionError):
         connector._session()
+
+
+
+def test_browser_launch_requires_exact_operator_approval(tmp_path):
+    connector = BrowserConnector(browser_paths={"edge": tmp_path / "msedge.exe"})
+    pending = connector.execute_action("launch", {"browser_name": "edge"}, approved=False)
+    assert pending == {"status": "awaiting_approval", "permission": "browser.launch"}
+    assert connector._runtimes == {}
+
+
+def test_browser_profile_is_separate_for_each_conversation(tmp_path):
+    first = BrowserConnector._profile_directory(tmp_path.resolve(), "session-one")
+    second = BrowserConnector._profile_directory(tmp_path.resolve(), "session-two")
+    assert first != second
+    assert tmp_path.resolve() in first.parents
+    assert tmp_path.resolve() in second.parents
+    assert first.name == "profile" and second.name == "profile"
+
+
+def test_browser_connector_is_registered_and_read_actions_are_read_only(tmp_path):
+    from chimera.applications.dispatch import APPLICATION_READ_PERMISSIONS, application_tool_catalog
+    from chimera.applications.registry import ApplicationRegistry
+    from chimera.applications.connectors.browser_connector import BrowserConnector
+
+    registry = ApplicationRegistry()
+    connector = BrowserConnector(browser_paths={})
+    registry.register(connector)
+    actions = {item["id"]: item for item in application_tool_catalog(registry)}
+
+    assert "browser.read" in APPLICATION_READ_PERMISSIONS
+    assert "application.browser.inspect_page" in actions
+    assert actions["application.browser.inspect_page"]["permission"] == "browser.read"
+    assert actions["application.browser.click"]["permission"] == "browser.input"
+    assert actions["application.browser.navigate"]["permission"] == "browser.navigate"
+    assert actions["application.browser.screenshot"]["requires_approval"] is True
