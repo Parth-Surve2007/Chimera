@@ -534,14 +534,18 @@ class AgentRuntime:
             action = arguments["action"]
             if action not in {"click", "double_click", "stroke", "multi_stroke", "type_text", "press_key", "scroll"}:
                 raise ValueError("visual action must be click, double_click, stroke, multi_stroke, type_text, press_key, or scroll")
+
+            coordinate_groups = []
             if action in {"click", "double_click", "scroll"}:
                 points = arguments.get("points")
                 if not isinstance(points, list) or len(points) != 1:
                     raise ValueError(f"{action} requires exactly one normalized point")
+                coordinate_groups.append(points)
             elif action == "stroke":
                 points = arguments.get("points")
                 if not isinstance(points, list) or not 2 <= len(points) <= 64:
                     raise ValueError("stroke requires between 2 and 64 normalized points")
+                coordinate_groups.append(points)
             elif action == "multi_stroke":
                 strokes = arguments.get("strokes")
                 if not isinstance(strokes, list) or not 1 <= len(strokes) <= 16:
@@ -550,18 +554,40 @@ class AgentRuntime:
                     raise ValueError("each multi_stroke path requires 2 to 64 normalized points")
                 if sum(len(path) for path in strokes) > 256:
                     raise ValueError("multi_stroke is limited to 256 total points")
-            if "points" in arguments:
-                for point in arguments["points"]:
+                coordinate_groups.extend(strokes)
+
+            # Validate every coordinate before an approval card is created.
+            # A multi-path action is one approval unit, but each path is fully
+            # checked so malformed coordinates never reach the operator.
+            for group in coordinate_groups:
+                for point in group:
                     if (
                         not isinstance(point, list) or len(point) != 2
-                        or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or not 0.02 <= float(v) <= 0.98 for v in point)
+                        or any(
+                            isinstance(value, bool)
+                            or not isinstance(value, (int, float))
+                            or not math.isfinite(float(value))
+                            or not 0.02 <= float(value) <= 0.98
+                            for value in point
+                        )
                     ):
                         raise ValueError("each point must be a normalized [x, y] pair between 0.02 and 0.98")
+
+            if "points" in arguments and action == "multi_stroke":
+                raise ValueError("multi_stroke uses strokes, not points")
+            if "strokes" in arguments and action != "multi_stroke":
+                raise ValueError("strokes are only valid with action=multi_stroke")
             if "button" in arguments and arguments["button"] not in {"left", "right", "middle"}:
                 raise ValueError("button must be left, right, or middle")
-            if "duration_ms" in arguments and not 0 <= arguments["duration_ms"] <= 2000:
-                raise ValueError("duration_ms must be between 0 and 2000")
-            if action == "type_text" and (not isinstance(arguments.get("text"), str) or not 1 <= len(arguments["text"]) <= 4000):
+            if "duration_ms" in arguments and (
+                type(arguments["duration_ms"]) is not int
+                or not 0 <= arguments["duration_ms"] <= 2000
+            ):
+                raise ValueError("duration_ms must be an integer between 0 and 2000")
+            if action == "type_text" and (
+                not isinstance(arguments.get("text"), str)
+                or not 1 <= len(arguments["text"]) <= 4000
+            ):
                 raise ValueError("type_text requires 1 to 4000 characters")
             if action == "press_key" and not isinstance(arguments.get("key"), str):
                 raise ValueError("press_key requires a key name or chord")
