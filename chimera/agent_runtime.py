@@ -1278,6 +1278,12 @@ class AgentRuntime:
             try:
                 self._validate_arguments(operation, decision["arguments"])
             except (TypeError, ValueError) as exc:
+                # Keep connector and write-action contracts fail-closed. One
+                # bounded repair is appropriate only for read-only computer
+                # observations, where rejecting extra selector fields cannot
+                # conceal or partially execute a mutation.
+                if not (tool_id.startswith("computer.") and permission == "computer.observe"):
+                    raise
                 validation_error = (
                     "Tool arguments were rejected before execution: "
                     + " ".join(str(exc).split())[:420]
