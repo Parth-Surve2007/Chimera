@@ -89,7 +89,7 @@ class LocalVisionProvider:
         }
 
     @staticmethod
-    def _encode_image(image: Any) -> tuple[str, str]:
+    def _encode_image(image: Any) -> tuple[str, str, tuple[int, int]]:
         try:
             from PIL import Image
         except ImportError as exc:
@@ -113,7 +113,7 @@ class LocalVisionProvider:
         if not payload or len(payload) > MAX_IMAGE_BYTES:
             raise ValueError(f"encoded visual evidence must be 1 to {MAX_IMAGE_BYTES} bytes")
         digest = hashlib.sha256(payload).hexdigest()
-        return base64.b64encode(payload).decode("ascii"), digest
+        return base64.b64encode(payload).decode("ascii"), digest, frame.size
 
     def inspect_image(
         self,
@@ -137,7 +137,7 @@ class LocalVisionProvider:
                 **state,
             }
         try:
-            encoded, digest = self._encode_image(image)
+            encoded, digest, dimensions = self._encode_image(image)
             data_url = "data:image/jpeg;base64," + encoded
             messages = [
                 {
@@ -169,7 +169,7 @@ class LocalVisionProvider:
                 "provider": "local_llama_vision",
                 "model": str(self.config.model_path),
                 "image_sha256": digest,
-                "image_dimensions": None,
+                "image_dimensions": {"width": dimensions[0], "height": dimensions[1]},
                 "evidence_type": "visual_observation_only",
                 "hosted_fallback": False,
                 "metrics": {
