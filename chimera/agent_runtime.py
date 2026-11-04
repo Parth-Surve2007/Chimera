@@ -12,6 +12,7 @@ import sqlite3
 import uuid
 import threading
 import inspect
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -424,6 +425,11 @@ class AgentRuntime:
             "computer.invoke_element": {"session_id": str, "reference_id": str},
             "computer.set_value": {"session_id": str, "reference_id": str, "value": str},
             "computer.read_text": {"session_id": str, "reference_id": str},
+            "computer.get_range_value": {"session_id": str, "reference_id": str},
+            "computer.set_range_value": {"session_id": str, "reference_id": str, "value": (int, float)},
+            "computer.read_grid": {"session_id": str, "reference_id": str},
+            "computer.scroll_element": {"session_id": str, "reference_id": str, "direction": str, "amount": str, "count": int},
+            "computer.scroll_into_view": {"session_id": str, "reference_id": str},
             "computer.toggle_element": {"session_id": str, "reference_id": str},
             "computer.select_element": {"session_id": str, "reference_id": str},
             "computer.expand_element": {"session_id": str, "reference_id": str},
@@ -438,9 +444,24 @@ class AgentRuntime:
         # continue to reject unknown arguments.
         if operation in {"computer.list_applications", "computer.list_windows"}:
             return
-        if set(arguments) - set(expected): raise ValueError(f"unsupported arguments for {operation}")
+        if set(arguments) - set(expected):
+            raise ValueError(f"unsupported arguments for {operation}")
         for name, kind in expected.items():
-            if name in arguments and (type(arguments[name]) is not kind): raise ValueError(f"argument {name} must be {kind.__name__}")
+            if name not in arguments:
+                continue
+            actual = arguments[name]
+            if kind is (int, float):
+                if isinstance(actual, bool) or not isinstance(actual, (int, float)) or not math.isfinite(float(actual)):
+                    raise ValueError(f"argument {name} must be a finite number")
+            elif type(actual) is not kind:
+                raise ValueError(f"argument {name} must be {kind.__name__}")
+        if operation == "computer.scroll_element":
+            if arguments["direction"] not in {"up", "down", "left", "right"}:
+                raise ValueError("scroll direction must be up, down, left, or right")
+            if arguments["amount"] not in {"line", "page"}:
+                raise ValueError("scroll amount must be line or page")
+            if "count" in arguments and not 1 <= arguments["count"] <= 5:
+                raise ValueError("scroll count must be between 1 and 5")
 
     def _messages_with_goal_context(self, session_id: str):
         """Attach private, operator-owned goal context to local inference only.
@@ -934,6 +955,8 @@ class AgentRuntime:
                         result_status, result_error = "completed", None
                 elif operation in {
                     "computer.invoke_element", "computer.set_value", "computer.read_text",
+                    "computer.get_range_value", "computer.set_range_value", "computer.read_grid",
+                    "computer.scroll_element", "computer.scroll_into_view",
                     "computer.toggle_element", "computer.select_element",
                     "computer.expand_element", "computer.collapse_element",
                 }:
@@ -944,13 +967,18 @@ class AgentRuntime:
                         "select_element": "select_item",
                         "expand_element": "expand",
                         "collapse_element": "collapse",
+                        "scroll_element": "scroll",
                     }.get(action, action)
                     strategy = self.computer.choose_interaction(
                         strategy_action, evidence={"semantic_control": True}
                     )
+                    action_options = {
+                        key: value for key, value in args.items()
+                        if key not in {"session_id", "reference_id", "value"}
+                    }
                     result_data = self.computer.act_reference(
                         args["session_id"], args["reference_id"], action,
-                        args.get("value"), approved=False,
+                        args.get("value"), approved=False, options=action_options,
                     )
                     result_data["strategy"] = strategy
                     result_status, result_error = result_data.get("status"), result_data.get("reason")
@@ -1082,8 +1110,10 @@ class AgentRuntime:
             res_err = act_res.get("error")
             result = type("AppResult", (), {"data": act_res, "status": res_status, "error": res_err})()
         elif pending["tool"].startswith("computer.") and pending["tool"] in {
-            "computer.invoke_element", "computer.set_value", "computer.toggle_element",
-            "computer.select_element", "computer.expand_element", "computer.collapse_element",
+            "computer.invoke_element", "computer.set_value", "computer.set_range_value",
+            "computer.scroll_element", "computer.scroll_into_view",
+            "computer.toggle_element", "computer.select_element",
+            "computer.expand_element", "computer.collapse_element",
             "computer.screenshot", "computer.launch",
         }:
             operation = pending["tool"]
@@ -1107,9 +1137,14 @@ class AgentRuntime:
                 identity = self.computer.sessions.get(args["session_id"])
                 if not identity or identity.owner_session_id != session_id:
                     raise PermissionError("application is not authorized for this Chimera conversation")
+                action_options = {
+                    key: value for key, value in args.items()
+                    if key not in {"session_id", "reference_id", "value"}
+                }
                 result_data = self.computer.act_reference(
                     args["session_id"], args["reference_id"],
-                    operation.removeprefix("computer."), args.get("value"), approved=True,
+                    operation.removeprefix("computer."), args.get("value"),
+                    approved=True, options=action_options,
                 )
             result = type("ComputerResult", (), {
                 "data": result_data, "status": result_data.get("status", "failed"),
