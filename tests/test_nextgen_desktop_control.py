@@ -221,3 +221,36 @@ def test_ui_automation_observation_targets_exact_authorized_window_and_bounds_tr
         assert "depth" in str(exc)
     else:
         raise AssertionError("unbounded UIA depth was accepted")
+
+
+def test_empty_uia_tree_uses_honest_read_only_win32_fallback(tmp_path):
+    from chimera.computer_runtime import ApplicationIdentity, ComputerSessionManager
+
+    manager = ComputerSessionManager(tmp_path)
+    identity = ApplicationIdentity(
+        4321, "C:/Apps/editor.exe", 123.0, "conversation", "app-session", (77,),
+    )
+    manager.sessions["app-session"] = identity
+    manager._identity_is_current = lambda current: current is identity
+    manager.backend.window_process_id = lambda hwnd: 4321 if hwnd == 77 else None
+    manager.backend.list_applications = lambda: [{
+        "pid": 4321,
+        "executable": identity.executable,
+        "windows": [{"hwnd": 77, "pid": 4321, "title": "Editor"}],
+    }]
+    manager.backend.controls = lambda hwnd: [{
+        "hwnd": 91, "parent_hwnd": hwnd, "class_name": "Button",
+        "text": "Open", "control_id": 100,
+    }]
+
+    class EmptyUIA:
+        def elements(self, hwnd, depth=3, limit=250):
+            return []
+
+    manager.uia = EmptyUIA()
+    observation = manager.observe("app-session")
+
+    assert observation.backend == "win32"
+    assert observation.limitation is not None
+    assert observation.elements[0]["text"] == "Open"
+    assert "reference_id" not in observation.elements[0]
