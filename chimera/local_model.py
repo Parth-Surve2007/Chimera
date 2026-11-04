@@ -948,8 +948,8 @@ class LocalModelProvider:
             )
             + (
                 "A separate foreground-drawing tool is currently available because the exact background canvas drag explicitly recommended foreground delivery. "
-                "Take a fresh screenshot snapshot of the same canvas, use the exact original stroke plan and canvas identity, and request its separate operator approval. "
-                "Never use it after a partial drawing or alter the refused stroke plan. "
+                "Use only the retry_strokes returned by the background draw result, together with its fresh verification_snapshot when supplied; otherwise inspect the same canvas again. "
+                "Keep the exact canvas identity and request its separate operator approval. Never replay already-applied segments or invent replacement strokes. "
                 if cua_foreground_draw_available else
                 "Do not attempt foreground drawing unless the runtime explicitly exposes computer.cua_draw_path_foreground after a matching background refusal. "
             )
