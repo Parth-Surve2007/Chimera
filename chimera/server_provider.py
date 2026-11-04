@@ -159,9 +159,11 @@ class LlamaServerManager:
         timeout=60,
         port=None,
         idle_timeout=0,
+        mmproj: Path | None = None,
     ):
         self.executable, self.model, self.context, self.threads = executable, model, context, threads
         self.gpu_layers, self.timeout, self.port = gpu_layers, timeout, port or free_port()
+        self.mmproj = Path(mmproj).expanduser().resolve() if mmproj else None
         self.process = None
         self.state = "stopped"
         self.started_at = None
@@ -202,6 +204,10 @@ class LlamaServerManager:
                 "--threads", str(self.threads), "--n-gpu-layers", str(self.gpu_layers),
                 "--parallel", "1", "--no-webui",
             ]
+            if self.mmproj is not None:
+                if not self.mmproj.is_file():
+                    raise ServerUnavailable("configured multimodal projector file is unavailable")
+                command.extend(["--mmproj", str(self.mmproj)])
             # Never leave an unread PIPE attached to the long-lived inference process.
             kwargs = {
                 "stdout": subprocess.DEVNULL,
