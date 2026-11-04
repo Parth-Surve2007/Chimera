@@ -124,7 +124,6 @@ class BrowserConnector(BaseApplicationConnector):
                 arguments_schema={
                     "page_index": "integer", "expected_url": "string",
                     "selector_kind": "string", "selector": "string",
-                    "role": "string",
                 },
                 expected_side_effects=["Activates one uniquely identified page control"],
                 requires_approval=True,
@@ -138,7 +137,7 @@ class BrowserConnector(BaseApplicationConnector):
                 arguments_schema={
                     "page_index": "integer", "expected_url": "string",
                     "selector_kind": "string", "selector": "string",
-                    "role": "string", "value": "string",
+                    "value": "string",
                 },
                 expected_side_effects=["Changes one web form field value"],
                 requires_approval=True,
@@ -152,7 +151,7 @@ class BrowserConnector(BaseApplicationConnector):
                 arguments_schema={
                     "page_index": "integer", "expected_url": "string",
                     "selector_kind": "string", "selector": "string",
-                    "role": "string", "key": "string",
+                    "key": "string",
                 },
                 expected_side_effects=["Sends a key to one uniquely identified web control"],
                 requires_approval=True,
@@ -166,7 +165,7 @@ class BrowserConnector(BaseApplicationConnector):
                 arguments_schema={
                     "page_index": "integer", "expected_url": "string",
                     "selector_kind": "string", "selector": "string",
-                    "role": "string", "relative_path": "string",
+                    "relative_path": "string",
                 },
                 expected_side_effects=["Downloads one file into the workspace"],
                 requires_approval=True,
@@ -175,10 +174,11 @@ class BrowserConnector(BaseApplicationConnector):
                 action_id="screenshot",
                 display_name="Capture web page",
                 description="Capture the selected tab as a PNG file in the workspace.",
-                risk_level=ActionRiskLevel.LEVEL_0_OBSERVE,
-                permission="browser.read",
+                risk_level=ActionRiskLevel.LEVEL_3_PROTECTED,
+                permission="browser.screenshot",
                 arguments_schema={"page_index": "integer", "expected_url": "string", "relative_path": "string"},
                 expected_side_effects=["Writes a PNG screenshot into the workspace"],
+                requires_approval=True,
             ),
             ApplicationAction(
                 action_id="close",
@@ -392,6 +392,27 @@ class BrowserConnector(BaseApplicationConnector):
             return restored
         raise RuntimeError("no Chimera-managed browser is running for this conversation; request browser.launch first")
 
+    @staticmethod
+    def _find_browser_process(executable: str, port: int, profile: Path, timeout: float = 5.0):
+        import psutil
+        expected = os.path.normcase(str(Path(executable).resolve())).casefold()
+        port_argument = f"--remote-debugging-port={port}"
+        profile_text = os.path.normcase(str(profile.resolve())).casefold()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for process in psutil.process_iter(["pid", "exe", "cmdline", "create_time"]):
+                try:
+                    info = process.info
+                    exe = os.path.normcase(str(Path(info.get("exe") or "").resolve())).casefold()
+                    command = info.get("cmdline") or []
+                    joined = os.path.normcase(" ".join(command)).casefold()
+                    if exe == expected and port_argument in command and profile_text in joined:
+                        return process
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, ValueError):
+                    continue
+            time.sleep(0.1)
+        raise TimeoutError("could not identify the exact browser process that owns the CDP endpoint")
+
     def _launch(self, browser_name: str) -> dict:
         session_id, workspace = self._session()
         if browser_name not in {"edge", "chrome"}:
@@ -452,12 +473,12 @@ class BrowserConnector(BaseApplicationConnector):
             playwright, browser, context = self._attach(endpoint)
             if not context.pages:
                 context.new_page()
-            import psutil
-            process_info = psutil.Process(process.pid)
+            process_info = self._find_browser_process(executable, port, profile)
+            browser_pid = int(process_info.pid)
             created = float(process_info.create_time())
             metadata = {
                 "browser_name": browser_name,
-                "pid": process.pid,
+                "pid": browser_pid,
                 "process_create_time": created,
                 "executable": str(Path(executable).resolve()),
                 "port": port,
@@ -469,12 +490,12 @@ class BrowserConnector(BaseApplicationConnector):
             temporary.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
             os.replace(temporary, metadata_path)
             self._runtimes[session_id] = _BrowserRuntime(
-                playwright, browser, context, process, process.pid, created,
+                playwright, browser, context, _PsutilProcessHandle(process_info), browser_pid, created,
                 str(Path(executable).resolve()), port, profile, workspace,
             )
             return {
                 "status": "completed", "browser_name": browser_name,
-                "pid": process.pid, "port": port,
+                "pid": browser_pid, "port": port,
                 "profile_path": str(profile), "url": context.pages[0].url,
                 "default_profile_reused": False,
             }
@@ -657,7 +678,7 @@ class BrowserConnector(BaseApplicationConnector):
                 return {"status": "awaiting_approval", "permission": "browser.download"}
             runtime, page = self._page(arguments)
             locator = self._unique_visible(self._locator(
-                page, arguments["selector_kind"], arguments["selector"], arguments.get("role")
+                page, arguments["selector_kind"], arguments["selector"]
             ))
             relative = arguments["relative_path"].replace("\\", "/")
             if not relative or relative.startswith("/") or any(part in {"", ".", ".."} for part in relative.split("/")):
