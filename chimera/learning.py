@@ -120,15 +120,17 @@ class ExperienceLearningEngine:
                         arguments = data.get("arguments", {})
                         if not isinstance(arguments, dict):
                             arguments = {}
+                        result_data = data.get("result")
+                        result_fields = (
+                            sorted(str(key)[:80] for key in result_data)[:20]
+                            if isinstance(result_data, dict) else []
+                        )
                         reusable_steps.append({
                             "action": tool_name,
                             "sanitized_arguments": self._argument_schema(
                                 self._redact_secrets(arguments)
                             ),
-                            "expected_result_fields": sorted(
-                                str(key)[:80] for key in data.get("result", {})
-                                if isinstance(data.get("result"), dict)
-                            )[:20],
+                            "expected_result_fields": result_fields,
                         })
                 except Exception:
                     pass
