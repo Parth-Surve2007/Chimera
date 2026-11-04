@@ -23,10 +23,10 @@ def test_first_run_chat_renders_persisted_user_assistant_and_tool_messages():
     assert len(controls) == 3
 
 
-def test_chat_ui_exposes_local_protocol_verification_and_no_blue_theme():
+def test_chat_ui_exposes_local_protocol_verification_and_monochrome_theme():
     from chimera import ui
-    assert ui.BG == "#000000" and ui.ACCENT == "#6F9FFF" and ui.FOCUS == "#C6D1E2"
-    assert ui.SURFACE == "#090C12" and hasattr(ui, "_background_gradient")
+    assert ui.BG == "#000000" and ui.ACCENT == "#C5C5C5" and ui.FOCUS == "#E0E0E0"
+    assert ui.SURFACE == "#0A0A0A" and hasattr(ui, "_background_gradient")
     assert hasattr(ui.MainWindow, "_verify_local_agent")
     assert hasattr(ui.MainWindow, "_chat_sidebar")
 
