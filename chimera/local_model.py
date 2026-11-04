@@ -277,6 +277,7 @@ def _plain_completion(raw: str) -> str:
     return text.strip()
 
 AGENT_DECISION_SCHEMA = {
+    "type": "object",
     "oneOf": [
         {
             "type": "object",
@@ -516,6 +517,8 @@ def _provider_structured(self, prompt: str):
 
 def structured_with_metrics(self, prompt: str, json_schema: dict | None = None, grammar: str | None = None, cancel_event=None, on_delta=None):
     """Run one bounded structured request and retain honest runtime metrics."""
+    if json_schema is not None and grammar is not None:
+        raise ValueError("provide either json_schema or grammar, not both")
     status = self.status()
     if status.state != "ready" and self.runner is None: raise RuntimeError(status.detail)
     started = time.perf_counter(); output = ""; stderr = ""; generated = 0
