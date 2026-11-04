@@ -605,6 +605,16 @@ def test_agent_runtime_validates_foreground_drawing_as_the_same_bounded_canvas_c
     assert AgentRuntime._validate_arguments(
         "computer.cua_draw_path_foreground", valid,
     ) is None
+    missing_timing = {key: value for key, value in valid.items() if key != "duration_ms"}
+    with pytest.raises(ValueError, match="duration_ms"):
+        AgentRuntime._validate_arguments(
+            "computer.cua_draw_path_foreground", missing_timing,
+        )
+    missing_steps = {key: value for key, value in valid.items() if key != "steps"}
+    with pytest.raises(ValueError, match="steps"):
+        AgentRuntime._validate_arguments(
+            "computer.cua_draw_path_foreground", missing_steps,
+        )
     invalid = {**valid, "strokes": [[[0.1, 0.1], [1.0, 0.9]]]}
     with pytest.raises(ValueError, match="normalized"):
         AgentRuntime._validate_arguments(
