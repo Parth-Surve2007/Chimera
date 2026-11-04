@@ -441,7 +441,7 @@ class AgentRuntime:
             "read_text": {"path": str},
             "create_artifact": {"name": str, "content": str},
             "create_file": {"path": str, "content": str},
-            "create_document": {"path": str, "title": str, "content": str},
+            "create_document": {"path": str, "title": str, "content": str},\n            "create_pdf": {"path": str, "title": str, "content": str},
             "computer.list_applications": {},
             "computer.list_installed_applications": {},
             "computer.list_windows": {},
@@ -1144,7 +1144,7 @@ class AgentRuntime:
                     continue
                 decision["arguments"]["executable"] = launch_preflight["application"]
 
-            if tool_id in {"workspace.create_file", "workspace.create_document"}:
+            if tool_id in {"workspace.create_file", "workspace.create_document", "workspace.create_pdf"}:
                 operation_name = tool_id.removeprefix("workspace.")
                 preflight = tools.run(operation_name, decision["arguments"], approved=False)
                 if preflight.status != "awaiting_approval":
@@ -1526,6 +1526,47 @@ class AgentRuntime:
             result = WorkspaceTools(
                 workspace, self._artifact_output_dir(workspace, session_id)
             ).run(operation, pending["arguments"], approved=True)
+        if pending["tool"] == "workspace.create_pdf" and result.status == "completed":
+            # Independently reopen the produced file at the runtime boundary.
+            # The writer's own validation is not accepted as the only proof.
+            try:
+                relative = result.data.get("path")
+                if workspace is None or not isinstance(relative, str) or not relative.strip():
+                    raise ValueError("PDF result did not include a valid workspace-relative path")
+                target = (workspace / relative).resolve()
+                if target == workspace or workspace not in target.parents or not target.is_file():
+                    raise ValueError("PDF output is missing or outside the selected workspace")
+                data = target.read_bytes()
+                if not data.startswith(b"%PDF-"):
+                    raise ValueError("PDF signature is invalid")
+                from pypdf import PdfReader
+                reader = PdfReader(str(target), strict=True)
+                if reader.is_encrypted or not reader.pages:
+                    raise ValueError("PDF is encrypted or contains no pages")
+                extracted = "\\n".join(page.extract_text() or "" for page in reader.pages)
+                normalize = lambda value: " ".join(str(value or "").replace("\\u00a0", " ").split())
+                expected = normalize(pending["arguments"]["title"] + "\\n" + pending["arguments"]["content"])
+                observed = normalize(extracted)
+                if observed != expected:
+                    raise ValueError("independent PDF text extraction does not match the approved source text")
+                result_data = dict(result.data)
+                result_data.update({
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "page_count": len(reader.pages),
+                    "text_verified": True,
+                    "independent_verification": True,
+                })
+                result = type("PDFVerificationResult", (), {
+                    "data": result_data, "status": "completed", "error": None,
+                })()
+            except Exception as exc:
+                result = type("PDFVerificationResult", (), {
+                    "data": {**(result.data if isinstance(result.data, dict) else {}), "independent_verification": False},
+                    "status": "failed",
+                    "error": f"PDF independent verification failed: {exc}",
+                })()
+
         self.store.clear_pending_tool(session_id)
         self.store.add_message(session_id, "tool", json.dumps({"invocation_id": pending["invocation_id"], "tool": pending["tool"], "arguments": pending["arguments"], "result": result.data, "status": result.status, "error": result.error}))
         self._record(session_id, "tool.completed" if result.status == "completed" else "tool.failed", {"invocation_id": pending["invocation_id"], "status": result.status, "data": result.data, "error": result.error})
@@ -1565,7 +1606,7 @@ class AgentRuntime:
             return {"status": "completed", "message": assistant, "tools": [pending["tool"]]}
 
         if (
-            pending["tool"] in {"workspace.create_file", "workspace.create_document"}
+            pending["tool"] in {"workspace.create_file", "workspace.create_document", "workspace.create_pdf"}
             and self._is_terminal_file_creation_request(
                 next((item.content for item in reversed(self.store.messages(session_id)) if item.role == "user"), "")
             )
@@ -1607,7 +1648,7 @@ class AgentRuntime:
                 self._tasks.pop(session_id, None)
                 return {"status": "failed", "error": error, "tool": pending["tool"]}
 
-            file_kind = "Word document" if pending["tool"] == "workspace.create_document" else "text file"
+            file_kind = {\n                "workspace.create_document": "Word document",\n                "workspace.create_pdf": "PDF document",\n            }.get(pending["tool"], "text file")
             assistant = self.store.add_message(
                 session_id, "assistant",
                 f"Created and verified the {file_kind}: {relative} ({result.data['bytes']} bytes)."
