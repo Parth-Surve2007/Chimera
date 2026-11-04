@@ -347,3 +347,48 @@ def test_browser_connector_is_registered_and_read_actions_are_read_only(tmp_path
     assert actions["application.browser.click"]["permission"] == "browser.input"
     assert actions["application.browser.navigate"]["permission"] == "browser.navigate"
     assert actions["application.browser.screenshot"]["requires_approval"] is True
+
+
+
+def test_browser_playwright_actions_are_serialized_on_one_owned_thread(tmp_path):
+    import threading
+
+    connector, page = make_connector(tmp_path)
+    observed_threads = []
+    original_title = page.title
+
+    def title():
+        observed_threads.append(threading.get_ident())
+        return original_title()
+
+    page.title = title
+    errors = []
+
+    def run_action():
+        try:
+            with connector.execution_context("session-1", tmp_path):
+                result = connector.execute_action("list_tabs", {})
+                assert result["status"] == "completed"
+        except Exception as exc:
+            errors.append(exc)
+
+    workers = [threading.Thread(target=run_action) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=5)
+
+    assert not errors
+    assert all(not worker.is_alive() for worker in workers)
+    assert len(observed_threads) == 4
+    assert set(observed_threads) == {connector._browser_worker_thread.ident}
+
+
+def test_browser_discovery_does_not_mark_missing_executable_as_installed(tmp_path):
+    missing = tmp_path / "missing-msedge.exe"
+    connector = BrowserConnector(browser_paths={"edge": missing})
+    connector.discover()
+
+    assert connector.manifest.is_installed is False
+    assert connector.manifest.installation_path is None
+    assert connector._browser_paths == {}
