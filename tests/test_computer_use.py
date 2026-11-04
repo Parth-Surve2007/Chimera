@@ -79,3 +79,33 @@ def test_uia_observation_exposes_runtime_generated_references_for_real_window():
         assert element["session_id"] == identity.session_id
         assert element["observation_generation"] == observation.generation
         assert isinstance(element["available_actions"], list)
+
+
+
+def test_application_launch_resolves_word_name_before_approval(tmp_path, monkeypatch):
+    computer = WindowsComputerUse(tmp_path)
+    executable = tmp_path / "WINWORD.EXE"
+    executable.write_bytes(b"MZ")
+    resolved = []
+
+    def resolve(name):
+        resolved.append(name)
+        return executable if name.casefold() == "word" else None
+
+    monkeypatch.setattr(computer, "_resolve_executable", resolve)
+    result = computer.launch("Word")
+
+    assert resolved == ["Word"]
+    assert result["status"] == "awaiting_approval"
+    assert result["application"] == str(executable)
+    assert result["requested_application"] == "Word"
+
+
+def test_application_launch_blocks_unknown_application_name(tmp_path, monkeypatch):
+    computer = WindowsComputerUse(tmp_path)
+    monkeypatch.setattr(computer, "_resolve_executable", lambda _name: None)
+
+    result = computer.launch("DefinitelyNotInstalled")
+
+    assert result["status"] == "blocked"
+    assert "could not resolve" in result["reason"]
