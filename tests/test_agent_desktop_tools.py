@@ -132,3 +132,56 @@ def test_ui_removes_verify_controls_and_optional_langflow_setup():
     assert "INSTALL LANGFLOW" not in ui and "LangflowService" not in ui
     assert 'font_family=getattr(self, "logo_font_family", "Segoe UI")' in ui
     assert 'tooltip="Return to the Chimera chat"' in ui
+    assert "async def _approve_agent_tool_yes" in ui
+    assert 'self._button("APPROVE THIS ACTION", self._approve_agent_tool_yes)' in ui
+    assert "self.page.run_task(self._watch_agent)" not in ui
+    assert "auto_scroll=True" in ui
+    assert "self._context_rail()," not in ui
+    assert "list_sessions(limit=6)" in ui
+
+
+def test_workspace_file_creation_rejects_absolute_host_paths_before_approval(tmp_path):
+    tools = WorkspaceTools(tmp_path, tmp_path / "out")
+    result = tools.run(
+        "create_file",
+        {"path": "/home/user/Desktop/hello.txt", "content": "Hello World"},
+        approved=False,
+    )
+    assert result.status == "failed"
+    assert "workspace-relative" in result.error
+    assert not (tmp_path / "hello.txt").exists()
+
+
+def test_runtime_rejects_invalid_create_file_path_before_operator_approval(tmp_path):
+    class DecidingProvider:
+        config = SimpleNamespace(model_path=None)
+
+        def __init__(self):
+            self.decisions = iter([
+                {"type": "tool_call", "tool": "workspace.create_file", "arguments": {
+                    "path": "/home/user/Desktop/hello.txt", "content": "Hello World",
+                }, "invocation_id": "absolute-path"},
+                {"type": "message", "content": "The supplied path was invalid; no file was written."},
+            ])
+
+        def decide(self, messages, catalog, session=None):
+            return next(self.decisions)
+
+    runtime = AgentRuntime(
+        AgentSessionStore(tmp_path / "chimera.db"),
+        DecidingProvider(),
+    )
+    session_id = runtime.create_session(tmp_path, mode="build")
+    result = runtime.send(session_id, "Create hello.txt on the Desktop.")
+
+    assert result["status"] == "completed"
+    assert runtime.store.pending_tool(session_id) is None
+    assert not (tmp_path / "hello.txt").exists()
+    tool_messages = [
+        message for message in runtime.store.messages(session_id)
+        if message.role == "tool"
+    ]
+    assert tool_messages
+    payload = __import__("json").loads(tool_messages[0].content)
+    assert payload["status"] == "failed"
+    assert "workspace-relative" in payload["error"]
