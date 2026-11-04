@@ -252,3 +252,128 @@ def test_local_agent_can_manage_persistent_todos_in_plan_mode(tmp_path):
     assert {"agent.todo_read", "agent.todo_write"} <= offered
     task = runtime.task_store.latest_for_session(session_id)
     assert [item["status"] for item in runtime.task_store.todos(task.task_id)] == ["in_progress", "pending"]
+
+
+
+def test_agent_runtime_executes_uia_action_only_after_exact_approval(tmp_path, monkeypatch):
+    import time
+    from chimera.computer_runtime import (
+        ApplicationIdentity, ComputerObservation, ElementReference,
+    )
+
+    class FakeUIA:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, hwnd, runtime_id, operation, value=None, expected_pid=None, options=None):
+            self.calls.append((hwnd, runtime_id, operation, value, expected_pid, options))
+            return {"status": "completed", "verified": True, "backend": "uia", "value": value}
+
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "computer.set_value",
+            "arguments": {
+                "session_id": "authorized-window",
+                "reference_id": "fresh-control",
+                "value": "Chimera",
+            },
+            "invocation_id": "uia-write-1",
+        },
+        {"type": "message", "content": "The application field was updated and verified."},
+    ])
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "agent.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="build")
+    identity = ApplicationIdentity(
+        pid=4321, executable=r"C:\\Program Files\\Example\\app.exe",
+        process_create_time=1.0, owner_session_id=session_id,
+        session_id="authorized-window",
+    )
+    reference = ElementReference(
+        reference_id="fresh-control", session_id="authorized-window", hwnd=99,
+        runtime_id="42", generation=3, expires_at=time.time() + 60,
+    )
+    observation = ComputerObservation(
+        observation_id="observation-1", session_id="authorized-window", generation=3,
+        created_at=time.time(), backend="uia", application={},
+        windows=[{"hwnd": 99}], elements=[],
+    )
+    runtime.computer.sessions["authorized-window"] = identity
+    runtime.computer.references[reference.reference_id] = reference
+    runtime.computer.observations["authorized-window"] = (3, observation)
+    monkeypatch.setattr(runtime.computer, "_identity_is_current", lambda _identity: True)
+    monkeypatch.setattr(runtime.computer.backend, "window_process_id", lambda _hwnd: 4321)
+    fake = FakeUIA()
+    runtime.computer.uia = fake
+
+    pending = runtime.send(session_id, "Set the selected application field to Chimera.")
+    assert pending["status"] == "awaiting_approval"
+    assert pending["tool"] == "computer.set_value"
+    assert fake.calls == []
+
+    completed = runtime.approve_pending(session_id, approve=True)
+    assert completed["status"] == "completed"
+    assert fake.calls == [(99, "42", "set_value", "Chimera", 4321, {})]
+    assert "updated and verified" in completed["message"].content
+    assert any(event.event_type == "tool.permission.granted" for event in runtime.store.events(session_id))
+    assert any(event.event_type == "tool.completed" for event in runtime.store.events(session_id))
+
+
+def test_agent_runtime_plan_mode_blocks_uia_mutation_before_approval(tmp_path, monkeypatch):
+    import time
+    from chimera.computer_runtime import (
+        ApplicationIdentity, ComputerObservation, ElementReference,
+    )
+
+    class FakeUIA:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return {"status": "completed", "verified": True, "backend": "uia"}
+
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "computer.set_value",
+            "arguments": {
+                "session_id": "authorized-window",
+                "reference_id": "fresh-control",
+                "value": "forbidden",
+            },
+        },
+        {"type": "message", "content": "Plan Mode cannot change the application."},
+    ])
+    runtime = AgentRuntime(AgentSessionStore(tmp_path / "agent.db"), provider)
+    session_id = runtime.create_session(tmp_path, mode="plan")
+    identity = ApplicationIdentity(
+        pid=4321, executable=r"C:\\Program Files\\Example\\app.exe",
+        process_create_time=1.0, owner_session_id=session_id,
+        session_id="authorized-window",
+    )
+    reference = ElementReference(
+        reference_id="fresh-control", session_id="authorized-window", hwnd=99,
+        runtime_id="42", generation=3, expires_at=time.time() + 60,
+    )
+    observation = ComputerObservation(
+        observation_id="observation-1", session_id="authorized-window", generation=3,
+        created_at=time.time(), backend="uia", application={},
+        windows=[{"hwnd": 99}], elements=[],
+    )
+    runtime.computer.sessions["authorized-window"] = identity
+    runtime.computer.references[reference.reference_id] = reference
+    runtime.computer.observations["authorized-window"] = (3, observation)
+    monkeypatch.setattr(runtime.computer, "_identity_is_current", lambda _identity: True)
+    monkeypatch.setattr(runtime.computer.backend, "window_process_id", lambda _hwnd: 4321)
+    fake = FakeUIA()
+    runtime.computer.uia = fake
+
+    result = runtime.send(session_id, "Change the selected application field.")
+    assert result["status"] == "completed"
+    assert result["message"].content == "Plan Mode cannot change the application."
+    assert fake.calls == []
+    assert any(
+        event.event_type == "tool.failed" and event.payload.get("status") == "blocked"
+        for event in runtime.store.events(session_id)
+    )
