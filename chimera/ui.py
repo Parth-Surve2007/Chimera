@@ -4,7 +4,6 @@ from pathlib import Path
 from .review import ReviewService
 from .workflow import CapabilityWorkflow
 from .behavior import VirtualBoxBackend
-from .langflow_studio import LangflowService, LangflowStatus
 from .server_provider import load_policy, save_policy
 from .model_hub import ModelProfileStore, CredentialStore, OpenAICompatibleAdapter, ModelProfile
 from .audit import AuditStore
@@ -110,9 +109,10 @@ class MainWindow:
         self.max_tokens_field = ft.TextField(label="MAX TOKENS", color=TEXT, border_color=BORDER, value=str(initial_config.max_tokens), width=120)
         self.threads_field = ft.TextField(label="CPU THREADS", color=TEXT, border_color=BORDER, value=str(initial_config.threads), width=120)
         self.gpu_layers_field = ft.TextField(label="GPU LAYERS", color=TEXT, border_color=BORDER, value=str(initial_config.gpu_layers), width=120)
-        page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
+        page.title = "Chimera"; page.theme_mode = ft.ThemeMode.DARK; page.theme = ft.Theme(font_family="Segoe UI"); page.bgcolor = BG; page.padding = 0; page.window.width = 1440; page.window.height = 900; page.window.min_width = 1120; page.window.min_height = 700
         font = Path(__file__).resolve().parent.parent / "fonts" / "ec-dots-life-font" / "EcDotsLifeRegular-AydL.ttf"
         page.fonts = {"ChimeraDots": str(font)} if font.exists() else {}
+        self.logo_font_family = "ChimeraDots" if font.exists() else "Segoe UI"
         self.task_busy = False; self.model_verifying = False; self.local_verification = None; self.model_boot_status = "checking"; self.last_turn_notice = None; self.pending_request = None; self.pending_session_id = None; self.pending_questions = (); self.pending_state = None; self.pending_reason = ""
         self.clarification_field = ft.TextField(multiline=True, min_lines=3, max_lines=6, hint_text="Answer the clarification questions...", hint_style=ft.TextStyle(color=MUTED), bgcolor=BG, color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=8, expand=True)
         self.task_field = ft.TextField(multiline=True, min_lines=3, max_lines=8, hint_text="Give Chimera the outcome. Keep talking as it works...", hint_style=ft.TextStyle(color=MUTED), bgcolor="#101010", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, border_radius=11, expand=True, text_size=14)
@@ -150,29 +150,43 @@ class MainWindow:
         await asyncio.sleep(2.5)
         if self._intro in self.page.controls:
             self.page.controls.clear(); self.page.add(self.shell); self.page.update()
+
     def _topbar(self):
         local_state = self._runtime_state().replace("RUNTIME: ", "")
-        state_color = "#E5B35A" if local_state == "READY" else "#BFA16A"
+        state_color = FOCUS if local_state in {"READY", "CONFIGURED"} else "#BFA16A"
+        logo = ft.Container(
+            ft.Row([
+                ft.Text("◈", color=ACCENT, size=20),
+                ft.Text("CHIMERA", color=TEXT, size=18, weight=ft.FontWeight.BOLD, font_family=self.logo_font_family),
+                ft.Text("LOCAL AGENT WORKSPACE", color=MUTED, size=9),
+            ], spacing=10),
+            tooltip="Return to the Chimera chat",
+            padding=ft.Padding.symmetric(vertical=8, horizontal=4),
+            on_click=lambda e: self._navigate(self._show_overview),
+        )
+        status = ft.Container(
+            ft.Row([
+                ft.Container(width=6, height=6, bgcolor=state_color, border_radius=6),
+                ft.Text(f"LOCAL RUNTIME  /  {local_state}", color=SECONDARY, size=10),
+            ], spacing=8),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=20,
+            padding=ft.Padding.symmetric(horizontal=13, vertical=8),
+        )
         return ft.Container(
             ft.Row([
+                logo,
                 ft.Row([
-                    ft.Text("◈", color=ACCENT, size=20),
-                    ft.Text("CHIMERA", color=TEXT, size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text("LOCAL AGENT WORKSPACE", color=MUTED, size=9),
-                ], spacing=10),
-                ft.Row([
-                    ft.Container(
-                        ft.Row([ft.Container(width=6, height=6, bgcolor=state_color, border_radius=6), ft.Text(f"LOCAL RUNTIME  /  {local_state}", color=SECONDARY, size=9)], spacing=7),
-                        bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=20,
-                        padding=ft.Padding.symmetric(horizontal=12, vertical=7),
+                    status,
+                    ft.IconButton(
+                        icon=ft.Icons.SETTINGS_OUTLINED, icon_color=SECONDARY,
+                        tooltip="Model and application settings", on_click=self._show_settings,
                     ),
-                    ft.TextButton("VERIFY MODEL", on_click=self._verify_local_agent, style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding.symmetric(horizontal=10, vertical=8))),
-                    ft.IconButton(icon=ft.Icons.SETTINGS_OUTLINED, icon_color=SECONDARY, tooltip="Settings", on_click=self._show_settings),
-                ], spacing=8),
+                ], spacing=10),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            height=58, padding=ft.Padding.symmetric(horizontal=22),
+            height=62, padding=ft.Padding.symmetric(horizontal=24),
             bgcolor=BG, border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
         )
+
     def _drawer(self):
         buttons = []
         buttons.append(ft.TextButton("NEW CONVERSATION", on_click=lambda e: self._new_agent_session(), style=ft.ButtonStyle(color=FOCUS, padding=ft.Padding.symmetric(horizontal=18, vertical=14))))
@@ -190,61 +204,185 @@ class MainWindow:
         try: caps = len(self.registry.list()); review = len(self.review.list())
         except Exception: caps, review = "?", "?"
         return ft.Container(ft.Text(f"MODEL: {self._runtime_state().split(': ')[-1]}   ·   CAPABILITIES: {caps}   ·   REVIEW: {review}   ·   STATE: IDLE", color=MUTED, size=10), height=34, padding=ft.Padding.symmetric(horizontal=24, vertical=8), border=ft.Border.only(top=ft.BorderSide(1, BORDER)))
-    def _set(self, controls): self.body.content = ft.Column(controls, expand=True, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=18); self.page.update()
+
+    def _set(self, controls):
+        content = ft.Column(
+            controls, expand=True, scroll=ft.ScrollMode.AUTO,
+            horizontal_alignment=ft.CrossAxisAlignment.START, spacing=18,
+        )
+        centered = ft.Row(
+            [ft.Container(
+                content=content, width=1000,
+                padding=ft.Padding.symmetric(horizontal=26, vertical=26),
+            )],
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            expand=True,
+        )
+        self.body.padding = ft.Padding.all(0)
+        self.body.content = ft.Container(content=centered, expand=True, bgcolor=BG)
+        self.page.update()
+
+    def _page_heading(self, title, subtitle, eyebrow="CHIMERA  /  WORKSPACE"):
+        return ft.Container(
+            ft.Column([
+                ft.Text(eyebrow, color=FOCUS, size=9, weight=ft.FontWeight.BOLD),
+                ft.Text(title, color=TEXT, size=27, weight=ft.FontWeight.BOLD),
+                ft.Text(subtitle, color=SECONDARY, size=12),
+            ], spacing=6),
+            padding=ft.Padding.only(bottom=8), width=940,
+        )
+
+    def _panel(self, title, subtitle, controls, width=940):
+        return ft.Container(
+            ft.Column([
+                ft.Text(title, color=TEXT, size=16, weight=ft.FontWeight.BOLD),
+                *([ft.Text(subtitle, color=MUTED, size=11)] if subtitle else []),
+                *controls,
+            ], spacing=11),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER),
+            border_radius=12, padding=ft.Padding.all(18), width=width,
+        )
+
     def _button(self, label, handler): return ft.FilledButton(label, on_click=handler, style=ft.ButtonStyle(bgcolor=FOCUS, color=BG, overlay_color=ACCENT))
 
-    def _show_capabilities(self, e=None): self._set([ft.Row([ft.Text("CAPABILITIES", size=18, color=TEXT), ft.Text("/ REVIEW QUEUE", size=11, color=MUTED)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), self._candidate_list()])
+
+    def _show_capabilities(self, e=None):
+        self._set([
+            self._page_heading("Capabilities", "Review proposed capabilities, inspect their evidence, and approve only what has passed review."),
+            self._panel("Capability review queue", "Proposals remain inert until they are verified and explicitly accepted.", [self._candidate_list()]),
+        ])
+
+
     def _show_workflow_studio(self, e=None):
-        service = getattr(self, "langflow_service", None) or LangflowService(); self.langflow_service = service
-        status = service.status()
-        if not status.configured and service.installed(): status = LangflowStatus(True, False, service.url, "Langflow installed but not started")
-        if status.available:
-            action = ft.TextButton("OPEN LOCAL STUDIO", on_click=lambda _: self._action(lambda: service.open_editor()), style=ft.ButtonStyle(color=FOCUS))
-            detail = f"LOCAL LANGFLOW AVAILABLE\n{status.url}\nChimera validation and permissions remain authoritative."
-        elif service.installed():
-            action = ft.TextButton("START LANGFLOW", on_click=lambda _: self._action(lambda: service.start(), True), style=ft.ButtonStyle(color=FOCUS))
-            detail = f"LANGFLOW INSTALLED / STOPPED\n{service.executable}\n{status.reason}"
-        else:
-            action = ft.TextButton("INSTALL LANGFLOW", on_click=lambda _: self._action(lambda: service.install(), True), style=ft.ButtonStyle(color=FOCUS))
-            detail = f"LANGFLOW NOT INSTALLED\n{status.reason}\nInstallation is explicit, isolated and optional."
-        self._set([ft.Text("WORKFLOW STUDIO", size=18, color=TEXT), ft.Text(detail, color=SECONDARY), action, ft.Text("Imported workflows are untrusted until Chimera validates their components, permissions and execution bounds.", color=MUTED, size=11)])
+        try:
+            runs = AuditStore(self.registry.data_dir / "chimera.db").workflow_runs()
+            error = None
+        except Exception as exc:
+            runs, error = [], str(exc)
+        cards = []
+        for run_id, summary, started, finished, status, candidate, digest, run_error in runs[:12]:
+            state = str(status or "unknown").replace("_", " ").title()
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Row([
+                        ft.Text(str(summary or "Workflow run"), color=TEXT, size=14, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Text(state, color=FOCUS if status == "completed" else SECONDARY, size=10, weight=ft.FontWeight.BOLD),
+                    ]),
+                    ft.Text(f"Started {started or '—'}  ·  Finished {finished or '—'}", color=MUTED, size=10),
+                    ft.Text(f"Run {str(run_id)[:16]}  ·  Candidate {candidate or '—'}", color=SECONDARY, size=10),
+                    *([ft.Text(f"Result: {run_error}", color=ACCENT, size=11)] if run_error else []),
+                ], spacing=7),
+                bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=10,
+                padding=ft.Padding.all(15), width=940,
+            ))
+        self._set([
+            self._page_heading("Workflow studio", "Build and run governed, sequential work across Chimera capabilities. No external workflow service is required."),
+            self._panel("Chimera workflow engine", "Start from a natural-language outcome in Chat. Chimera validates registered tools, checks dependencies, pauses for approval, and records run evidence.", [
+                ft.Row([
+                    self._button("OPEN CHAT WORKBENCH", lambda e: self._navigate(self._show_overview)),
+                    ft.Text("Use “Run workflow” in the chat composer to begin.", color=SECONDARY, size=11),
+                ], wrap=True, spacing=12),
+            ]),
+            self._page_heading("Recent workflow runs", "Persisted activity only. No placeholder or fabricated runs are shown.", eyebrow="WORKFLOW HISTORY"),
+            *([ft.Text(error, color=ACCENT)] if error else []),
+            *(cards or [ft.Container(
+                ft.Text("No workflow runs recorded yet. Your first run will appear here with its real status and timestamps.", color=MUTED, size=12),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10,
+                padding=ft.Padding.all(18), width=940,
+            )]),
+        ])
+
+
     def _show_model_hub(self, e=None):
-        profiles = ModelProfileStore(self.registry.data_dir / "model_profiles.json").list()
-        self.hub_id = ft.TextField(label="PROFILE ID", color=TEXT, border_color=BORDER)
-        self.hub_provider = ft.TextField(label="PROVIDER ID", color=TEXT, border_color=BORDER)
-        self.hub_model = ft.TextField(label="MODEL ID OR GGUF PATH", color=TEXT, border_color=BORDER)
-        self.hub_url = ft.TextField(label="API BASE URL (OPTIONAL)", color=TEXT, border_color=BORDER)
-        self.hub_secret = ft.TextField(label="API CREDENTIAL (NOT STORED IN PROFILE)", color=TEXT, border_color=BORDER, password=True, can_reveal_password=False)
-        self.hub_tools = ft.Checkbox(label="ENABLE TOOL CALLING (E.G. WORKSPACE INSPECTION)", value=True)
-        self.hub_dialect = ft.TextField(label="API DIALECT (OPTIONAL: openai_compatible, openai_responses, anthropic_messages, gemini_interactions, custom)", color=TEXT, border_color=BORDER)
-        cards = [ft.Container(ft.Column([ft.Text(f"{p.display_name or p.model_id}  ·  {p.provider_id}  ·  {'API' if p.hosted else 'LOCAL'}", color=TEXT), ft.Text(f"DIALECT: {getattr(p, 'dialect', None) or 'auto'}  CAPABILITIES: {', '.join(p.modalities)}  TOOLS: {p.tool_calling}  STRUCTURED: {p.structured_output}  STATE: {'ENABLED' if p.enabled else 'DISABLED'}  EVIDENCE: {p.capability_evidence}", color=SECONDARY, size=11), ft.Row([ft.TextButton("USE", on_click=lambda e, pid=p.profile_id: self._select_session_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("COMPAT LAB", on_click=lambda e, pid=p.profile_id: self._run_compat_lab(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("DEFAULT", on_click=lambda e, pid=p.profile_id: self._set_default_model(pid), style=ft.ButtonStyle(color=FOCUS)), ft.TextButton("TOGGLE", on_click=lambda e, pid=p.profile_id: self._toggle_model(pid), style=ft.ButtonStyle(color=SECONDARY)), ft.TextButton("REMOVE", on_click=lambda e, pid=p.profile_id: self._remove_model(pid), style=ft.ButtonStyle(color=SECONDARY))])]), padding=ft.Padding.all(12), border=ft.Border.all(1, BORDER)) for p in profiles]
-        form = ft.Container(ft.Column([ft.Text("ADD OR EDIT PROFILE", color=MUTED, size=10), self.hub_id, self.hub_provider, self.hub_model, self.hub_url, self.hub_secret, self.hub_dialect, self.hub_tools, ft.Row([self._button("SAVE LOCAL", lambda e: self._save_model_profile(False)), self._button("SAVE API", lambda e: self._save_model_profile(True)), ft.TextButton("TEST SELECTED API", on_click=self._test_model_profile, style=ft.ButtonStyle(color=FOCUS))])], spacing=8), bgcolor=SURFACE, padding=ft.Padding.all(14), border=ft.Border.all(1, BORDER))
-        app_cards = []
+        profiles = self.profile_store.list()
+        self.hub_id = ft.TextField(label="Profile ID", hint_text="e.g. local-llama-3b", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, expand=True)
+        self.hub_provider = ft.TextField(label="Provider ID", hint_text="e.g. llama_cpp or openai", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, expand=True)
+        self.hub_model = ft.TextField(label="Model ID or GGUF path", hint_text="Model name or full local .gguf path", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, expand=True)
+        self.hub_url = ft.TextField(label="API base URL", hint_text="Required only for hosted API profiles", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, expand=True)
+        self.hub_secret = ft.TextField(label="API credential", hint_text="Used for this session; not stored in the profile", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, password=True, can_reveal_password=True, expand=True)
+        self.hub_tools = ft.Checkbox(label="Allow this provider to request registered tool calls", value=True)
+        self.hub_dialect = ft.TextField(label="API format (optional)", hint_text="Auto-detect, or enter a supported API dialect", color=TEXT, border_color=BORDER, focused_border_color=FOCUS, expand=True)
+
+        cards = []
+        for profile in profiles:
+            actions = ft.Row([
+                ft.TextButton("Use in this chat", on_click=lambda e, pid=profile.profile_id: self._select_session_model(pid), style=ft.ButtonStyle(color=FOCUS)),
+                ft.TextButton("Compatibility", on_click=lambda e, pid=profile.profile_id: self._run_compat_lab(pid), style=ft.ButtonStyle(color=FOCUS)),
+                ft.TextButton("Make default", on_click=lambda e, pid=profile.profile_id: self._set_default_model(pid), style=ft.ButtonStyle(color=FOCUS)),
+                ft.TextButton("Enable / disable", on_click=lambda e, pid=profile.profile_id: self._toggle_model(pid), style=ft.ButtonStyle(color=SECONDARY)),
+                ft.TextButton("Remove", on_click=lambda e, pid=profile.profile_id: self._remove_model(pid), style=ft.ButtonStyle(color=ACCENT)),
+            ], wrap=True, spacing=5)
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Row([
+                        ft.Text(profile.display_name or profile.model_id, color=TEXT, size=15, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Container(ft.Text("HOSTED API" if profile.hosted else "LOCAL MODEL", color=FOCUS, size=9, weight=ft.FontWeight.BOLD),
+                            bgcolor="#19130D", border=ft.Border.all(1, "#6A4A25"), border_radius=20,
+                            padding=ft.Padding.symmetric(horizontal=10, vertical=6)),
+                    ]),
+                    ft.Text(f"Provider: {profile.provider_id}  ·  Format: {getattr(profile, 'dialect', None) or 'automatic'}", color=SECONDARY, size=11),
+                    ft.Text(f"Tools: {'enabled' if profile.tool_calling else 'disabled'}  ·  Structured output: {profile.structured_output}  ·  State: {'enabled' if profile.enabled else 'disabled'}", color=MUTED, size=10),
+                    actions,
+                ], spacing=8),
+                bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=10,
+                padding=ft.Padding.all(15), width=940,
+            ))
+
+        form = ft.Container(
+            ft.Column([
+                ft.Text("Add a model profile", color=TEXT, size=17, weight=ft.FontWeight.BOLD),
+                ft.Text("Local GGUF profiles run on this device. Hosted APIs are used only when you explicitly select that profile.", color=SECONDARY, size=11),
+                ft.Row([self.hub_id, self.hub_provider], spacing=12),
+                ft.Row([self.hub_model, self.hub_url], spacing=12),
+                ft.Row([self.hub_secret, self.hub_dialect], spacing=12),
+                self.hub_tools,
+                ft.Row([
+                    self._button("SAVE LOCAL PROFILE", lambda e: self._save_model_profile(False)),
+                    self._button("SAVE API PROFILE", lambda e: self._save_model_profile(True)),
+                    ft.TextButton("Test selected API", on_click=self._test_model_profile, style=ft.ButtonStyle(color=FOCUS)),
+                ], wrap=True, spacing=9),
+            ], spacing=11),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=12,
+            padding=ft.Padding.all(18), width=940,
+        )
+
+        connector_cards = []
         try:
             from .applications.registry import get_application_registry
-            manifests = get_application_registry().discover_all()
-            for m in manifests:
-                actions_summary = ", ".join(f"{a.action_id} (L{a.risk_level.value})" for a in m.actions)
-                app_cards.append(ft.Container(
+            for manifest in get_application_registry().discover_all():
+                actions_summary = ", ".join(
+                    f"{action.display_name} · L{action.risk_level.value}"
+                    for action in manifest.actions if not getattr(action, "unavailable", False)
+                ) or "No currently available actions"
+                connector_cards.append(ft.Container(
                     ft.Column([
-                        ft.Text(f"APPLICATION: {m.display_name} ({m.application_id})  ·  {'INSTALLED' if m.is_installed else 'AVAILABLE'}", color=TEXT),
-                        ft.Text(f"VENDOR: {m.vendor}  ·  VERSION: {m.connector_version}  ·  PATH: {m.installation_path or 'not installed'}", color=SECONDARY, size=11),
-                        ft.Text(f"ACTIONS: {actions_summary}", color=MUTED, size=10),
-                    ]),
-                    padding=ft.Padding.all(12),
-                    border=ft.Border.all(1, BORDER),
-                    bgcolor=ELEVATED,
+                        ft.Row([
+                            ft.Text(manifest.display_name, color=TEXT, size=14, weight=ft.FontWeight.BOLD, expand=True),
+                            ft.Text("INSTALLED" if manifest.is_installed else "NOT INSTALLED", color=FOCUS if manifest.is_installed else MUTED, size=9, weight=ft.FontWeight.BOLD),
+                        ]),
+                        ft.Text(f"{manifest.vendor}  ·  Connector {manifest.connector_version}", color=SECONDARY, size=10),
+                        ft.Text(actions_summary, color=MUTED, size=10),
+                    ], spacing=6),
+                    bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=9,
+                    padding=ft.Padding.all(13), width=940,
                 ))
-        except Exception:
-            pass
+        except Exception as exc:
+            connector_cards.append(ft.Text(f"Connector discovery unavailable: {exc}", color=ACCENT, size=11))
+
         self._set([
-            ft.Text("MODEL & APPLICATION INTELLIGENCE HUB", size=18, color=TEXT),
-            ft.Text("Universal model architecture & registered application ecosystem. Actions governed by Risk Levels.", color=MUTED, size=11),
+            self._page_heading("Model hub", "Choose the reasoning provider for this conversation, then inspect its declared capabilities."),
             form,
-            *(cards or [ft.Text("No model profiles configured yet.", color=SECONDARY)]),
-            ft.Text("REGISTERED APPLICATION ECOSYSTEM", size=14, color=TEXT),
-            *(app_cards or [ft.Text("No application connectors registered.", color=SECONDARY)])
+            self._page_heading("Configured profiles", "Profiles are stored locally. Credentials are separate from profile metadata.", eyebrow="MODEL REGISTRY"),
+            *(cards or [ft.Container(
+                ft.Text("No model profiles configured yet. Add a local GGUF or an explicitly selected API profile above.", color=MUTED, size=12),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10,
+                padding=ft.Padding.all(18), width=940,
+            )]),
+            self._page_heading("Specialist connectors", "These built-in connectors provide app-specific actions. They are not a desktop allowlist: open Windows applications are discovered live on the Applications page.", eyebrow="APPLICATION ECOSYSTEM"),
+            *(connector_cards or [ft.Text("No specialist connectors registered.", color=MUTED)]),
         ])
+
     def _run_compat_lab(self, profile_id):
         try:
             profile = next((p for p in self.profile_store.list() if p.profile_id == profile_id), None)
@@ -323,63 +461,99 @@ class MainWindow:
     def _action(self, action, refresh=False):
         try: action(); self._toast("Completed through ReviewService."); self._show_capabilities() if refresh else None
         except Exception as exc: self._toast(f"Action failed: {exc}")
+
     def _show_computer_apps(self, e=None):
-        """Operator-controlled process authorization for the active conversation."""
+        """Discover open Windows applications dynamically; never use a hard-coded list."""
+        self.apps_search = ft.TextField(
+            label="Search open applications", hint_text="Filter by executable or window title",
+            color=TEXT, border_color=BORDER, focused_border_color=FOCUS,
+            on_change=lambda e: self._render_computer_apps(), expand=True,
+        )
+        self._refresh_computer_apps()
+
+    def _refresh_computer_apps(self, e=None):
         try:
-            applications = self.agent_runtime.computer.backend.list_applications()
+            self._desktop_applications = self.agent_runtime.computer.backend.list_applications()
+            self._desktop_inventory_error = None
         except Exception as exc:
-            return self._set([
-                ft.Text("APPLICATION AUTHORIZATION", size=22, color=TEXT),
-                ft.Text(f"Application inventory unavailable: {exc}", color=SECONDARY),
-            ])
+            self._desktop_applications, self._desktop_inventory_error = [], str(exc)
+        self._render_computer_apps()
+
+    def _render_computer_apps(self):
+        applications = getattr(self, "_desktop_applications", [])
+        query = (getattr(getattr(self, "apps_search", None), "value", "") or "").strip().casefold()
+        visible = []
+        for app in applications:
+            executable = str(app.get("executable") or "")
+            titles = [str(window.get("title") or "").strip() for window in app.get("windows", []) if isinstance(window, dict)]
+            if query and query not in (executable + " " + " ".join(titles)).casefold():
+                continue
+            visible.append((app, titles))
 
         cards = []
-        for application in applications[:80]:
-            pid = application.get("pid")
-            executable = application.get("executable")
-            titles = ", ".join(
-                window.get("title") or window.get("class_name") or "Untitled window"
-                for window in application.get("windows", [])[:3]
-            )
+        for app, titles in visible:
+            pid, executable = app.get("pid"), app.get("executable")
+            app_name = str(executable or "Application").replace("\\", "/").rsplit("/", 1)[-1]
             authorized = any(
                 identity.owner_session_id == self.agent_session_id
                 and identity.pid == pid
-                and (identity.executable or "").casefold() == (executable or "").casefold()
+                and (identity.executable or "").casefold() == str(executable or "").casefold()
                 and self.agent_runtime.computer._identity_is_current(identity)
                 for identity in self.agent_runtime.computer.sessions.values()
             )
             action = (
-                ft.Text("AUTHORIZED FOR THIS CONVERSATION", color=FOCUS, size=10)
-                if authorized
-                else self._button(
-                    "AUTHORIZE THIS APPLICATION",
+                ft.Container(
+                    ft.Text("Authorized for this conversation", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
+                    bgcolor="#19130D", border=ft.Border.all(1, "#6A4A25"), border_radius=20,
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=7),
+                )
+                if authorized else self._button(
+                    "AUTHORIZE THIS APP",
                     lambda e, process_id=pid, image=executable: self._authorize_computer_application(process_id, image),
                 )
             )
             cards.append(ft.Container(
                 ft.Column([
-                    ft.Text(str(executable or "Executable path unavailable"), color=TEXT, weight=ft.FontWeight.BOLD, size=12),
-                    ft.Text(f"PID {pid} · {titles or 'No visible title'}", color=SECONDARY, size=10),
+                    ft.Row([ft.Text(app_name, color=TEXT, size=15, weight=ft.FontWeight.BOLD, expand=True), ft.Text(f"PID {pid}", color=MUTED, size=9)]),
+                    ft.Text("  ·  ".join(title for title in titles[:3] if title) or "Visible application window", color=SECONDARY, size=11),
+                    ft.Text(str(executable or "Executable path unavailable"), color=MUTED, size=9),
                     action,
                 ], spacing=8),
-                bgcolor=SURFACE,
-                border=ft.Border.all(1, BORDER),
-                border_radius=7,
-                padding=ft.Padding.all(14),
-                width=760,
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10,
+                padding=ft.Padding.all(15), width=940,
             ))
 
-        self._set([
-            ft.Text("APPLICATION AUTHORIZATION", size=22, color=TEXT),
-            ft.Text(
-                "Choose each application explicitly before Chimera can inspect its controls. "
-                "Authorization is scoped to this conversation. Global keyboard input, blind focus changes "
-                "and remote window closing are disabled.",
-                color=SECONDARY,
-                size=11,
+        count = len(applications)
+        content = [
+            self._page_heading("Applications", "Chimera discovers visible Windows applications at runtime. Authorize one exact running process before it can inspect the app's interface."),
+            ft.Container(
+                ft.Row([
+                    ft.Column([
+                        ft.Text(f"{count} open application{'s' if count != 1 else ''} discovered", color=TEXT, size=15, weight=ft.FontWeight.BOLD),
+                        ft.Text("This list refreshes from live desktop windows; it is not a hard-coded integration catalogue.", color=SECONDARY, size=10),
+                    ], expand=True, spacing=4),
+                    self._button("REFRESH", self._refresh_computer_apps),
+                ], spacing=12),
+                bgcolor=ELEVATED, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(14), width=940,
             ),
-            *(cards or [ft.Text("No visible applications were found.", color=MUTED)]),
-        ])
+            ft.Row([self.apps_search], spacing=10),
+        ]
+        if self._desktop_inventory_error:
+            content.append(ft.Text(f"Application inventory unavailable: {self._desktop_inventory_error}", color=ACCENT, size=11))
+        elif not applications:
+            content.append(ft.Container(
+                ft.Text("No titled application windows are visible right now. Open an application and refresh this view.", color=MUTED, size=12),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(18), width=940,
+            ))
+        elif not visible:
+            content.append(ft.Text("No open applications match this search.", color=MUTED, size=12))
+        else:
+            content.extend(cards)
+        content.append(ft.Text(
+            "Authorization is scoped to this conversation and exact process identity. Fresh UI Automation observations are still required; global keyboard injection, blind focus changes and remote window closing remain disabled.",
+            color=MUTED, size=10,
+        ))
+        self._set(content)
 
     def _authorize_computer_application(self, pid, executable):
         try:
@@ -389,7 +563,7 @@ class MainWindow:
                 owner_session_id=self.agent_session_id,
             )
             self._toast(f"Authorized {Path(identity.executable).name} for this conversation.")
-            self._show_computer_apps()
+            self._refresh_computer_apps()
         except Exception as exc:
             self._toast(f"Application authorization failed: {exc}")
 
@@ -401,11 +575,12 @@ class MainWindow:
         state, detail, state_color = self._model_runtime_summary()
         tuning = ft.Container(
             ft.Column([
-                ft.Text("INFERENCE BUDGET", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
+                ft.Text("Inference budget", color=FOCUS, size=12, weight=ft.FontWeight.BOLD),
+                ft.Text("A 4K context is a good starting point for recent conversation evidence and the registered tool catalogue.", color=SECONDARY, size=10),
                 ft.Row([self.context_field, self.max_tokens_field, self.threads_field, self.gpu_layers_field], wrap=True, spacing=10),
                 ft.Row([
-                    ft.TextButton("APPLY BALANCED 3B / Q4 PRESET", on_click=self._apply_balanced_preset, style=ft.ButtonStyle(color=ACCENT)),
-                    ft.Text("4K context · 512 output · 6 CPU threads · 20 GPU layers", color=MUTED, size=9),
+                    ft.TextButton("APPLY 4K STARTER PRESET", on_click=self._apply_balanced_preset, style=ft.ButtonStyle(color=ACCENT)),
+                    ft.Text("4096 context · 512 output · 6 CPU threads · 20 GPU layers", color=MUTED, size=10),
                 ], wrap=True),
             ], spacing=10),
             bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=12, padding=ft.Padding.all(16),
@@ -427,7 +602,7 @@ class MainWindow:
             bgcolor=PANEL_WARM, border=ft.Border.all(1, "#3A302C"), border_radius=12, padding=ft.Padding.all(15),
         )
         self._set([
-            ft.Row([ft.Text("MODEL BAY", size=22, color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(" / LOCAL ONLY", size=10, color=ACCENT)], spacing=8),
+            self._page_heading("Model settings", "Configure your GGUF file, persistent llama-server, and local inference budget.", eyebrow="CHIMERA  /  MODEL BAY"),
             runtime,
             ft.Container(ft.Column([
                 ft.Text("MODEL FILE", color=FOCUS, size=10, weight=ft.FontWeight.BOLD),
@@ -440,7 +615,6 @@ class MainWindow:
             tuning, quantization,
             ft.Row([
                 self._button("SAVE CONFIGURATION", self._save_model_config),
-                ft.TextButton("VERIFY AGENT PROTOCOL", on_click=self._verify_local_agent, style=ft.ButtonStyle(color=ACCENT)),
                 ft.TextButton("LOAD MODEL NOW", on_click=self._start_local_server, style=ft.ButtonStyle(color=TEXT)),
                 ft.TextButton("STOP MODEL", on_click=self._stop_local_server, style=ft.ButtonStyle(color=SECONDARY)),
             ], wrap=True, spacing=8),
@@ -534,25 +708,65 @@ class MainWindow:
         self._toast("Running genuine local inference..."); result = await asyncio.to_thread(LocalModelProvider(config_from_env()).plan, "Return a concise JSON TaskSpec for creating a deterministic local text utility.")
         self._toast(f"Inference {result.status}: {result.duration_ms} ms, {result.generated_tokens} generated tokens" if result.status == "ready" else f"Inference failed: {result.error or result.status}")
     def _toast(self, message): self.page.snack_bar = ft.SnackBar(ft.Text(message, color=TEXT), bgcolor=ELEVATED); self.page.snack_bar.open = True; self.page.update()
+
     def _show_runs(self, e=None):
-        try: runs = AuditStore(self.registry.data_dir / "chimera.db").workflow_runs()
-        except Exception as exc: return self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text(f"History unavailable: {exc}", color=SECONDARY)])
+        try:
+            runs = AuditStore(self.registry.data_dir / "chimera.db").workflow_runs()
+        except Exception as exc:
+            return self._set([
+                self._page_heading("Run history", "A record of real workflow and execution activity."),
+                ft.Text(f"History unavailable: {exc}", color=ACCENT, size=11),
+            ])
+
         execution_rows = []
-        for record in sorted((self.registry.data_dir / "executions").glob("*/execution.json")) if (self.registry.data_dir / "executions").is_dir() else []:
-            try:
-                item = json.loads(record.read_text(encoding="utf-8")); execution_rows.append(item)
-            except (OSError, json.JSONDecodeError):
-                execution_rows.append({"status": "unavailable", "error": f"Malformed execution record: {record.name}"})
-        if not runs and not execution_rows: return self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text("No workflow or execution runs recorded yet.", color=MUTED)])
+        execution_root = self.registry.data_dir / "executions"
+        if execution_root.is_dir():
+            for record in sorted(execution_root.glob("*/execution.json")):
+                try:
+                    execution_rows.append(json.loads(record.read_text(encoding="utf-8")))
+                except (OSError, json.JSONDecodeError):
+                    execution_rows.append({"status": "unavailable", "error": f"Malformed execution record: {record.name}"})
+
         cards = []
         for run_id, summary, started, finished, status, candidate, digest, error in runs:
-            status_text = str(status or "unknown")
-            detail = f"{summary}\n\nSTARTED  {started}\nSTATUS  {_upper(status_text)}\nCANDIDATE  {candidate or '—'}\nDIGEST  {digest or '—'}" + (f"\nERROR  {error}" if error else "")
-            cards.append(ft.Container(ft.Column([ft.Row([ft.Text(run_id[:12], color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(_upper(status_text), color=FOCUS if status_text == "pending_review" else SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(detail, color=SECONDARY, size=11)]), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=7, padding=ft.Padding.all(16), width=780))
+            state = str(status or "unknown")
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Row([
+                        ft.Text(str(summary or "Workflow run"), color=TEXT, size=14, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Text(state.replace("_", " ").upper(), color=FOCUS if state == "completed" else SECONDARY, size=9, weight=ft.FontWeight.BOLD),
+                    ]),
+                    ft.Text(f"Run {str(run_id)[:16]}", color=MUTED, size=9),
+                    ft.Text(f"Started  {started or '—'}    ·    Finished  {finished or '—'}", color=SECONDARY, size=10),
+                    ft.Text(f"Candidate  {candidate or '—'}    ·    Digest  {digest or '—'}", color=MUTED, size=9),
+                    *([ft.Text(f"Result: {error}", color=ACCENT, size=10)] if error else []),
+                ], spacing=7),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(16), width=940,
+            ))
         for item in execution_rows:
-            status = _upper(item.get("status")); artifact = item.get("artifact") or "none"; error = item.get("error") or "none"
-            cards.append(ft.Container(ft.Column([ft.Row([ft.Text(str(item.get("task_id", "execution"))[:12], color=TEXT, weight=ft.FontWeight.BOLD), ft.Text(status, color=FOCUS if status == "COMPLETED" else SECONDARY, size=10)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Text(f"{item.get('objective', 'Unknown objective')}\nARTIFACT  {artifact}\nERROR  {error}", color=SECONDARY, size=11)]), bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=7, padding=ft.Padding.all(16), width=780))
-        self._set([ft.Text("RUN HISTORY", size=22, color=TEXT), ft.Text("Persisted workflow events. This view never fabricates activity.", color=MUTED, size=11), *cards])
+            status = _upper(item.get("status"))
+            cards.append(ft.Container(
+                ft.Column([
+                    ft.Row([
+                        ft.Text(str(item.get("objective") or "Execution run"), color=TEXT, size=14, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Text(status, color=FOCUS if status == "COMPLETED" else SECONDARY, size=9, weight=ft.FontWeight.BOLD),
+                    ]),
+                    ft.Text(f"Task {str(item.get('task_id', 'execution'))[:16]}", color=MUTED, size=9),
+                    ft.Text(f"Artifact  {item.get('artifact') or '—'}", color=SECONDARY, size=10),
+                    *([ft.Text(f"Error: {item.get('error')}", color=ACCENT, size=10)] if item.get("error") else []),
+                ], spacing=7),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(16), width=940,
+            ))
+        self._set([
+            self._page_heading("Run history", "Persisted workflow and execution activity. This view never fabricates progress or completion."),
+            *(cards or [ft.Container(
+                ft.Column([
+                    ft.Text("No runs recorded yet", color=TEXT, size=15, weight=ft.FontWeight.BOLD),
+                    ft.Text("Start a task or workflow from Chat. Its actual status and evidence will appear here.", color=MUTED, size=11),
+                ], spacing=6),
+                bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=10, padding=ft.Padding.all(18), width=940,
+            )]),
+        ])
 
     def _show_goals(self, e=None):
         """Render the operator-owned goal ledger, separate from individual task runs."""
@@ -975,7 +1189,7 @@ class MainWindow:
                 ft.Text(f"{capability_count} registered capabilities", color=TEXT, size=10),
                 ft.Text("Plan mode is read-only. Build mode still asks before protected changes.", color=SECONDARY, size=9),
                 ft.Container(expand=True),
-                ft.Text("OXIDE / LOCAL-FIRST", color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
+                ft.Text("DARK EMPEROR / LOCAL-FIRST", color=ACCENT, size=8, weight=ft.FontWeight.BOLD),
                 ft.Text("No silent provider changes. No automatic model downloads.", color=MUTED, size=8),
             ], spacing=10, expand=True, scroll=ft.ScrollMode.AUTO),
             width=232, bgcolor="#070707", padding=ft.Padding.all(14),
@@ -1006,13 +1220,17 @@ class MainWindow:
         model_label = self._active_model_label()
         return ft.Container(
             ft.Column([
-                ft.Row([
-                    ft.Container(ft.Text("✳", color=FOCUS, size=19, weight=ft.FontWeight.BOLD), bgcolor="#18130E", border_radius=8, padding=ft.Padding.all(8)),
-                    ft.Column([
-                        ft.Text("CHIMERA", color=TEXT, size=14, weight=ft.FontWeight.BOLD),
-                        ft.Text("FIELD CONSOLE  /  01", color=MUTED, size=8),
-                    ], spacing=2),
-                ], spacing=10),
+                ft.Container(
+                    ft.Row([
+                        ft.Container(ft.Text("✳", color=FOCUS, size=19, weight=ft.FontWeight.BOLD), bgcolor="#18130E", border_radius=8, padding=ft.Padding.all(8)),
+                        ft.Column([
+                            ft.Text("CHIMERA", color=TEXT, size=18, weight=ft.FontWeight.BOLD, font_family=self.logo_font_family),
+                            ft.Text("LOCAL WORKBENCH", color=MUTED, size=8),
+                        ], spacing=2),
+                    ], spacing=10),
+                    tooltip="Return to chat",
+                    on_click=lambda e: self._navigate(self._show_overview),
+                ),
                 ft.Container(self._button("＋   NEW TASK", lambda e: self._new_agent_session()), width=208),
                 ft.Text("WORKSPACE", color=MUTED, size=8, weight=ft.FontWeight.BOLD),
                 self._nav_item("◉", "Chat workbench", self._show_overview, True),
@@ -1082,7 +1300,17 @@ class MainWindow:
             tool = payload.get("tool") or "Tool operation"
             status = str(payload.get("status") or "recorded").upper()
             result = payload.get("result")
-            detail = json.dumps(result, ensure_ascii=False, indent=2, default=str)[:1400] if result is not None else (payload.get("error") or "")
+            if tool == "computer.list_applications" and isinstance(result, list):
+                summary = []
+                for app in result[:10]:
+                    if not isinstance(app, dict):
+                        continue
+                    name = str(app.get("executable") or "Application").replace("\\", "/").rsplit("/", 1)[-1]
+                    titles = [str(window.get("title") or "").strip() for window in app.get("windows", [])[:2] if isinstance(window, dict)]
+                    summary.append(f"{name}  ·  {', '.join(value for value in titles if value) or 'visible window'}")
+                detail = "\\n".join(summary) or "No user-facing applications found."
+            else:
+                detail = json.dumps(result, ensure_ascii=False, indent=2, default=str)[:900] if result is not None else (payload.get("error") or "")
         except Exception:
             tool, status, detail = "Tool event", "RECORDED", content[:1000]
         color = "#E5B35A" if status == "COMPLETED" else "#BFA16A" if status in {"AWAITING_APPROVAL", "RECORDED"} else "#F17857"
@@ -1133,7 +1361,8 @@ class MainWindow:
                     ft.Column([
                         ft.Text("◈", color=ACCENT, size=40),
                         ft.Text("What are we working on?", color=TEXT, size=27, weight=ft.FontWeight.BOLD),
-                        ft.Text("A local-first agent for thinking, building and using your tools.", color=SECONDARY, size=12),
+                        ft.Text("A local-first agent for thinking, building and using your tools.", color=SECONDARY, size=13),
+                        ft.Text("Attach a folder before asking Chimera to read or create files there. Protected writes require Build Mode and your approval.", color=MUTED, size=11, text_align=ft.TextAlign.CENTER),
                         ft.Row(chips, wrap=True, spacing=8),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=16),
                     alignment=ft.Alignment(0, 0), expand=True,

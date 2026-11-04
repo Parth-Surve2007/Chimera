@@ -62,7 +62,7 @@ def _run_streaming(command, timeout, cancel_event=None, on_stdout=None):
 class LocalModelConfig:
     model_path: Path | None
     cli_path: str | None
-    context: int = 2048
+    context: int = 4096
     max_tokens: int = 256
     timeout: float = 60
     threads: int = 4
@@ -166,7 +166,7 @@ def config_from_env(env: dict[str, str] | None = None) -> LocalModelConfig:
     return LocalModelConfig(
         Path(model_value).expanduser().resolve() if model_value else None,
         str(Path(cli_value).expanduser().resolve()) if cli_value else None,
-        positive("CHIMERA_MODEL_CONTEXT", persisted.get("context", 2048)),
+        positive("CHIMERA_MODEL_CONTEXT", persisted.get("context", 4096)),
         positive("CHIMERA_MODEL_MAX_TOKENS", persisted.get("max_tokens", 256)),
         float(env.get("CHIMERA_MODEL_TIMEOUT", "120")),
         positive("CHIMERA_MODEL_THREADS", persisted.get("threads", 4)),
@@ -393,37 +393,105 @@ class LocalModelProvider:
             "reasoning_source": metrics.get("reasoning_source", "local_llama_cpp"),
         }
 
+
     def decide(self, messages, catalog, session=None, cancel_event=None, on_delta=None):
-        """Return one JSON-Schema-constrained decision for the agent runtime."""
-        transcript = "\n".join(
-            f"{getattr(item, 'role', 'user').upper()}: {getattr(item, 'content', '')[:3000]}"
-            for item in list(messages)[-10:]
-        )
+        """Return one compact JSON-Schema-constrained decision for AgentRuntime."""
+        def compact_message(item):
+            role = str(getattr(item, "role", "user")).lower()
+            content = str(getattr(item, "content", ""))
+            if role == "tool":
+                try:
+                    payload = json.loads(content)
+                except (TypeError, json.JSONDecodeError):
+                    payload = None
+                if isinstance(payload, dict) and payload.get("tool") == "computer.list_applications":
+                    result = payload.get("result") or []
+                    apps = result if isinstance(result, list) else []
+                    lines = []
+                    for app in apps[:10]:
+                        if not isinstance(app, dict):
+                            continue
+                        name = Path(str(app.get("executable") or "Application")).name
+                        titles = [
+                            str(window.get("title") or "").strip()
+                            for window in app.get("windows", [])[:2]
+                            if isinstance(window, dict)
+                        ]
+                        lines.append(f"- {name}: {', '.join(value for value in titles if value) or 'visible window'}")
+                    content = "Desktop inventory summary:\n" + (
+                        "\n".join(lines) if lines else "No user-facing applications found."
+                    )
+                else:
+                    content = content[:700]
+            elif role == "user":
+                content = content[:1500]
+            else:
+                content = content[:650]
+            return f"{role.upper()}: {content}"
+
+        recent = list(messages)[-6:]
+        transcript = "\n".join(compact_message(item) for item in recent)
         session_state = {
             "mode": (session or {}).get("mode", "plan"),
             "workspace_attached": bool((session or {}).get("workspace")),
         }
-        prompt = (
-            "You are Chimera's local agent decision engine. Return exactly ONE JSON object. "
-            "Treat the most recent USER message as the current task; earlier turns are context only. "
-            "Do not resurrect an unrelated earlier topic or invent a different user request. "
-            'Use exactly one supported envelope: '
-            '{"type":"message","content":"..."} OR '
-            '{"type":"tool_call","tool":"<exact tool id>","arguments":{...},'
-            '"invocation_id":"optional-id"}. '
-            "Do not return role/content chat messages, function_call objects, arrays, markdown, "
-            "prose outside JSON, version fields, or any other envelope. "
-            "Choose only an exact tool id listed below and copy every required argument from its "
-            "tool contract. Never invent missing IDs or arguments. "
-            "SESSION RULES: If mode is plan, do not request a write or other protected action. "
-            "Explain that the operator must switch to Build Mode first. If workspace_attached is false, "
-            "do not call workspace tools; ask the operator to attach the target folder first. "
-            "In particular, do not claim you can write to Desktop until Desktop is attached as the "
-            "workspace and Build Mode is active. After a tool result, use its actual contents before answering.\n"
-            "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
-            "\nTOOLS: " + json.dumps(catalog, separators=(",", ":")) +
-            "\nCONVERSATION:\n" + transcript
-        )
+
+        compact_tools = []
+        for item in (catalog or {}).get("tools", [])[:36]:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
+            compact = {
+                "id": item["id"],
+                "description": str(item.get("description") or "")[:90],
+                "arguments": item.get("arguments", {}),
+                "permission": item.get("permission"),
+            }
+            if item.get("risk_level") is not None:
+                compact["risk_level"] = item["risk_level"]
+            if item.get("requires_approval") is not None:
+                compact["requires_approval"] = bool(item["requires_approval"])
+            compact_tools.append(compact)
+
+        authorized = [
+            {
+                "session_id": item.get("session_id"),
+                "pid": item.get("pid"),
+                "application": Path(str(item.get("executable") or "application")).name,
+            }
+            for item in (catalog or {}).get("authorized_applications", [])[:6]
+            if isinstance(item, dict)
+        ]
+        compact_catalog = {"tools": compact_tools}
+
+        def render_prompt():
+            return (
+                "You are Chimera's local agent decision engine. Return exactly one JSON object: "
+                '{"type":"message","content":"..."} OR '
+                '{"type":"tool_call","tool":"<exact tool id>","arguments":{...},"invocation_id":"optional"}. '
+                "Use only exact tool IDs and valid arguments from TOOLS. Never invent IDs or results. "
+                "Treat the latest USER message as the task; earlier messages are context. "
+                "Plan mode is read-only for protected operations; ask to switch to Build Mode first. "
+                "Without an attached workspace, do not call workspace tools or inspect the desktop to guess a destination; "
+                "ask the operator to attach the exact target folder. To create a file in an attached workspace, use "
+                "workspace.create_file and wait for exact Build Mode approval. Use desktop inspection/actions only for an "
+                "application already listed in AUTHORIZED_APPLICATIONS. Use computer.launch only when the user explicitly "
+                "asks to open an application; its approval gate still applies. After a tool result, use actual evidence.\n"
+                "SESSION: " + json.dumps(session_state, separators=(",", ":")) +
+                "\nTOOLS: " + json.dumps(compact_catalog, ensure_ascii=False, separators=(",", ":")) +
+                "\nAUTHORIZED_APPLICATIONS: " + json.dumps(authorized, separators=(",", ":")) +
+                "\nCONVERSATION:\n" + transcript
+            )
+
+        prompt = render_prompt()
+        budget = max(3200, int(max(256, self.config.context - self.config.max_tokens - 128) * 3.2))
+        while len(prompt) > budget and len(compact_tools) > 8:
+            compact_tools.pop()
+            prompt = render_prompt()
+        while len(prompt) > budget and len(recent) > 1:
+            recent.pop(0)
+            transcript = "\n".join(compact_message(item) for item in recent)
+            prompt = render_prompt()
+
         parsed, metrics = self.structured_with_metrics(
             prompt,
             json_schema=AGENT_DECISION_SCHEMA,
@@ -431,6 +499,7 @@ class LocalModelProvider:
             on_delta=on_delta,
         )
         metrics["schema_provenance"] = "chimera.agent_decision.v3"
+        metrics["prompt_chars"] = len(prompt)
         if not isinstance(parsed, dict):
             raise ValueError(
                 f"local model returned {type(parsed).__name__}; expected a message or tool_call object"
@@ -452,11 +521,12 @@ class LocalModelProvider:
         else:
             fields = ", ".join(sorted(str(key) for key in parsed)) or "none"
             raise ValueError(
-                "local model returned an unsupported decision envelope "
-                f"(type={decision_type!r}; fields={fields}); expected type='message' or type='tool_call'"
+                f"local model returned an unsupported decision envelope (type={decision_type!r}; fields={fields}); "
+                "expected type='message' or type='tool_call'"
             )
         parsed["_metrics"] = metrics
         return parsed
+
     def plan(self, request: str) -> InferenceResult:
         status = self.status()
         if status.state != "ready" and self.runner is None: return InferenceResult(status.state, None, "", 0, 0, status.detail)

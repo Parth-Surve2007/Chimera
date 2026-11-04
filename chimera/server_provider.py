@@ -113,7 +113,7 @@ class LlamaServerManager:
         self,
         executable: str | None,
         model: Path | None,
-        context=2048,
+        context=4096,
         threads=4,
         gpu_layers=0,
         timeout=60,

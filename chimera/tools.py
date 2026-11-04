@@ -22,6 +22,7 @@ OPERATIONS = {
     "search_text": {"description": "Search text in common source and text files", "arguments": {"query": "string"}, "permission": "workspace.read"},
     "read_text": {"description": "Read a bounded UTF-8 text file", "arguments": {"path": "string"}, "permission": "workspace.read"},
     "create_artifact": {"description": "Create a new Markdown or text artifact in the execution output directory", "arguments": {"name": "string", "content": "string"}, "permission": "execution.write"},
+    "create_file": {"description": "Create a new text file inside the attached workspace without overwriting existing files", "arguments": {"path": "string", "content": "string"}, "permission": "execution.write"},
     "computer.list_applications": {"description": "List currently visible Windows applications and observed window identities", "arguments": {}, "permission": "computer.observe"},
     "computer.list_windows": {"description": "List observed visible top-level windows and process identities", "arguments": {}, "permission": "computer.observe"},
     "computer.inspect_controls": {"description": "Inspect controls belonging to a freshly observed operator-authorized application", "arguments": {"session_id": "string", "hwnd": "integer"}, "permission": "computer.observe"},
@@ -119,6 +120,31 @@ class WorkspaceTools:
                 self.output.mkdir(parents=True, exist_ok=True)
                 with target.open("x", encoding="utf-8") as stream: stream.write(content)
                 return OperationResult(operation_id, "completed", {"artifact": str(target), "bytes": len(content.encode("utf-8"))})
+
+            if operation_id == "create_file":
+                if not approved:
+                    return OperationResult(operation_id, "awaiting_approval", {}, "explicit Build Mode write approval is required")
+                relative = arguments.get("path")
+                content = arguments.get("content")
+                if not isinstance(relative, str) or not relative.strip():
+                    raise ValueError("file path must be a non-empty workspace-relative path")
+                if Path(relative).is_absolute():
+                    raise ValueError("file path must be relative to the attached workspace")
+                if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_FILE:
+                    raise ValueError("file content exceeds the 2 MB limit")
+                target = self._path(relative)
+                if target.suffix.casefold() not in {".txt", ".md", ".json", ".csv"}:
+                    raise ValueError("new files must use .txt, .md, .json, or .csv extensions")
+                if target.exists():
+                    raise ValueError("file already exists; refusing to overwrite")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("x", encoding="utf-8", newline="") as stream:
+                    stream.write(content)
+                return OperationResult(operation_id, "completed", {
+                    "path": str(target.relative_to(self.workspace)),
+                    "bytes": len(content.encode("utf-8")),
+                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                })
         except (OSError, UnicodeError, ValueError) as exc: return OperationResult(operation_id, "failed", {}, str(exc))
 
 def tool_catalog() -> dict: return {"capability": CAPABILITY, "operations": OPERATIONS}
