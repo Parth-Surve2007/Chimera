@@ -749,7 +749,7 @@ def test_short_confirmation_continues_prior_goal_instead_of_echoing_earlier_requ
     assert "confirmation to continue the earlier task" in decision["content"]
     assert "task remains incomplete" in decision["content"]
     assert decision["_metrics"]["decision_recovery_attempted"] is True
-    assert decision["_metrics"]["repeated_assistant_response_blocked"] is True
+    assert decision["_metrics"]["stale_user_request_echo_blocked"] is True
     assert len(prompts) == 2
     assert "short confirmation such as yes" in prompts[0]
     assert "continue the unresolved goal" in prompts[1]
