@@ -2047,6 +2047,7 @@ class AgentRuntime:
             if task:
                 self.task_store.transition(task.task_id, "blocked")
                 self._tasks.pop(session_id, None)
+            self._finish_skill_usage(session_id, "failed")
             return {"status": "denied"}
         workspace = Path(session["workspace"]) if session.get("workspace") else None
         if pending["tool"].startswith("application."):
@@ -2256,6 +2257,7 @@ class AgentRuntime:
                 "invocation_id": pending["invocation_id"], "tool": pending["tool"],
                 "reason": "legacy or unsupported desktop interaction is disabled",
             })
+            self._finish_skill_usage(session_id, "failed")
             return {"status": "blocked", "error": "legacy or unsupported desktop interaction is disabled"}
         else:
             operation = pending["tool"].removeprefix("workspace.")
@@ -2359,6 +2361,7 @@ class AgentRuntime:
                 "completion": "confirmed_application_launch",
                 "tool": pending["tool"],
             })
+            self._finish_skill_usage(session_id, "completed")
             return {"status": "completed", "message": assistant, "tools": [pending["tool"]]}
 
         if (
@@ -2377,6 +2380,7 @@ class AgentRuntime:
                 if task:
                     self.task_store.transition(task.task_id, "failed")
                 self._tasks.pop(session_id, None)
+                self._finish_skill_usage(session_id, "failed")
                 return {"status": "failed", "error": error, "tool": pending["tool"]}
 
             relative = result.data.get("path")
@@ -2402,6 +2406,7 @@ class AgentRuntime:
                 if task:
                     self.task_store.transition(task.task_id, "failed")
                 self._tasks.pop(session_id, None)
+                self._finish_skill_usage(session_id, "failed")
                 return {"status": "failed", "error": error, "tool": pending["tool"]}
 
             file_kind = {
@@ -2420,6 +2425,9 @@ class AgentRuntime:
             })
             if task:
                 self.task_store.reconcile_completion(task.task_id, "completed")
+                if self.task_store.can_complete(task.task_id):
+                    self._propose_skill_from_completed_task(session_id, task.task_id)
+            self._finish_skill_usage(session_id, "completed")
             self._tasks.pop(session_id, None)
             return {
                 "status": "completed", "message": assistant, "tools": [pending["tool"]],
