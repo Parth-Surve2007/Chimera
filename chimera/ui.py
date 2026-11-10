@@ -460,7 +460,7 @@ class MainWindow:
                 ft.TextButton("REJECT", on_click=lambda e, sid=skill_id: self._reject_learned_skill(sid), style=ft.ButtonStyle(color=SECONDARY)),
             ], wrap=True, spacing=5)
         else:
-            actions = ft.Row([
+            action_items = [
                 ft.TextButton(
                     "UNLOCK" if item.get("locked") else "LOCK",
                     on_click=lambda e, sid=skill_id, value=not bool(item.get("locked")): self._set_learned_skill_flag(sid, "locked", value),
@@ -471,7 +471,14 @@ class MainWindow:
                     on_click=lambda e, sid=skill_id, value=not bool(item.get("pinned")): self._set_learned_skill_flag(sid, "pinned", value),
                     style=ft.ButtonStyle(color=SECONDARY),
                 ),
-            ], wrap=True, spacing=5)
+            ]
+            if item.get("review_required"):
+                action_items.append(ft.TextButton(
+                    "MARK REVIEWED",
+                    on_click=lambda e, sid=skill_id: self._resolve_learned_skill_review(sid),
+                    style=ft.ButtonStyle(color=FOCUS),
+                ))
+            actions = ft.Row(action_items, wrap=True, spacing=5)
 
         return ft.Container(
             ft.Column([
@@ -518,6 +525,15 @@ class MainWindow:
             self._show_learning()
         except Exception as exc:
             self._toast(f"Skill update failed: {exc}")
+
+    def _resolve_learned_skill_review(self, skill_id):
+        try:
+            if not self.agent_runtime.skill_store.resolve_review(skill_id):
+                raise ValueError("skill is missing or has no pending review")
+            self._toast("Skill review resolved. Chimera may use it again.")
+            self._show_learning()
+        except Exception as exc:
+            self._toast(f"Skill review could not be resolved: {exc}")
 
 
     def _show_workflow_studio(self, e=None):
