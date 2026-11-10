@@ -17,7 +17,7 @@
   <img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white">
   <img alt="Local first" src="https://img.shields.io/badge/AI-LOCAL--FIRST-9B7653?style=for-the-badge">
   <img alt="Windows" src="https://img.shields.io/badge/Desktop-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white">
-  <img alt="Open source" src="https://img.shields.io/badge/Project-Open%20Source-6D8B74?style=for-the-badge">
+  <a href="LICENSE"><img alt="GNU GPL v3.0 only" src="https://img.shields.io/badge/License-GPL--3.0--only-6D8B74?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -459,6 +459,14 @@ Chimera is an ambitious computer-work platform, not a guarantee that every third
 - Local vision requires a compatible multimodal model and projector configuration.
 
 When a capability is unavailable, Chimera should say so rather than pretend the task succeeded. That discipline is what makes broader computer control worth building.
+
+---
+
+## License
+
+Chimera is distributed under the **GNU General Public License v3.0 only (GPL-3.0-only)**. The complete license text is available in [`LICENSE`](LICENSE).
+
+This license applies to the Chimera project code covered by its respective copyright holders. Third-party dependencies, external applications, model weights, tools, and user-provided assets remain subject to their own licenses and terms.
 
 ---
 
