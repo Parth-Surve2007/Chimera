@@ -188,8 +188,15 @@ Connectors declare their identity, actions, argument schema, permissions, risk l
 - Execution trace review and secret redaction.
 - Reusable skill proposals with declared steps, permissions and expected outputs.
 - Operator approval before a proposed skill becomes an approved reusable capability.
+- Automatic proposal extraction after a settled task has at least three completed tool actions across two distinct tools.
+- Sanitized procedural memory: argument shapes, output-field names and generalized failure lessons; no run-specific file paths or document contents.
+- Duplicate-trace detection that adds supporting task evidence instead of creating duplicate procedures.
+- Append-only skill revision history, content rollback, operator locks and pinned procedures.
+- Usage feedback. Two failed uses flag an approved skill for review and remove it from the agent's available skill catalog until an operator resolves the review.
 
-Chimera's learning direction is governed experience capture, not unrestricted self-modification.
+The **Learning** workbench separates pending proposals from approved procedures. New skills are never auto-approved, do not grant permissions, and are loaded only on demand. Current tool contracts, fresh application observations, approval gates and postcondition verification remain authoritative on every run.
+
+Chimera's learning direction is governed experience capture, not unrestricted self-modification. The current loop is event-driven at task completion; it does not run an autonomous background LLM curator or rewrite approved procedures in place.
 
 ---
 
@@ -204,6 +211,7 @@ The Flet desktop workbench brings the systems into one place:
 | **Applications** | Installed/running application discovery and connector availability. |
 | **Workflow Studio** | Structured workflow creation and execution. |
 | **Capabilities** | Built-in capabilities and custom capability proposals. |
+| **Learning** | Sanitized experience-to-skill proposals, operator review, version history and usage health. |
 | **Goal Ledger** | Long-lived goals, success criteria and evidence. |
 | **Run History** | Workflow runs, tool outcomes and execution events. |
 
