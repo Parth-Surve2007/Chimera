@@ -767,3 +767,78 @@ def test_stale_approval_cannot_replay_an_invocation_already_started(tmp_path):
     resumed_task = restarted.task_store.latest_for_session(session_id)
     assert resumed_task.status == "blocked"
     assert restarted.task_store.steps(resumed_task.task_id)[0]["status"] == "blocked"
+
+
+def test_completed_multi_tool_task_creates_pending_skill_but_never_auto_approves(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "main.py").write_text("print('hello')", encoding="utf-8")
+
+    provider = DecidingProvider([
+        {
+            "type": "tool_call",
+            "tool": "workspace.list_files",
+            "arguments": {"relative": ".", "recursive": True},
+            "invocation_id": "learn-list",
+        },
+        {
+            "type": "tool_call",
+            "tool": "workspace.search_files",
+            "arguments": {"pattern": "*.py"},
+            "invocation_id": "learn-search",
+        },
+        {
+            "type": "tool_call",
+            "tool": "workspace.inspect_file",
+            "arguments": {"path": "main.py"},
+            "invocation_id": "learn-inspect",
+        },
+        {"type": "message", "content": "I inspected the workspace and verified the file metadata."},
+        {"type": "tool_call", "tool": "agent.skill_list", "arguments": {}},
+        {"type": "message", "content": "No approved skills are available yet."},
+        {"type": "tool_call", "tool": "agent.skill_list", "arguments": {}},
+        {"type": "message", "content": "The approved procedure is now available."},
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    session_id = runtime.create_session(workspace, mode="plan")
+
+    result = runtime.send(session_id, "Inspect this project and identify its Python files.")
+    assert result["status"] == "completed"
+
+    proposals = runtime.skill_store.proposals()
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal["status"] == "proposed"
+    assert len(proposal["reusable_steps"]) == 3
+    assert proposal["source_task_id"]
+    assert runtime.skill_store.approved() == []
+
+    # A pending proposal is invisible to the executable skill catalog.
+    first_listing = runtime.send(session_id, "List my approved reusable skills.")
+    assert first_listing["status"] == "completed"
+    first_payloads = [
+        json.loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    first_listing_result = [
+        item["result"] for item in first_payloads
+        if item.get("tool") == "agent.skill_list"
+    ][-1]
+    assert first_listing_result["count"] == 0
+
+    assert runtime.skill_store.approve(proposal["skill_id"]) is True
+    second_listing = runtime.send(session_id, "List my approved reusable skills again.")
+    assert second_listing["status"] == "completed"
+    all_payloads = [
+        json.loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    second_listing_result = [
+        item["result"] for item in all_payloads
+        if item.get("tool") == "agent.skill_list"
+    ][-1]
+    assert second_listing_result["count"] == 1
+    assert second_listing_result["skills"][0]["skill_id"] == proposal["skill_id"]
