@@ -122,3 +122,108 @@ def test_resume_blocks_in_flight_side_effect_instead_of_replaying_it(tmp_path):
         item["kind"] == "step" and item["id"] == step_id
         for item in restarted.completion_blockers(task_id)
     )
+
+
+def test_tool_approval_lifecycle_is_persisted_until_execution_starts(tmp_path):
+    store = TaskStore(tmp_path / "tasks.db")
+    task_id = store.create("session-approval", "Create a document", mode="build")
+    store.transition(task_id, "running")
+
+    store.apply_runtime_event(
+        task_id,
+        "event-requested",
+        "tool.call.requested",
+        {
+            "invocation_id": "invocation-1",
+            "tool": "workspace.create_document",
+            "arguments": {"path": "report.docx"},
+        },
+    )
+    step = store.steps(task_id)[0]
+    assert step["status"] == "pending"
+    assert step["approval_required"] == 0
+
+    store.apply_runtime_event(
+        task_id,
+        "event-approval-required",
+        "tool.permission.required",
+        {"invocation_id": "invocation-1", "tool": "workspace.create_document"},
+    )
+    step = store.steps(task_id)[0]
+    assert step["status"] == "waiting_approval"
+    assert step["approval_required"] == 1
+    assert step["error"] is None
+
+    # A grant is not proof that the side effect has started. The explicit
+    # tool.started event is the boundary that moves the step to running.
+    store.apply_runtime_event(
+        task_id,
+        "event-approval-granted",
+        "tool.permission.granted",
+        {"invocation_id": "invocation-1", "tool": "workspace.create_document"},
+    )
+    assert store.steps(task_id)[0]["status"] == "waiting_approval"
+
+    store.apply_runtime_event(
+        task_id,
+        "event-tool-started",
+        "tool.started",
+        {"invocation_id": "invocation-1", "tool": "workspace.create_document"},
+    )
+    assert store.steps(task_id)[0]["status"] == "running"
+
+    store.apply_runtime_event(
+        task_id,
+        "event-tool-completed",
+        "tool.completed",
+        {
+            "invocation_id": "invocation-1",
+            "tool": "workspace.create_document",
+            "status": "completed",
+            "data": {"path": "report.docx", "verified": True},
+        },
+    )
+    step = store.steps(task_id)[0]
+    assert step["status"] == "completed"
+    assert step["approval_required"] == 1
+    assert store.can_complete(task_id)
+
+
+def test_denied_tool_approval_blocks_the_persisted_step(tmp_path):
+    store = TaskStore(tmp_path / "tasks.db")
+    task_id = store.create("session-denial", "Delete an item", mode="build")
+    store.transition(task_id, "running")
+
+    store.apply_runtime_event(
+        task_id,
+        "event-requested",
+        "tool.call.requested",
+        {
+            "invocation_id": "invocation-denied",
+            "tool": "workspace.delete_file",
+            "arguments": {"path": "important.txt"},
+        },
+    )
+    store.apply_runtime_event(
+        task_id,
+        "event-approval-required",
+        "tool.permission.required",
+        {"invocation_id": "invocation-denied", "tool": "workspace.delete_file"},
+    )
+    store.apply_runtime_event(
+        task_id,
+        "event-approval-denied",
+        "tool.permission.denied",
+        {"invocation_id": "invocation-denied", "reason": "User declined the action."},
+    )
+
+    step = store.steps(task_id)[0]
+    assert step["status"] == "blocked"
+    assert step["approval_required"] == 1
+    assert step["error"] == "User declined the action."
+    assert any(
+        blocker["kind"] == "step"
+        and blocker["id"] == step["step_id"]
+        and blocker["status"] == "blocked"
+        for blocker in store.completion_blockers(task_id)
+    )

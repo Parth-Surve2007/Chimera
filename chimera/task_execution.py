@@ -222,7 +222,24 @@ class TaskStore:
             if event_type == "tool.call.requested":
                 position = db.execute("SELECT COALESCE(MAX(position),0)+1 FROM agent_task_steps WHERE task_id=?", (task_id,)).fetchone()[0]
                 db.execute("INSERT INTO agent_task_steps VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, task_id, position, payload.get("tool", "tool invocation"), payload.get("tool"), json.dumps(payload.get("arguments", {})), None, "pending", 0, invocation, None, _now()))
+            elif invocation and event_type == "tool.permission.required":
+                # Approval is a durable lifecycle state, not merely a UI/session state.
+                db.execute(
+                    "UPDATE agent_task_steps SET status='waiting_approval',approval_required=1,error=NULL,updated_at=? "
+                    "WHERE task_id=? AND invocation_id=?",
+                    (_now(), task_id, invocation),
+                )
+            elif invocation and event_type == "tool.permission.denied":
+                reason = payload.get("reason")
+                if not isinstance(reason, str) or not reason.strip():
+                    reason = "Operator denied the requested action."
+                db.execute(
+                    "UPDATE agent_task_steps SET status='blocked',approval_required=1,error=?,updated_at=? "
+                    "WHERE task_id=? AND invocation_id=?",
+                    (reason.strip()[:1000], _now(), task_id, invocation),
+                )
             elif invocation and event_type in {"tool.started", "tool.completed", "tool.failed"}:
+                # Keep a granted step in waiting_approval until execution actually starts.
                 state = "running" if event_type == "tool.started" else "completed" if payload.get("status") == "completed" else "blocked" if payload.get("status") == "blocked" else "failed"
                 db.execute("UPDATE agent_task_steps SET status=?,result=?,error=?,updated_at=? WHERE task_id=? AND invocation_id=?", (state, json.dumps(payload.get("data")) if payload.get("data") is not None else None, payload.get("error"), _now(), task_id, invocation))
     @staticmethod

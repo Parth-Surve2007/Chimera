@@ -702,16 +702,27 @@ class LocalModelProvider:
                                 + "\nDo not relaunch this already-authorized application. Use the session_id and a fresh observed editor reference for the next requested action."
                             )
                         else:
+                            summary = {
+                                key: result.get(key) for key in (
+                                    "status", "display_name", "pid", "control_authorized",
+                                    "computer_session_id", "already_authorized",
+                                    "next_step", "authorization_error",
+                                    "initial_observation", "error", "reason",
+                                ) if key in result
+                            }
+                            # Some tool messages store failures on the outer envelope
+                            # rather than under "result". Preserve those details so the
+                            # model can recover instead of receiving an empty object.
+                            for key in ("status", "error", "reason"):
+                                if payload.get(key) is not None and key not in summary:
+                                    summary[key] = payload[key]
                             content = (
                                 "Application launch result: "
-                                + json.dumps({
-                                    key: result.get(key) for key in (
-                                        "status", "display_name", "pid", "control_authorized",
-                                        "computer_session_id", "already_authorized",
-                                        "next_step", "authorization_error",
-                                        "initial_observation",
-                                    ) if key in result
-                                }, ensure_ascii=False, separators=(",", ":"))[:2600]
+                                + json.dumps(
+                                    summary,
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                )[:2600]
                             )
                     else:
                         content = "Application launch returned no structured result."
