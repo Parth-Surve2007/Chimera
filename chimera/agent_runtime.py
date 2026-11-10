@@ -1877,7 +1877,15 @@ class AgentRuntime:
                         and not bool(item.get("review_required"))
                         and isinstance(item.get("skill_id"), str)
                         and isinstance(item.get("name"), str)
-                    ][:40]
+                    ]
+                    # Pinned procedures are surfaced first; frequently useful skills
+                    # follow. This changes discovery order, never their authority.
+                    approved.sort(key=lambda item: (
+                        not bool(item.get("pinned")),
+                        -(item.get("usage_count", 0) if type(item.get("usage_count", 0)) is int else 0),
+                        str(item.get("name") or "").casefold(),
+                    ))
+                    approved = approved[:40]
                     data = {
                         "skills": [
                             {
