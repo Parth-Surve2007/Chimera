@@ -165,6 +165,16 @@ class SkillStore:
             if previous:
                 if previous.get("locked"):
                     raise PermissionError("skill is locked; unlock it before revising its content")
+                if previous.get("status") == "approved":
+                    content_fields = (
+                        "name", "description", "version", "required_permissions",
+                        "parameters_schema", "reusable_steps", "expected_outputs",
+                        "lessons", "trace_fingerprint",
+                    )
+                    if any(previous.get(key) != data.get(key) for key in content_fields):
+                        raise PermissionError(
+                            "approved skill content is immutable; create a new proposal revision for operator review"
+                        )
                 data["revision"] = int(previous.get("revision", 1)) + 1
                 for key in (
                     "status", "usage_count", "success_count", "failure_count",
@@ -216,6 +226,21 @@ class SkillStore:
             target["updated_at"] = _now()
             self._write_unlocked(skills)
             self._history(status, skill_id, before, target)
+            return True
+
+    def resolve_review(self, skill_id: str) -> bool:
+        """Clear a failure-triggered review flag after operator inspection."""
+        with self._lock:
+            skills = self._read_unlocked()
+            target = next((item for item in skills if item.get("skill_id") == skill_id), None)
+            if target is None or target.get("status") != "approved":
+                return False
+            before = dict(target)
+            target["review_required"] = False
+            target["revision"] = int(target.get("revision", 1)) + 1
+            target["updated_at"] = _now()
+            self._write_unlocked(skills)
+            self._history("review_resolved", skill_id, before, target)
             return True
 
     def set_locked(self, skill_id: str, locked: bool) -> bool:
@@ -284,6 +309,10 @@ class SkillStore:
             before = dict(current)
             if current.get("locked"):
                 raise PermissionError("skill is locked; unlock it before rolling back")
+            if current.get("status") == "approved":
+                raise PermissionError(
+                    "approved skill content cannot be rolled back directly; create a reviewed proposal revision"
+                )
             for key in (
                 "name", "description", "version", "required_permissions",
                 "parameters_schema", "reusable_steps", "expected_outputs", "lessons",
