@@ -288,3 +288,38 @@ def test_rejected_proposal_never_enters_approved_skill_catalog(tmp_path):
     assert store.proposals() == []
     assert store.approved() == []
     assert store.get(skill.skill_id)["status"] == "rejected"
+
+def test_approved_skill_content_is_immutable_and_review_resolution_is_explicit(tmp_path):
+    store = SkillStore(tmp_path / "skills.json")
+    original = ProposedSkill(
+        skill_id="skill-immutable",
+        name="Approved procedure",
+        description="Stable approved content.",
+        version="1.0.0",
+        source_session_id="session-1",
+        required_permissions=["workspace.read"],
+        parameters_schema={},
+        reusable_steps=[{"action": "workspace.list_files"}],
+        expected_outputs=["files"],
+    )
+    store.save(original)
+    assert store.approve(original.skill_id)
+    with pytest.raises(PermissionError, match="immutable"):
+        store.save(ProposedSkill(
+            skill_id=original.skill_id,
+            name="Silently changed procedure",
+            description="This must not replace the approved procedure.",
+            version="2.0.0",
+            source_session_id="session-1",
+            required_permissions=["workspace.read", "workspace.write"],
+            parameters_schema={},
+            reusable_steps=[{"action": "workspace.create_file"}],
+            expected_outputs=["path"],
+        ))
+
+    store.record_use(original.skill_id, "failed")
+    store.record_use(original.skill_id, "failed")
+    assert store.get(original.skill_id)["review_required"] is True
+    assert store.resolve_review(original.skill_id) is True
+    assert store.get(original.skill_id)["review_required"] is False
+    assert store.resolve_review(original.skill_id) is True
