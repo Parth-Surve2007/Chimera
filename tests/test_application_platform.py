@@ -121,9 +121,10 @@ def test_experience_learning_and_skill_approval_lifecycle(tmp_path):
 
     assert skill.status == "proposed"
     assert "ghidra.read" in skill.required_permissions
-    # Verify secret was redacted
+    # Runtime values are discarded entirely; the proposal retains only the argument type.
     sanitized_arg = skill.reusable_steps[0]["sanitized_arguments"]
-    assert sanitized_arg.get("key_secret") == "***REDACTED***"
+    assert sanitized_arg.get("key_secret") == "string"
+    assert "my-secret-key-12345" not in json.dumps(skill.to_dict())
 
     # Verify skill persistence and operator approval
     all_skills = store.list()
