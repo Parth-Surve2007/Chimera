@@ -25,6 +25,24 @@ def test_learning_extracts_only_successful_calls_as_argument_schemas(tmp_path):
         {
             "role": "tool",
             "content": json.dumps({
+                "tool": "workspace.list_files",
+                "arguments": {"relative": ".", "recursive": True},
+                "result": {"files": ["private-file.txt"]},
+                "status": "completed",
+            }),
+        },
+        {
+            "role": "tool",
+            "content": json.dumps({
+                "tool": "workspace.inspect_file",
+                "arguments": {"path": "private-file.txt"},
+                "result": {"path": "private-file.txt", "bytes": 10},
+                "status": "completed",
+            }),
+        },
+        {
+            "role": "tool",
+            "content": json.dumps({
                 "tool": "workspace.create_file",
                 "arguments": {"path": "failed.txt", "content": "not successful"},
                 "result": {},
@@ -49,9 +67,10 @@ def test_learning_extracts_only_successful_calls_as_argument_schemas(tmp_path):
         events=[],
     )
 
-    assert len(skill.reusable_steps) == 1
-    step = skill.reusable_steps[0]
-    assert step["action"] == "workspace.create_document"
+    assert skill is not None
+    assert skill.status == "proposed"
+    assert len(skill.reusable_steps) == 3
+    step = next(item for item in skill.reusable_steps if item["action"] == "workspace.create_document")
     assert step["sanitized_arguments"] == {
         "path": "string",
         "title": "string",
