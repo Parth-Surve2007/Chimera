@@ -1874,6 +1874,7 @@ class AgentRuntime:
                         item for item in self.skill_store.list()
                         if isinstance(item, dict)
                         and item.get("status") == "approved"
+                        and not bool(item.get("review_required"))
                         and isinstance(item.get("skill_id"), str)
                         and isinstance(item.get("name"), str)
                     ][:40]
@@ -1905,6 +1906,7 @@ class AgentRuntime:
                         value for value in self.skill_store.list()
                         if isinstance(value, dict) and value.get("skill_id") == skill_id
                         and value.get("status") == "approved"
+                        and not bool(value.get("review_required"))
                     ), None)
                     if item is None:
                         result = type("ProgressResult", (), {
