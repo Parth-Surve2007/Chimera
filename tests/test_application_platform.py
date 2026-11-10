@@ -1,3 +1,4 @@
+import json
 """Comprehensive test suite for Phase 5.0:
 |- Application Registry & Connector Manifests
 |- Ghidra Connector discovery, strings extraction, function analysis
@@ -81,7 +82,33 @@ def test_experience_learning_and_skill_approval_lifecycle(tmp_path):
         {"role": "user", "content": "Analyze binary in Ghidra"},
         {
             "role": "tool",
-            "content": '{"invocation_id": "inv1", "tool": "ghidra.extract_strings", "result": {"key_secret": "my-secret-key-12345", "strings": ["func_a", "func_b"]}}',
+            "content": json.dumps({
+                "invocation_id": "inv1",
+                "tool": "ghidra.extract_strings",
+                "arguments": {"binary_path": "/private/sample.exe", "key_secret": "my-secret-key-12345"},
+                "result": {"key_secret": "my-secret-key-12345", "strings": ["func_a", "func_b"]},
+                "status": "completed",
+            }),
+        },
+        {
+            "role": "tool",
+            "content": json.dumps({
+                "invocation_id": "inv2",
+                "tool": "ghidra.enumerate_functions",
+                "arguments": {"binary_path": "/private/sample.exe"},
+                "result": {"functions": ["main", "entry"]},
+                "status": "completed",
+            }),
+        },
+        {
+            "role": "tool",
+            "content": json.dumps({
+                "invocation_id": "inv3",
+                "tool": "ghidra.inspect_installation",
+                "arguments": {"installation_path": "/private/Ghidra"},
+                "result": {"available": True},
+                "status": "completed",
+            }),
         },
     ]
 
