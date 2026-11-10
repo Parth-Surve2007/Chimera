@@ -163,6 +163,8 @@ class SkillStore:
                 (item for item in skills if item.get("skill_id") == skill.skill_id), None
             )
             if previous:
+                if previous.get("locked"):
+                    raise PermissionError("skill is locked; unlock it before revising its content")
                 data["revision"] = int(previous.get("revision", 1)) + 1
                 for key in (
                     "status", "usage_count", "success_count", "failure_count",
@@ -268,6 +270,7 @@ class SkillStore:
         candidates = [
             item for item in records
             if item.get("before") is not None
+            and item.get("action") == "revise"
             and (revision_id is None or item.get("revision_id") == revision_id)
         ]
         if not candidates:
@@ -279,6 +282,8 @@ class SkillStore:
             if current is None:
                 return False
             before = dict(current)
+            if current.get("locked"):
+                raise PermissionError("skill is locked; unlock it before rolling back")
             for key in (
                 "name", "description", "version", "required_permissions",
                 "parameters_schema", "reusable_steps", "expected_outputs", "lessons",
