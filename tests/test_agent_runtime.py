@@ -842,3 +842,53 @@ def test_completed_multi_tool_task_creates_pending_skill_but_never_auto_approves
     ][-1]
     assert second_listing_result["count"] == 1
     assert second_listing_result["skills"][0]["skill_id"] == proposal["skill_id"]
+
+
+def test_skill_flagged_for_review_is_hidden_until_operator_resolves_it(tmp_path):
+    from chimera.learning import ProposedSkill
+
+    provider = DecidingProvider([
+        {"type": "tool_call", "tool": "agent.skill_list", "arguments": {}},
+        {"type": "message", "content": "A skill with unresolved failures is withheld."},
+        {"type": "tool_call", "tool": "agent.skill_list", "arguments": {}},
+        {"type": "message", "content": "The reviewed skill is available again."},
+    ])
+    store = AgentSessionStore(tmp_path / "chimera.db")
+    runtime = AgentRuntime(store, provider)
+    skill = ProposedSkill(
+        skill_id="skill-review-gate",
+        name="Reviewed project inspection",
+        description="A stored procedure.",
+        version="1.0.0",
+        source_session_id="prior-session",
+        required_permissions=["workspace.read"],
+        parameters_schema={},
+        reusable_steps=[{"action": "workspace.list_files"}],
+        expected_outputs=["files"],
+    )
+    runtime.skill_store.save(skill)
+    assert runtime.skill_store.approve(skill.skill_id)
+    assert runtime.skill_store.record_use(skill.skill_id, "failed")
+    assert runtime.skill_store.record_use(skill.skill_id, "failed")
+    assert runtime.skill_store.get(skill.skill_id)["review_required"] is True
+
+    session_id = runtime.create_session(tmp_path, mode="plan")
+    first = runtime.send(session_id, "List available reusable skills.")
+    assert first["status"] == "completed"
+    payloads = [
+        json.loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert payloads[-1]["result"]["count"] == 0
+
+    assert runtime.skill_store.resolve_review(skill.skill_id)
+    second = runtime.send(session_id, "List available reusable skills again.")
+    assert second["status"] == "completed"
+    payloads = [
+        json.loads(item.content)
+        for item in store.messages(session_id)
+        if item.role == "tool"
+    ]
+    assert payloads[-1]["result"]["count"] == 1
+    assert payloads[-1]["result"]["skills"][0]["skill_id"] == skill.skill_id
