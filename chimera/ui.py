@@ -367,6 +367,175 @@ class MainWindow:
         ])
 
 
+    def _show_learning(self, e=None):
+        """Review proposals and inspect approved skills and their usage health."""
+        self.active_page = "learning"
+        store = self.agent_runtime.skill_store
+        try:
+            all_skills = store.list()
+            proposals = [item for item in all_skills if item.get("status") == "proposed"]
+            approved = [item for item in all_skills if item.get("status") == "approved"]
+            rejected = [item for item in all_skills if item.get("status") == "rejected"]
+        except Exception as exc:
+            return self._set([
+                self._page_heading("Learning", "Experience becomes a proposal, never an automatic permission grant."),
+                ft.Text(f"Learning store unavailable: {exc}", color=ACCENT),
+            ])
+
+        metrics = ft.Row([
+            self._goal_stat("PENDING REVIEW", len(proposals)),
+            self._goal_stat("APPROVED SKILLS", len(approved)),
+            self._goal_stat("REVIEW NEEDED", sum(bool(item.get("review_required")) for item in approved)),
+            self._goal_stat("REJECTED", len(rejected)),
+        ], wrap=True, spacing=10)
+
+        proposal_cards = [
+            self._learned_skill_card(item, proposed=True) for item in proposals
+        ] or [ft.Container(
+            ft.Text("No skill proposals yet. After a sufficiently complete multi-step task, Chimera will distil a reusable procedure here for your review.", color=MUTED, size=11),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9,
+            padding=ft.Padding.all(16), width=940,
+        )]
+        approved_cards = [
+            self._learned_skill_card(item, proposed=False) for item in approved
+        ] or [ft.Container(
+            ft.Text("Approved skills will appear here and become available to the agent on demand.", color=MUTED, size=11),
+            bgcolor=SURFACE, border=ft.Border.all(1, BORDER), border_radius=9,
+            padding=ft.Padding.all(16), width=940,
+        )]
+
+        self._set([
+            self._page_heading("Learning", "Chimera distils completed work into reusable procedures. Nothing is promoted without your approval."),
+            metrics,
+            self._panel("THE LEARNING LOOP", "Completed task trace → sanitized procedure proposal → operator review → approved procedural memory → usage feedback. Skills remain guidance: current permissions, fresh observations and verification are checked every time.", [
+                ft.Row([
+                    ft.Text("Automatic extraction requires at least three completed tool actions across two distinct tools.", color=SECONDARY, size=10),
+                    ft.Text("No raw arguments or document contents are copied into a skill.", color=MUTED, size=10),
+                ], wrap=True, spacing=14),
+            ]),
+            self._page_heading("Proposals waiting for you", "Review the reusable steps and permission scope. Approve only procedures you recognize.", eyebrow="OPERATOR REVIEW"),
+            *proposal_cards,
+            self._page_heading("Approved procedural memory", "Loaded only when relevant. Repeated failures are flagged here for human review.", eyebrow="AVAILABLE TO CHIMERA"),
+            *approved_cards,
+        ])
+
+    def _learned_skill_card(self, item, proposed=False):
+        skill_id = str(item.get("skill_id") or "")
+        steps = item.get("reusable_steps") if isinstance(item.get("reusable_steps"), list) else []
+        permissions = item.get("required_permissions") if isinstance(item.get("required_permissions"), list) else []
+        lessons = item.get("lessons") if isinstance(item.get("lessons"), list) else []
+        step_lines = []
+        for position, step in enumerate(steps[:8], 1):
+            if not isinstance(step, dict):
+                continue
+            action = str(step.get("action") or "unknown action")
+            outputs = step.get("expected_result_fields") or []
+            step_lines.append(f"{position}. {action}" + (f" → {', '.join(str(value) for value in outputs[:5])}" if outputs else ""))
+        detail = "\n".join(step_lines) or "No reusable steps stored."
+        if lessons:
+            detail += "\n\nLEARNED PITFALLS\n" + "\n".join(
+                f"• {str(lesson.get('rule') or lesson.get('failure_category') or 'Review this failure')}"
+                for lesson in lessons[:4] if isinstance(lesson, dict)
+            )
+        usage = (
+            f"USE {int(item.get('usage_count', 0))}  ·  "
+            f"SUCCESS {int(item.get('success_count', 0))}  ·  "
+            f"FAILURE {int(item.get('failure_count', 0))}"
+        )
+        tags = [
+            f"REVISION {int(item.get('revision', 1))}",
+            f"EVIDENCE {int(item.get('evidence_count', 1))}",
+            usage,
+        ]
+        if item.get("locked"):
+            tags.append("LOCKED")
+        if item.get("pinned"):
+            tags.append("PINNED")
+        if item.get("review_required"):
+            tags.append("REVIEW REQUIRED")
+
+        if proposed:
+            actions = ft.Row([
+                ft.TextButton("APPROVE", on_click=lambda e, sid=skill_id: self._approve_learned_skill(sid), style=ft.ButtonStyle(color=FOCUS)),
+                ft.TextButton("REJECT", on_click=lambda e, sid=skill_id: self._reject_learned_skill(sid), style=ft.ButtonStyle(color=SECONDARY)),
+            ], wrap=True, spacing=5)
+        else:
+            action_items = [
+                ft.TextButton(
+                    "UNLOCK" if item.get("locked") else "LOCK",
+                    on_click=lambda e, sid=skill_id, value=not bool(item.get("locked")): self._set_learned_skill_flag(sid, "locked", value),
+                    style=ft.ButtonStyle(color=SECONDARY),
+                ),
+                ft.TextButton(
+                    "UNPIN" if item.get("pinned") else "PIN",
+                    on_click=lambda e, sid=skill_id, value=not bool(item.get("pinned")): self._set_learned_skill_flag(sid, "pinned", value),
+                    style=ft.ButtonStyle(color=SECONDARY),
+                ),
+            ]
+            if item.get("review_required"):
+                action_items.append(ft.TextButton(
+                    "MARK REVIEWED",
+                    on_click=lambda e, sid=skill_id: self._resolve_learned_skill_review(sid),
+                    style=ft.ButtonStyle(color=FOCUS),
+                ))
+            actions = ft.Row(action_items, wrap=True, spacing=5)
+
+        return ft.Container(
+            ft.Column([
+                ft.Row([
+                    ft.Text(str(item.get("name") or "Untitled skill"), color=TEXT, size=14, weight=ft.FontWeight.BOLD, expand=True),
+                    ft.Text("PROPOSED" if proposed else "APPROVED", color=FOCUS if proposed else SECONDARY, size=9, weight=ft.FontWeight.BOLD),
+                ]),
+                ft.Text(str(item.get("description") or "No description."), color=SECONDARY, size=10),
+                ft.Text("  ·  ".join(tags), color=ACCENT if item.get("review_required") else MUTED, size=9),
+                ft.Text("PERMISSIONS  " + (", ".join(str(value) for value in permissions[:12]) or "none recorded"), color=SECONDARY, size=9),
+                ft.Text(detail, color=TEXT, size=10, selectable=True),
+                ft.Text(f"ID  {skill_id}  ·  UPDATED  {str(item.get('updated_at') or item.get('created_at') or 'unknown')[:19]}", color=MUTED, size=8),
+                actions,
+            ], spacing=8),
+            bgcolor=SURFACE if proposed else ELEVATED,
+            border=ft.Border.all(1, BORDER), border_radius=9,
+            padding=ft.Padding.all(15), width=940,
+        )
+
+    def _approve_learned_skill(self, skill_id):
+        try:
+            if not self.agent_runtime.skill_store.approve(skill_id):
+                raise ValueError("proposal is missing or is no longer pending review")
+            self._toast("Skill approved. It is now available to Chimera on demand.")
+            self._show_learning()
+        except Exception as exc:
+            self._toast(f"Skill approval failed: {exc}")
+
+    def _reject_learned_skill(self, skill_id):
+        try:
+            if not self.agent_runtime.skill_store.reject(skill_id):
+                raise ValueError("proposal is missing or is no longer pending review")
+            self._toast("Skill proposal rejected.")
+            self._show_learning()
+        except Exception as exc:
+            self._toast(f"Skill rejection failed: {exc}")
+
+    def _set_learned_skill_flag(self, skill_id, flag, enabled):
+        try:
+            method = self.agent_runtime.skill_store.set_locked if flag == "locked" else self.agent_runtime.skill_store.set_pinned
+            if not method(skill_id, enabled):
+                raise ValueError("skill not found")
+            self._toast(f"Skill {'locked' if flag == 'locked' and enabled else 'unlocked' if flag == 'locked' else 'pinned' if enabled else 'unpinned'}.")
+            self._show_learning()
+        except Exception as exc:
+            self._toast(f"Skill update failed: {exc}")
+
+    def _resolve_learned_skill_review(self, skill_id):
+        try:
+            if not self.agent_runtime.skill_store.resolve_review(skill_id):
+                raise ValueError("skill is missing or has no pending review")
+            self._toast("Skill review resolved. Chimera may use it again.")
+            self._show_learning()
+        except Exception as exc:
+            self._toast(f"Skill review could not be resolved: {exc}")
+
+
     def _show_workflow_studio(self, e=None):
         self.active_page = "workflow"
         try:
@@ -1333,6 +1502,7 @@ class MainWindow:
                 self._nav_item("▧", "Applications", self._show_computer_apps, active_page == "applications"),
                 self._nav_item("⌁", "Workflow studio", self._show_workflow_studio, active_page == "workflow"),
                 self._nav_item("⬡", "Capabilities", self._show_capabilities, active_page == "capabilities"),
+                self._nav_item("✧", "Learning", self._show_learning, active_page == "learning"),
                 self._nav_item("◎", "Goal ledger", self._show_goals, active_page == "goals"),
                 self._nav_item("◷", "Run history", self._show_runs, active_page == "runs"),
                 ft.Divider(height=1, color=BORDER),

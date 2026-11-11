@@ -23,7 +23,7 @@ from .computer_runtime import ComputerSessionManager
 from .model_hub import ModelProfileStore
 from .task_execution import TaskStore, TaskPolicy
 from .goals import GoalStore
-from .learning import SkillStore
+from .learning import SkillStore, ExperienceLearningEngine
 
 
 def _now() -> str:
@@ -213,6 +213,8 @@ class AgentRuntime:
         self.task_store = TaskStore(store.db_path)
         self.goal_store = GoalStore(store.db_path)
         self.skill_store = SkillStore(store.db_path.parent / "skills.json")
+        self.learning_engine = ExperienceLearningEngine(self.skill_store)
+        self._skills_used: dict[str, set[str]] = {}
         self._tasks = {}
         self._listeners = {}
         self._listener_lock = threading.Lock()
@@ -987,6 +989,77 @@ class AgentRuntime:
             str(content or "").casefold(),
         ))
 
+    def _finish_skill_usage(self, session_id: str, outcome: str) -> None:
+        """Close usage records for skills read during this task."""
+        skill_ids = self._skills_used.pop(session_id, set())
+        for skill_id in skill_ids:
+            try:
+                self.skill_store.record_use(skill_id, outcome)
+            except Exception as exc:
+                self._record(session_id, "learning.skill_usage_failed", {
+                    "skill_id": skill_id,
+                    "outcome": outcome,
+                    "error": str(exc)[:300],
+                })
+
+    def _propose_skill_from_completed_task(self, session_id: str, task_id: str | None):
+        """Turn a settled task trace into a pending proposal, never an auto-approved skill."""
+        if not task_id:
+            return None
+        try:
+            if not self.task_store.can_complete(task_id):
+                return None
+            task = self.task_store.get(task_id)
+            if task is None:
+                return None
+            trace_messages = []
+            for step in self.task_store.steps(task_id):
+                tool = step.get("tool")
+                if not isinstance(tool, str) or not tool or tool.startswith("agent."):
+                    continue
+                try:
+                    arguments = json.loads(step.get("arguments") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    arguments = {}
+                try:
+                    result = json.loads(step.get("result")) if step.get("result") else {}
+                except (TypeError, json.JSONDecodeError):
+                    result = {}
+                status = step.get("status")
+                trace_messages.append({
+                    "role": "tool",
+                    "content": json.dumps({
+                        "tool": tool,
+                        "arguments": arguments if isinstance(arguments, dict) else {},
+                        "result": result,
+                        "status": status,
+                        "error": step.get("error"),
+                    }, ensure_ascii=False, separators=(",", ":")),
+                })
+            skill = self.learning_engine.extract_skill_from_trace(
+                session_id,
+                task.objective,
+                trace_messages,
+                events=[],
+                source_task_id=task_id,
+            )
+            if skill is not None:
+                self._record(session_id, "learning.skill.proposed", {
+                    "skill_id": skill.skill_id,
+                    "name": skill.name,
+                    "source_task_id": task_id,
+                    "completed_actions": len(skill.reusable_steps),
+                    "status": "proposed",
+                })
+            return skill
+        except Exception as exc:
+            # Learning is advisory: never turn a completed user task into a failure.
+            self._record(session_id, "learning.proposal.skipped", {
+                "task_id": task_id,
+                "reason": f"{type(exc).__name__}: {str(exc)[:300]}",
+            })
+            return None
+
     def send(self, session_id: str, content: str) -> dict:
         session = self.store.session(session_id)
         if not session:
@@ -1006,6 +1079,7 @@ class AgentRuntime:
                 "message": "This task is paused for the exact approval shown in the workbench.",
             }
 
+        self._skills_used.setdefault(session_id, set())
         message = self.store.add_message(session_id, "user", content)
         cancel_event = threading.Event()
         self._cancel_events[session_id] = cancel_event
@@ -1092,6 +1166,7 @@ class AgentRuntime:
                     (_now(), session_id),
                 )
             self._record(session_id, "turn.cancelled", {"error": str(exc), "task_id": task_id})
+            self._finish_skill_usage(session_id, "cancelled")
             return {"status": "cancelled", "error": str(exc)}
         except Exception as exc:
             with sqlite3.connect(self.store.db_path) as db:
@@ -1100,6 +1175,7 @@ class AgentRuntime:
                     (_now(), session_id),
                 )
             self._record(session_id, "turn.failed", {"error": str(exc), "task_id": task_id})
+            self._finish_skill_usage(session_id, "failed")
             return {"status": "failed", "error": str(exc)}
         finally:
             self._cancel_events.pop(session_id, None)
@@ -1309,6 +1385,11 @@ class AgentRuntime:
                 assistant = self.store.add_message(session_id, "assistant", decision["content"])
                 with sqlite3.connect(self.store.db_path) as db: db.execute("UPDATE agent_sessions SET state='idle',updated_at=? WHERE session_id=?", (_now(), session_id))
                 self._record(session_id, "turn.completed", {"turn_id": turn_id})
+                active_task_id = self._tasks.get(session_id)
+                task_complete = bool(active_task_id and self.task_store.can_complete(active_task_id))
+                self._finish_skill_usage(session_id, "completed" if task_complete else "partial")
+                if task_complete:
+                    self._propose_skill_from_completed_task(session_id, active_task_id)
                 return {"status": "completed", "message": assistant, "tools": []}
             if max_tools <= 0: raise RuntimeError("maximum tool-call limit reached")
             tool_id = decision["tool"]
@@ -1793,9 +1874,18 @@ class AgentRuntime:
                         item for item in self.skill_store.list()
                         if isinstance(item, dict)
                         and item.get("status") == "approved"
+                        and not bool(item.get("review_required"))
                         and isinstance(item.get("skill_id"), str)
                         and isinstance(item.get("name"), str)
-                    ][:40]
+                    ]
+                    # Pinned procedures are surfaced first; frequently useful skills
+                    # follow. This changes discovery order, never their authority.
+                    approved.sort(key=lambda item: (
+                        not bool(item.get("pinned")),
+                        -(item.get("usage_count", 0) if type(item.get("usage_count", 0)) is int else 0),
+                        str(item.get("name") or "").casefold(),
+                    ))
+                    approved = approved[:40]
                     data = {
                         "skills": [
                             {
@@ -1807,6 +1897,10 @@ class AgentRuntime:
                                     str(value)[:80] for value in item.get("required_permissions", [])[:16]
                                     if isinstance(value, str)
                                 ] if isinstance(item.get("required_permissions"), list) else [],
+                                "usage_count": int(item.get("usage_count", 0)),
+                                "success_count": int(item.get("success_count", 0)),
+                                "failure_count": int(item.get("failure_count", 0)),
+                                "review_required": bool(item.get("review_required", False)),
                             }
                             for item in approved
                         ],
@@ -1820,6 +1914,7 @@ class AgentRuntime:
                         value for value in self.skill_store.list()
                         if isinstance(value, dict) and value.get("skill_id") == skill_id
                         and value.get("status") == "approved"
+                        and not bool(value.get("review_required"))
                     ), None)
                     if item is None:
                         result = type("ProgressResult", (), {
@@ -1837,13 +1932,15 @@ class AgentRuntime:
                             "parameters_schema": item.get("parameters_schema", {}),
                             "reusable_steps": steps[:20],
                             "expected_outputs": item.get("expected_outputs", [])[:20],
-                            "notice": "Use this as procedural guidance only. Re-discover current app state, validate current tool schemas, obtain required approvals, and verify every postcondition. Never replay stale coordinates or treat past success as current evidence.",
+                            "lessons": item.get("lessons", [])[:12],
+                            "notice": "Use this as procedural guidance only. Re-discover current app state, validate current tool schemas, obtain required approvals, and verify every postcondition. Never replay stale coordinates or treat past success as current evidence. Skills do not grant permissions.",
                         }
                         encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
                         if len(encoded) > 12000:
                             data["reusable_steps"] = data["reusable_steps"][:8]
                             data["description"] = data["description"][:400]
                             data["truncated"] = True
+                        self._skills_used.setdefault(session_id, set()).add(skill_id)
                         result = type("ProgressResult", (), {"data": data, "status": "completed", "error": None})()
                 else:
                     task_id = self._tasks.get(session_id)
@@ -1960,6 +2057,7 @@ class AgentRuntime:
             if task:
                 self.task_store.transition(task.task_id, "blocked")
                 self._tasks.pop(session_id, None)
+            self._finish_skill_usage(session_id, "failed")
             return {"status": "denied"}
         workspace = Path(session["workspace"]) if session.get("workspace") else None
         if pending["tool"].startswith("application."):
@@ -2169,6 +2267,7 @@ class AgentRuntime:
                 "invocation_id": pending["invocation_id"], "tool": pending["tool"],
                 "reason": "legacy or unsupported desktop interaction is disabled",
             })
+            self._finish_skill_usage(session_id, "failed")
             return {"status": "blocked", "error": "legacy or unsupported desktop interaction is disabled"}
         else:
             operation = pending["tool"].removeprefix("workspace.")
@@ -2272,6 +2371,7 @@ class AgentRuntime:
                 "completion": "confirmed_application_launch",
                 "tool": pending["tool"],
             })
+            self._finish_skill_usage(session_id, "completed")
             return {"status": "completed", "message": assistant, "tools": [pending["tool"]]}
 
         if (
@@ -2290,6 +2390,7 @@ class AgentRuntime:
                 if task:
                     self.task_store.transition(task.task_id, "failed")
                 self._tasks.pop(session_id, None)
+                self._finish_skill_usage(session_id, "failed")
                 return {"status": "failed", "error": error, "tool": pending["tool"]}
 
             relative = result.data.get("path")
@@ -2315,6 +2416,7 @@ class AgentRuntime:
                 if task:
                     self.task_store.transition(task.task_id, "failed")
                 self._tasks.pop(session_id, None)
+                self._finish_skill_usage(session_id, "failed")
                 return {"status": "failed", "error": error, "tool": pending["tool"]}
 
             file_kind = {
@@ -2333,6 +2435,9 @@ class AgentRuntime:
             })
             if task:
                 self.task_store.reconcile_completion(task.task_id, "completed")
+                if self.task_store.can_complete(task.task_id):
+                    self._propose_skill_from_completed_task(session_id, task.task_id)
+            self._finish_skill_usage(session_id, "completed")
             self._tasks.pop(session_id, None)
             return {
                 "status": "completed", "message": assistant, "tools": [pending["tool"]],
